@@ -44,6 +44,11 @@ var serverCmd = &cobra.Command{
 
 		fmt.Printf("Database: %s\n", dbPath)
 
+		// Forward the ldflags-injected build metadata (see version.go) so the HTTP
+		// API reports the real release. Must happen *before* NewServer, which
+		// snapshots these values when it constructs the Server.
+		server.SetBuildInfo(Version, Commit, BuildDate)
+
 		// Create server
 		srv := server.NewServer(dbPath)
 

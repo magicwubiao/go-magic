@@ -526,22 +526,43 @@ Your working directory is: %s
 	// Initialize MCP manager
 	mcpMgr := mcp.NewManager()
 
-	// Get version
-	version := "dev"
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, dep := range info.Deps {
-			if dep.Path == "github.com/magicwubiao/go-magic" {
-				if dep.Replace != nil {
-					version = dep.Replace.Version
-				} else {
-					version = dep.Version
-				}
-				if version == "" {
-					version = "dev"
-				}
-				break
-			}
-		}
+	// Build metadata reported by /api/status and /api/system/version.
+	//
+	// Precedence: SetBuildInfo() (called by cmd/magic with the ldflags-injected
+	// main.Version/main.Commit/main.BuildDate, the only fully reliable source)
+	// > Go's embedded build info > "dev".
+	//
+	// The previous code read this solely from debug.ReadBuildInfo().Deps, which
+	// is wrong for the normal case: this package cannot import package main, and
+	// when go-magic is built as the main module it never appears in its own
+	// dependency list -- so the lookup missed and every release, including
+	// v0.6.0, reported "dev" on the dashboard while `magic version` (which reads
+	// the ldflags directly) was correct.
+	buildInfo, _ := debug.ReadBuildInfo()
+	version := inferVersion(buildInfo)
+	commit, buildDate := inferVCS(buildInfo)
+	if version == "" {
+		version = "dev"
+	}
+	if commit == "" {
+		commit = "unknown"
+	}
+	if buildDate == "" {
+		buildDate = "unknown"
+	}
+
+	// Overrides registered via SetBuildInfo() take precedence over everything
+	// above: cmd/magic passes the ldflags-injected values, which are the only
+	// ones that survive a static build (debug.ReadBuildInfo carries no version
+	// for a main module and no VCS stamps with -buildvcs=false).
+	if injectedVersion != "" {
+		version = injectedVersion
+	}
+	if injectedCommit != "" {
+		commit = injectedCommit
+	}
+	if injectedBuildDate != "" {
+		buildDate = injectedBuildDate
 	}
 
 	// Load or generate auth token
@@ -1018,6 +1039,10 @@ GOAL GUIDANCE:
 			}))
 		}
 	}
+	// 回合时限既用于 chatqueue 的 context 超时，也在 max_turns 未显式配置时
+	// 折算回合上限 —— 二者此前是两处独立写死的常量，把 turn_timeout_minutes
+	// 调大之后 maxTurns(150) 会静默成为真瓶颈（见 deriveMaxTurnsFromTurnTimeout）。
+	agentOpts = append(agentOpts, agent.WithTurnTimeout(s.turnTimeout()))
 	// Enable memory if config says so OR if cortex is available (cortex provides snapshot memory)
 	memoryEnabled := (cfgSnap != nil && cfgSnap.Memory.Enabled) || s.cortexMgr != nil
 	if memoryEnabled {

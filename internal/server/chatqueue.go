@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/provider"
+	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
@@ -1277,18 +1278,27 @@ func (s *Server) persistGuideMessage(sessionID, id, content string) {
 	if s.sessionStore == nil {
 		return
 	}
-	sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
-	if err != nil {
-		return
-	}
-	sess.Messages = append(sess.Messages, types.Message{
+	msg := types.Message{
 		ID:        id,
 		Role:      "user",
 		Content:   content,
 		Timestamp: time.Now(),
-	})
-	sess.UpdatedAt = time.Now()
-	_ = s.sessionStore.SaveSession(context.Background(), sess)
+	}
+	// 增量追加：不 LoadSession 回读全量 messages（几百轮会话里那是每条消息
+	// 一次几 MB 的 JSON 读回+重写）。行不存在时兜底全量 SaveSession 补建。
+	ok, err := s.sessionStore.AppendSessionMessages(context.Background(), sessionID, msg)
+	if err != nil {
+		log.Warnf("[CHATQ] persistGuideMessage append failed session=%s: %v", sessionID, err)
+		return
+	}
+	if !ok {
+		sess := &session.Session{
+			ID:        sessionID,
+			Messages:  []types.Message{msg},
+			UpdatedAt: time.Now(),
+		}
+		_ = s.sessionStore.SaveSession(context.Background(), sess)
+	}
 }
 
 // errProviderNotConfigured 表示服务端尚未配置 LLM provider。
@@ -1314,26 +1324,38 @@ func (s *Server) persistUserMessage(sessionID string, item *queuedTurn) {
 	if s.sessionStore == nil {
 		return
 	}
-	sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
-	if err != nil {
-		return
-	}
+	// id 幂等判重：改在 SQL 内用 json_each 扫描，不再 LoadSession 全量读回。
 	if item.id != "" {
-		for _, m := range sess.Messages {
-			if m.ID == item.id {
-				return
-			}
+		exists, err := s.sessionStore.SessionMessageIDExists(context.Background(), sessionID, item.id)
+		if err != nil {
+			log.Warnf("[CHATQ] persistUserMessage id-check failed session=%s: %v", sessionID, err)
+			return
+		}
+		if exists {
+			return
 		}
 	}
-	sess.Messages = append(sess.Messages, types.Message{
+	msg := types.Message{
 		ID:           item.id,
 		Role:         "user",
 		Content:      item.content,
 		ContentParts: item.persistedParts,
 		Timestamp:    time.Now(),
-	})
-	sess.UpdatedAt = time.Now()
-	_ = s.sessionStore.SaveSession(context.Background(), sess)
+	}
+	// 增量追加，行不存在时兜底全量 SaveSession 补建。
+	ok, err := s.sessionStore.AppendSessionMessages(context.Background(), sessionID, msg)
+	if err != nil {
+		log.Warnf("[CHATQ] persistUserMessage append failed session=%s: %v", sessionID, err)
+		return
+	}
+	if !ok {
+		sess := &session.Session{
+			ID:        sessionID,
+			Messages:  []types.Message{msg},
+			UpdatedAt: time.Now(),
+		}
+		_ = s.sessionStore.SaveSession(context.Background(), sess)
+	}
 }
 
 // persistAssistantMessage 落库本回合的 assistant 消息。
@@ -1367,21 +1389,29 @@ func (s *Server) persistAssistantMessage(sessionID, fullResponse, streamed strin
 		return
 	}
 
-	sess, err := s.sessionStore.LoadSession(context.Background(), sessionID)
-	if err != nil {
-		return
-	}
-	sess.Messages = append(sess.Messages, types.Message{
+	msg := types.Message{
 		Role:      "assistant",
 		Content:   fullResponse,
 		Timestamp: time.Now(),
 		FileOps:   finalOps,
-	})
+	}
 	// token 不在这里累加：GetTokenStats 是会话级累计值，每回合加一次全量会
 	// 让会话 token 数越滚越大。增量由 accountTurnUsage 统一记账（它同时写
 	// usage 统计与本会话字段），本回合只管消息文本。
-	sess.UpdatedAt = time.Now()
-	_ = s.sessionStore.SaveSession(context.Background(), sess)
+	// 增量追加，行不存在时兜底全量 SaveSession 补建。
+	ok, err := s.sessionStore.AppendSessionMessages(context.Background(), sessionID, msg)
+	if err != nil {
+		log.Warnf("[CHATQ] persistAssistantMessage append failed session=%s: %v", sessionID, err)
+		return
+	}
+	if !ok {
+		sess := &session.Session{
+			ID:        sessionID,
+			Messages:  []types.Message{msg},
+			UpdatedAt: time.Now(),
+		}
+		_ = s.sessionStore.SaveSession(context.Background(), sess)
+	}
 }
 
 // ============================================================================

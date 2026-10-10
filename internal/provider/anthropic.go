@@ -69,11 +69,40 @@ type anthropicMessage struct {
 	Content interface{} `json:"content"` // string or []interface{} for multi-modal
 }
 
+// anthropicCacheControl marks a prompt-caching breakpoint.
+//
+// Anthropic caches the request prefix up to and including the block carrying this
+// marker (max 4 breakpoints per request); on the next request the longest matching
+// prefix is served from cache at a fraction of the input price. Only "ephemeral"
+// is a valid value today. Below the model's minimum cacheable length the marker is
+// silently ignored — it never errors, so it is safe to always emit.
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+}
+
+// anthropicCacheControlEphemeral 是 cache_control 唯一合法取值。
+const anthropicCacheControlEphemeral = "ephemeral"
+
+// anthropicTextBlock is Anthropic's text content block. The system prompt is
+// emitted as a block array (instead of a bare string) purely so a cache_control
+// breakpoint can be attached to it.
+type anthropicTextBlock struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
 // anthropicRequest represents Anthropic's chat request
 type anthropicRequest struct {
-	Model         string               `json:"model"`
-	Messages      []anthropicMessage   `json:"messages"`
-	SystemPrompt  string               `json:"system,omitempty"`
+	Model    string             `json:"model"`
+	Messages []anthropicMessage `json:"messages"`
+	// System 是 string 或 []anthropicTextBlock。用 interface{} 而非 string：
+	// Anthropic 只接受**一个** system 字段，agent 侧却会注入多段 system 消息
+	// （基础 system prompt / 规则链 / 工作目录 / 记忆 / 在案计划）。旧实现
+	// `systemPrompt = msg.Content` 在循环里逐条**覆盖**，于是只有最后一条存活，
+	// 前面全部静默丢失（对 Anthropic 用户 = base system prompt 从不下发）。
+	// 现在按序拼接为单个 text block，并在其上打 cache_control 断点。
+	System        interface{}          `json:"system,omitempty"`
 	MaxTokens     int                  `json:"max_tokens"`
 	Tools         []anthropicToolDef   `json:"tools,omitempty"`
 	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
@@ -322,56 +351,92 @@ func (p *AnthropicProvider) StreamWithTools(ctx context.Context, messages []Mess
 
 // buildRequest builds an Anthropic API request from messages
 func (p *AnthropicProvider) buildRequest(messages []Message, tools []map[string]interface{}, stream bool) *anthropicRequest {
-	var systemPrompt string
+	var systemParts []string
 	var anthropicMessages []anthropicMessage
 
-	// Separate system prompt from messages
-	for _, msg := range messages {
-		if msg.Role == "system" {
-			systemPrompt = msg.Content
-		} else {
-			// Convert to Anthropic format
-			role := msg.Role
-			if role == "assistant" {
-				role = "assistant"
-			} else if role == "tool" {
-				role = "user" // Anthropic doesn't have tool role, use user with tool result
-			} else {
-				role = "user"
-			}
-
-			// Handle ContentParts for multi-modal content
-			var content interface{}
-			if len(msg.ContentParts) > 0 {
-				cfg := p.ConvertConfig.WithAutoVision(p.model)
-				contentParts := ConvertContentPartsToMap(msg.ContentParts, cfg)
-				// The shared converter emits OpenAI-style parts
-				// ({"type":"image_url","image_url":{...}}). Anthropic's
-				// native Messages API rejects those with a 400 — restructure
-				// image parts into Anthropic's image/source blocks.
-				contentParts = toAnthropicContentParts(contentParts)
-				if len(contentParts) > 0 {
-					content = contentParts
-				} else {
-					content = msg.Content
-				}
-			} else {
-				content = msg.Content
-			}
-
-			anthropicMessages = append(anthropicMessages, anthropicMessage{
-				Role:    role,
-				Content: content,
-			})
+	// 动态缓存断点：在**最后一条工具结果**上也打一个 cache_control。长任务里
+	// 每轮请求只有尾部是新增的，把断点放在最后一条 tool 消息上 ⇒ 前面的历史
+	// （含上一轮的断点前缀）整段命中缓存。Anthropic 每请求最多 4 个断点：这里
+	// 系统提示 1 个 + 工具结果 1 个，共 2 个，仍在额度内。
+	lastToolIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			lastToolIdx = i
+			break
 		}
 	}
 
+	// Separate system prompt from messages
+	for i, msg := range messages {
+		if msg.Role == "system" {
+			// 逐条**拼接**而不是覆盖：见 anthropicRequest.System 的说明。
+			if c := strings.TrimSpace(msg.Content); c != "" {
+				systemParts = append(systemParts, c)
+			}
+			continue
+		}
+		// Convert to Anthropic format
+		role := msg.Role
+		if role == "assistant" {
+			role = "assistant"
+		} else if role == "tool" {
+			role = "user" // Anthropic doesn't have tool role, use user with tool result
+		} else {
+			role = "user"
+		}
+
+		// Handle ContentParts for multi-modal content
+		var content interface{}
+		if len(msg.ContentParts) > 0 {
+			cfg := p.ConvertConfig.WithAutoVision(p.model)
+			contentParts := ConvertContentPartsToMap(msg.ContentParts, cfg)
+			// The shared converter emits OpenAI-style parts
+			// ({"type":"image_url","image_url":{...}}). Anthropic's
+			// native Messages API rejects those with a 400 — restructure
+			// image parts into Anthropic's image/source blocks.
+			contentParts = toAnthropicContentParts(contentParts)
+			if len(contentParts) > 0 {
+				content = contentParts
+			} else {
+				content = msg.Content
+			}
+		} else {
+			content = msg.Content
+		}
+
+		// 最后一条工具结果：把纯文本内容包成 text block 并挂上缓存断点。
+		if i == lastToolIdx {
+			if s, ok := content.(string); ok && strings.TrimSpace(s) != "" {
+				content = []anthropicTextBlock{{
+					Type:         "text",
+					Text:         s,
+					CacheControl: &anthropicCacheControl{Type: anthropicCacheControlEphemeral},
+				}}
+			}
+		}
+
+		anthropicMessages = append(anthropicMessages, anthropicMessage{
+			Role:    role,
+			Content: content,
+		})
+	}
+
 	req := &anthropicRequest{
-		Model:        p.model,
-		Messages:     anthropicMessages,
-		SystemPrompt: systemPrompt,
-		MaxTokens:    4096, // Required by Anthropic
-		Stream:       stream,
+		Model:     p.model,
+		Messages:  anthropicMessages,
+		MaxTokens: 4096, // Required by Anthropic
+		Stream:    stream,
+	}
+
+	// 系统提示合并为单个 text block，并在其上打缓存断点：断点之前的内容
+	// （基础 system prompt + 规则链 + 工作目录）正是 agent 侧刻意排在最前、
+	// 跨轮字节级稳定的那几段 —— 缓存命中率取决于此。
+	if len(systemParts) > 0 {
+		req.System = []anthropicTextBlock{{
+			Type:         "text",
+			Text:         strings.Join(systemParts, "\n\n"),
+			CacheControl: &anthropicCacheControl{Type: anthropicCacheControlEphemeral},
+		}}
 	}
 
 	// Convert tools (support both OpenAI nested format and flat format)

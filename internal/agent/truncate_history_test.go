@@ -265,13 +265,23 @@ func TestTruncateHistory_DoesNotLoopForeverOnSingleHugeTail(t *testing.T) {
 // 两条路径：压缩（compressor 的 LLM 摘要）会把中段摘要成可接力的记录；字节级
 // 截断则直接删整段 user 块、不留摘要。所以硬上限必须恒 ≥ 压缩触发点。触发点是
 // **配置**出来的（agent.compress_threshold_tokens → ThresholdTokens×4 字节），
-// 硬上限却是构造时写死的 200000 字节 ⇒ 阈值一旦超过 50000 token，顺序就反过来，
-// 模型会在没有任何摘要的情况下永久丢掉中段上下文。
+// 硬上限历史上却是构造时写死的 200000 字节 ⇒ 阈值一旦超过 50000 token，顺序就反
+// 过来，模型会在没有任何摘要的情况下永久丢掉中段上下文。
+//
+// 2026-10-10 起两个默认值都由"假设窗口"派生（defaultMaxTotalLen =
+// provider.DefaultModelContextLen×4、defaultCompressThresholdTokens = 假设窗口
+// ×60%），所以第一条用例改用常量断言 —— 否则每次调默认值都得来改这个字面量。
 func TestHistoryHardLimitNeverPreemptsCompression(t *testing.T) {
-	// 默认 32K token：触发点 128K < 固定上限 200K ⇒ 顺序不变、行为零变化。
-	def := &Agent{maxTotalLen: 200000, compressor: compress.NewCompressor(defaultCompressThresholdTokens)}
-	if got := def.historyHardLimit(); got != 200000 {
-		t.Fatalf("default hard cap = %d, want 200000 (ordering must stay unchanged)", got)
+	// 默认组合：触发点（76800 token ⇒ 307K 字节）< 默认硬上限（512K 字节）
+	// ⇒ 顺序不变。
+	def := &Agent{maxTotalLen: defaultMaxTotalLen, compressor: compress.NewCompressor(defaultCompressThresholdTokens)}
+	if got := def.historyHardLimit(); got != defaultMaxTotalLen {
+		t.Fatalf("default hard cap = %d, want %d (ordering must stay unchanged)",
+			got, defaultMaxTotalLen)
+	}
+	if defaultCompressThresholdTokens*4 > defaultMaxTotalLen {
+		t.Fatalf("默认触发点 %d 字节已越过默认硬上限 %d：字节级硬删会抢先于压缩",
+			defaultCompressThresholdTokens*4, defaultMaxTotalLen)
 	}
 
 	// 阈值抬到 60000 token：触发点 240K > 200K ⇒ 硬上限必须跟着抬起来。

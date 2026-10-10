@@ -162,12 +162,21 @@ type Config struct {
 		// clock wall (not the iteration cap) is what actually binds.
 		TurnTimeoutMinutes int `json:"turn_timeout_minutes,omitempty"`
 		// CompressThresholdTokens 是上下文压缩触发的 token 阈值（粗估 = 历史
-		// 字符数 / 4）。0 = 内置默认（32000）。
+		// 字符数 / 4）。**0（默认）= 自动**，算式是
+		// min(当前模型上下文窗口 × 60%, 200000)；窗口未知时按假设窗口 128K 算，
+		// 即 76800。传正数则显式覆盖（此时 200000 的上限与窗口收紧都不再生效，
+		// 请自行确认不超过模型真实窗口 —— 上下文超限不会自愈）。
 		//
-		// 旧默认是硬编码的 8000（≈3.2 万字符），属 8K 上下文时代的遗留：读一个
-		// 稍大的文件就会越过它，触发压缩把刚读到的内容摘要掉，模型只能重读，
-		// 重读又触发压缩 —— "读完就忘"的正反馈死循环，任务因此空转到回合时间墙。
-		// 现代模型上下文为 128K 级，可据此适当调大；调小则压缩更频繁、更省 token。
+		// 之所以改成"自动 + 天花板"：旧实现写死 32000，对 1M 窗口的模型只用掉窗口的
+		// 3%，长任务因此频繁触发压缩；而压缩会把刚读到的工具结果摘要掉，模型只能
+		// 重读，重读又触发压缩 —— "读完就忘"的正反馈死循环（2026-10-08 事故：一个改
+		// 顶部导航的简单任务空转到回合时间墙，283 次调用里 86% 只读、写入仅 1 次）。
+		// 更早的硬编码 8000 是 8K 上下文时代的遗留。
+		//
+		// 为什么不干脆按窗口比例一路放大：模型换代极快，按 1M 窗口的 60% 就是每轮
+		// 60 万 token 输入，成本高且长上下文会 context rot。200000 是"再往上收益
+		// 明显衰减"的实用拐点（≈80 万字符，按每轮 ~6K 字符算约 125 轮才压一次）。
+		// 显式调小则压缩更频繁、更省 token。
 		CompressThresholdTokens int `json:"compress_threshold_tokens,omitempty"`
 	} `json:"agent,omitempty"`
 	// Approval settings
@@ -791,7 +800,7 @@ func defaultConfig() *Config {
 			MaxTurns:                150,
 			MaxIterations:           200,
 			TurnTimeoutMinutes:      DefaultTurnTimeoutMinutes,
-			CompressThresholdTokens: 32000,
+			CompressThresholdTokens: 0, // 0 = 自动：min(窗口 × 60%, 200000)
 		},
 	}
 }

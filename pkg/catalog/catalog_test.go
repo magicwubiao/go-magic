@@ -92,6 +92,54 @@ func TestFindAliases(t *testing.T) {
 	}
 }
 
+// defaultModelRankLimit 是"默认模型"允许出现在模型列表中的最靠后位置（1 起数）。
+//
+// 为什么需要这条守卫：目录里"新旗舰插到列表最前面、DefaultModel 却忘了跟着改"是
+// 反复出现的一类漂移 —— 用户第一次跑起来拿到的仍是上代模型。2026-10 实测就抓到
+// 四处：openai 默认 gpt-6-sol（新的是 6.1-sol）、openrouter 同步漂移、groq 默认
+// Llama 3.3（列表里已有 Llama 4）、together 默认 V4-Pro（已有 V4.1-Flash）。
+// 列表顺序即 Web UI / CLI 的展示顺序，默认值应当落在用户一眼能看到的位置。
+const defaultModelRankLimit = 3
+
+// defaultModelRankExceptions 记录"默认模型刻意排在较后位置"的供应商：键为供应商名，
+// 值为理由（空理由会被判错）。custom 的默认值不在候选列表里，由
+// TestCatalogIntegrity 单独豁免。
+var defaultModelRankExceptions = map[string]string{}
+
+// TestDefaultModelIsNearTopOfList 要求每个供应商的 DefaultModel 出现在其模型列表的
+// 前 defaultModelRankLimit 条内（不在列表里的跳过，交给 TestCatalogIntegrity）。
+func TestDefaultModelIsNearTopOfList(t *testing.T) {
+	checked := 0
+	for _, p := range catalog {
+		if reason, ok := defaultModelRankExceptions[p.Name]; ok {
+			if reason == "" {
+				t.Errorf("provider %s 列在例外表里但没写理由", p.Name)
+			}
+			continue
+		}
+		rank := -1
+		for i, m := range p.Models {
+			if m.ID == p.DefaultModel {
+				rank = i
+				break
+			}
+		}
+		if rank < 0 {
+			continue // 默认值不在候选列表里（custom 等），另有守卫
+		}
+		if rank >= defaultModelRankLimit {
+			t.Errorf("provider %s: DefaultModel %q 排在列表第 %d 位，超出前 %d 位 —— "+
+				"多半是换了新一代模型却忘了同步默认值",
+				p.Name, p.DefaultModel, rank+1, defaultModelRankLimit)
+		}
+		checked++
+	}
+	if checked < 10 {
+		t.Fatalf("只校验到 %d 个供应商，测试自身可能失效了", checked)
+	}
+	t.Logf("已校验 %d 个供应商的默认模型位置", checked)
+}
+
 // TestNoRetiredModels 确保已下线的模型 ID 不回流目录（服务端会硬报错）。
 func TestNoRetiredModels(t *testing.T) {
 	retired := map[string]string{

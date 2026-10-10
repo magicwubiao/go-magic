@@ -40,7 +40,14 @@ type Provider struct {
 	NeedsAPIKey  bool
 	NeedsBaseURL bool
 	// DefaultModel 默认模型 ID：配置缺省、构造函数兜底、CLI 预选共用。
-	// 可以与 Models[0] 不同（如 dashscope 目录首是旗舰，默认用主力价位的）。
+	//
+	// 选值准则：① 必须是 Models 里真实存在的 ID（TestCatalogIntegrity 强制）；
+	// ② 取**当前在售最新一代**里"能用、够新、不肉疼"的那个，而非最贵的旗舰
+	// （与 Models[0] 不同是常态：目录首条多为旗舰）；
+	// ③ 已下线/被取代的旧 ID 一律不用（见 TestNoRetiredModels）。
+	//
+	// 默认值决定新用户第一次跑起来看到什么，所以宁可跟随最新主力，
+	// 也不要把上代或最贵旗舰当作默认。
 	DefaultModel string
 	Models       []Model
 	// Note CLI --list 输出的补充说明（本地部署/聚合网关等场景）。
@@ -75,11 +82,13 @@ var catalog = []Provider{
 		Description:  "GPT-6 系列（2026-09）",
 		BaseURL:      "https://api.openai.com/v1",
 		NeedsAPIKey:  true,
-		DefaultModel: "gpt-6-sol",
+		DefaultModel: "gpt-6.1-sol",
 		Group:        "recommended",
 		Models: []Model{
+			// 2026-09-29：GPT-6 Sol 的升级版，官方称"近 Astra 能力、约五分之一价格"。
+			{ID: "gpt-6.1-sol", Name: "GPT-6.1 Sol", Description: "升级版 Sol，近旗舰能力", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-astra", Name: "GPT-6 Astra", Description: "最强旗舰", ContextLen: 1050000, Vision: b(true)},
-			{ID: "gpt-6-sol", Name: "GPT-6 Sol", Description: "智能与成本均衡", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-6-sol", Name: "GPT-6 Sol", Description: "上代均衡（已被 6.1 Sol 取代）", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-luna", Name: "GPT-6 Luna", Description: "最快最便宜", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-5.6", Name: "GPT-5.6 Sol", Description: "上代旗舰", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Description: "上代均衡", ContextLen: 1050000, Vision: b(true)},
@@ -159,10 +168,11 @@ var catalog = []Provider{
 		BaseURL:      "https://openrouter.ai/api/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "openai/gpt-6-sol",
+		DefaultModel: "openai/gpt-6.1-sol",
 		Note:         "完整列表见 https://openrouter.ai/models",
 		Group:        "aggregator",
 		Models: []Model{
+			{ID: "openai/gpt-6.1-sol", Name: "GPT-6.1 Sol", Description: "升级版 Sol（与 openai 目录默认一致）"},
 			{ID: "openai/gpt-6-sol", Name: "GPT-6 Sol"},
 			{ID: "openai/gpt-5.6", Name: "GPT-5.6 Sol"},
 			{ID: "anthropic/claude-opus-5-5", Name: "Claude Opus 5.5"},
@@ -222,11 +232,11 @@ var catalog = []Provider{
 		BaseURL:      "https://api.groq.com/openai/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "llama-3.3-70b-versatile",
+		DefaultModel: "meta-llama/llama-4-maverick-17b-128e-instruct",
 		Group:        "aggregator",
 		Models: []Model{
-			{ID: "llama-3.3-70b-versatile", Name: "Llama 3.3 70B"},
-			{ID: "meta-llama/llama-4-maverick-17b-128e-instruct", Name: "Llama 4 Maverick", ContextLen: 1000000},
+			{ID: "meta-llama/llama-4-maverick-17b-128e-instruct", Name: "Llama 4 Maverick", Description: "最新一代（默认），1M 上下文", ContextLen: 1000000},
+			{ID: "llama-3.3-70b-versatile", Name: "Llama 3.3 70B", Description: "上代，保留兼容"},
 			{ID: "openai/gpt-oss-120b", Name: "GPT-OSS 120B"},
 			{ID: "openai/gpt-oss-20b", Name: "GPT-OSS 20B"},
 			{ID: "llama-3.1-8b-instant", Name: "Llama 3.1 8B (最快)"},
@@ -238,11 +248,11 @@ var catalog = []Provider{
 		BaseURL:      "https://api.together.xyz/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "deepseek-ai/DeepSeek-V4-Pro",
+		DefaultModel: "deepseek-ai/DeepSeek-V4.1-Flash",
 		Group:        "aggregator",
 		Models: []Model{
-			{ID: "deepseek-ai/DeepSeek-V4.1-Flash", Name: "DeepSeek V4.1 Flash"},
-			{ID: "deepseek-ai/DeepSeek-V4-Pro", Name: "DeepSeek V4 Pro"},
+			{ID: "deepseek-ai/DeepSeek-V4.1-Flash", Name: "DeepSeek V4.1 Flash", Description: "最新主力（默认）"},
+			{ID: "deepseek-ai/DeepSeek-V4-Pro", Name: "DeepSeek V4 Pro", Description: "上代旗舰推理"},
 			{ID: "meta-llama/Llama-4-Maverick-17B-128E-Instruct", Name: "Llama 4 Maverick"},
 			{ID: "Qwen/Qwen3.8-2.4T-A95B", Name: "Qwen 3.8 Max 开源权重"},
 			{ID: "moonshotai/Kimi-K3", Name: "Kimi K3"},
@@ -254,16 +264,20 @@ var catalog = []Provider{
 		BaseURL:      "https://api.mistral.ai/v1",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "mistral-large-latest",
+		DefaultModel: "mistral-large-4",
 		Group:        "other",
 		Models: []Model{
-			// Mistral Large 确认为纯文本模型（官方文档，2026-09）。
-			{ID: "mistral-large-latest", Name: "Mistral Large 3", Description: "旗舰，文本", ContextLen: 128000, Vision: b(false)},
+			// 2026-10-06：Large 4 公开预览（1.05T/49B MoE，原生多模态，1M 上下文）；
+			// 官方称权重 10 月底发布，故此处按 API 预览登记。
+			{ID: "mistral-large-4", Name: "Mistral Large 4", Description: "预览版旗舰，1M 上下文", ContextLen: 1000000},
+			// Mistral Large 确认为纯文本模型（官方文档，2026-09）；窗口按官方 256K
+			// （旧值 128000 与 Large 3 的官方口径不符）。
+			{ID: "mistral-large-latest", Name: "Mistral Large 3", Description: "GA 别名，始终指向最新 GA 旗舰（纯文本）", ContextLen: 256000, Vision: b(false)},
 			{ID: "pixtral-large-latest", Name: "Pixtral Large", Description: "多模态", Vision: b(true)},
 			{ID: "mistral-medium-3-5", Name: "Mistral Medium 3.5"},
-			{ID: "mistral-small-2603", Name: "Mistral Small 4", Description: "快速"},
+			{ID: "mistral-small-2603", Name: "Mistral Small 4", Description: "快速", ContextLen: 256000},
 			{ID: "magistral-medium-latest", Name: "Magistral Medium", Description: "推理"},
-			{ID: "codestral-latest", Name: "Codestral", Description: "代码"},
+			{ID: "codestral-latest", Name: "Codestral", Description: "代码", ContextLen: 256000},
 		},
 	},
 	{
@@ -354,8 +368,11 @@ var catalog = []Provider{
 		DefaultModel: "mimo-v2.6-flash",
 		Group:        "other",
 		Models: []Model{
+			// 2026-09-22：V2.6 Pro（1.02T/42B MoE），1M 上下文，原生全模态
+			// （文本+图像+视频+音频），Agent 基座。
+			{ID: "mimo-v2.6-pro", Name: "MiMo V2.6 Pro", Description: "最新旗舰，原生全模态", ContextLen: 1000000, Vision: b(true)},
 			// 用户实测 mimo-v2.6-flash 接受图片输入（2026-06）。
-			{ID: "mimo-v2.6-flash", Name: "MiMo V2.6 Flash", Description: "最新轻量模型", Vision: b(true)},
+			{ID: "mimo-v2.6-flash", Name: "MiMo V2.6 Flash", Description: "最新轻量模型", ContextLen: 1000000, Vision: b(true)},
 			// V2.5 Pro：1T/42B MoE，1M 上下文，原生视觉+音频推理。
 			{ID: "mimo-v2.5-pro", Name: "MiMo V2.5 Pro", Description: "旗舰推理", ContextLen: 1000000, Vision: b(true)},
 			{ID: "mimo-v2-flash", Name: "MiMo V2 Flash", Description: "快速"},

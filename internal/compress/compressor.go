@@ -79,6 +79,11 @@ func NewCompressor(thresholdTokens int) *Compressor {
 // 摘要本身失控膨胀。
 const defaultToolResultHeadChars = 1500
 
+// priorSummaryBudgetChars 是"滚动摘要"里为上一版摘要保留的正文长度上限。
+// 摘要本来就有界（SummaryTokensCeiling 12000 token），这里再压一层是为了防止
+// prior 逐次放大 —— 滚动摘要的前提是"摘要体积稳定、不随压缩次数增长"。
+const priorSummaryBudgetChars = 6000
+
 // ShouldCompress returns true if the given token count exceeds the threshold.
 func (c *Compressor) ShouldCompress(tokens int) bool {
 	return tokens >= c.ThresholdTokens
@@ -185,7 +190,23 @@ func toolCallingAssistant(m Message) bool {
 
 // Compress compresses the message list by summarizing middle turns.
 // Protected head and tail messages are preserved.
+//
+// 等价于 CompressWithPrior(messages, "", systemPrompt)：不带"上一版摘要"。
 func (c *Compressor) Compress(messages []Message, systemPrompt string) (*CompressResult, error) {
+	return c.CompressWithPrior(messages, "", systemPrompt)
+}
+
+// CompressWithPrior 在压缩的同时把上一版摘要（priorSummary）滚动进新摘要。
+//
+// 这是"摘要不再累积"的关键机制：调用方（agent.compressContext）把 history 中
+// **最新一条**压缩摘要的正文作为 priorSummary 传进来，产出的新摘要即取代它 ——
+// 于是 history 里任何时刻至多存在一条压缩摘要。
+//
+// 若不做这件事：每次压缩都追加一条摘要、而旧摘要又被无条件保留 ⇒ 头部被历次
+// 摘要线性填满，压缩触发频率随摘要体积上升而指数增长（实测 150 轮后摘要占上下文
+// 96%，真实对话只剩 2 条 user；压缩净收益归零，只剩"把内容换成摘要"）。
+// priorSummary 为空时行为与旧实现完全一致。
+func (c *Compressor) CompressWithPrior(messages []Message, priorSummary, systemPrompt string) (*CompressResult, error) {
 	if len(messages) <= c.ProtectFirstN+c.ProtectLastN+1 {
 		return &CompressResult{
 			Messages:        messages,
@@ -229,7 +250,7 @@ func (c *Compressor) Compress(messages []Message, systemPrompt string) (*Compres
 	tail := messages[tailStart:]
 
 	// Generate summary of middle section
-	summary, err := c.generateSummary(middle, systemPrompt)
+	summary, err := c.generateSummary(middle, priorSummary, systemPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -260,9 +281,11 @@ func (c *Compressor) Compress(messages []Message, systemPrompt string) (*Compres
 // generateSummary creates a summary of the middle message section.
 // In production, this would call an auxiliary LLM. Here we provide
 // a deterministic fallback and a hook for LLM integration.
-func (c *Compressor) generateSummary(middle []Message, systemPrompt string) (string, error) {
+func (c *Compressor) generateSummary(middle []Message, priorSummary, systemPrompt string) (string, error) {
 	// Check cache first
-	cacheKey := c.hashMessages(middle)
+	// 缓存键必须包含 priorSummary：同一个中段配上不同的"上一版摘要"必须产出
+	// 不同结果，否则滚动摘要会命中错误条目、把旧摘要串到新上下文里。
+	cacheKey := c.hashMessages(middle, priorSummary)
 	c.mu.RLock()
 	if cached, ok := c.summaryCache[cacheKey]; ok {
 		c.mu.RUnlock()
@@ -275,15 +298,28 @@ func (c *Compressor) generateSummary(middle []Message, systemPrompt string) (str
 	c.mu.RLock()
 	summarizer := c.Summarizer
 	c.mu.RUnlock()
-	if summarizer != nil && len(middle) > 0 {
+	if summarizer != nil && (len(middle) > 0 || priorSummary != "") {
+		// 把上一版摘要作为一条额外的 system 输入交给摘要器，让它"接续"而不是
+		// "重来"（newProviderSummarizer 会把每条输入的 role 渲染进文本，因此任意
+		// role 都能被模型看到）。
+		input := middle
+		if priorSummary != "" {
+			input = make([]Message, 0, len(middle)+1)
+			input = append(input, Message{
+				Role: "system",
+				Content: "(Previous compaction summary — carry its facts forward into the new " +
+					"summary instead of restarting from scratch)\n" + priorSummary,
+			})
+			input = append(input, middle...)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), defaultSummaryTimeout)
 		defer cancel()
-		if s, err := summarizer(ctx, middle); err == nil && strings.TrimSpace(s) != "" {
+		if s, err := summarizer(ctx, input); err == nil && strings.TrimSpace(s) != "" {
 			summary = c.clampSummaryTokens(s)
 		}
 	}
 	if summary == "" {
-		summary = c.buildDeterministicSummary(middle)
+		summary = c.buildDeterministicSummary(middle, priorSummary)
 	}
 
 	// Cache the result
@@ -333,7 +369,7 @@ func (c *Compressor) SetSummarizer(fn func(ctx context.Context, middle []Message
 // 与旧实现的区别：工具结果不再只记一个工具名。每条 tool 消息保留其**目标资源**
 // （路径/命令/查询）与正文头部，摘要因此仍然携带"读过什么、内容大致是什么"，
 // 避免模型在压缩后因为完全失忆而反复重读同一批文件。
-func (c *Compressor) buildDeterministicSummary(middle []Message) string {
+func (c *Compressor) buildDeterministicSummary(middle []Message, priorSummary string) string {
 	var parts []string
 
 	// Extract key information
@@ -408,6 +444,14 @@ func (c *Compressor) buildDeterministicSummary(middle []Message) string {
 		parts = append(parts, "(Task in progress)")
 	}
 
+	// 滚动摘要：把上一版摘要的正文接力过来。没有这一步，压缩产生的新摘要只覆盖
+	// "最近被摘掉的一段"，更早的历史会在下一次压缩时被彻底丢弃（旧实现里那些摘要
+	// 消息倒是留着了，但只增不减 —— 见 CompressWithPrior 的说明）。
+	if s := strings.TrimSpace(priorSummary); s != "" {
+		parts = append(parts, "\n## Prior Summary (carried forward)")
+		parts = append(parts, truncateString(s, priorSummaryBudgetChars))
+	}
+
 	if len(toolCalls) > 0 {
 		parts = append(parts, "\n## Tools Used")
 		for i, tc := range toolCalls {
@@ -467,8 +511,14 @@ func toolCallTarget(tc types.ToolCall) string {
 }
 
 // hashMessages creates a hash of messages for cache key.
-func (c *Compressor) hashMessages(messages []Message) string {
+// priorSummary 参与哈希：同一个中段配上不同的"上一版摘要"是不同的摘要请求。
+func (c *Compressor) hashMessages(messages []Message, priorSummary string) string {
 	var sb strings.Builder
+	if priorSummary != "" {
+		sb.WriteString("prior:")
+		sb.WriteString(priorSummary)
+		sb.WriteString("\n--\n")
+	}
 	for _, m := range messages {
 		sb.WriteString(m.Role)
 		sb.WriteString(":")

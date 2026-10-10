@@ -70,7 +70,7 @@ func TestDeterministicSummaryKeepsObservations(t *testing.T) {
 		},
 	}
 
-	summary := c.buildDeterministicSummary(middle)
+	summary := c.buildDeterministicSummary(middle, "")
 
 	if !strings.Contains(summary, "docs.html") {
 		t.Fatalf("摘要丢失了工具结果的目标路径:\n%s", summary)
@@ -92,7 +92,7 @@ func TestDeterministicSummaryTruncatesToolHead(t *testing.T) {
 		{Role: "tool", Name: "read_file", ToolCallID: "c1", Content: head + strings.Repeat("T", 5000)},
 	}
 
-	summary := c.buildDeterministicSummary(middle)
+	summary := c.buildDeterministicSummary(middle, "")
 
 	if !strings.Contains(summary, "big.html") {
 		t.Fatalf("摘要丢失目标路径:\n%s", summary)

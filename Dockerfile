@@ -41,9 +41,27 @@ COPY . .
 # Copy web dist from web-builder (vite builds directly to internal/server/dist)
 COPY --from=web-builder /app/internal/server/dist /app/internal/server/dist
 
-# Build the binary with embedded web assets
+# Build metadata, same ldflags contract as CI (.github/workflows/release.yml)
+# and scripts/lib/common.sh.
+#
+# Why these exist: this RUN used to pass only "-s -w", so the image had no
+# -X main.Version and `magic version` / /api/health reported the compiled-in
+# default "dev" even for a v0.6.0 image -- the container could not tell you
+# which release it was. The defaults below keep a bare `docker build`
+# behaving exactly as before; a release build passes real values:
+#   docker build --build-arg VERSION=v0.6.0 --build-arg COMMIT=$(git rev-parse --short HEAD) ...
+#
+# Declared here (not at the top of the stage) on purpose: an ARG invalidates
+# the build cache for every instruction after it, and nothing above depends
+# on the version -- this way changing VERSION only re-runs the final link.
+# Note the names must be main.Version / main.Commit / main.BuildDate
+# (capitalized); a lowercase main.version is silently ignored by the linker.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
     -o /magic \
     ./cmd/magic
 

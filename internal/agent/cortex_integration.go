@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agent/hooks"
@@ -16,6 +17,20 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
+)
+
+// 轨迹入库的体积预算（字符，rune 计）。
+//
+// 历史里的工具结果本来就走 TruncateDetailed(..., a.maxMsgLen=50000 字节)，
+// 但**写入 TrajectoryStore 的是未截断原文**：一条轨迹 = 几百个 step × 完整
+// 工具输出，几百轮任务下内存与磁盘双膨胀（整个 TrajectoryStore 启动时还会
+// 被 loadTrajectories 全量读回内存）。这里在组装 step 时就截断，源头控体积。
+//
+// 取 4000 字符而非字节：中文一个字 3 字节，按字符计对中英文都够用且可读。
+// 输入（模型给的参数 JSON）通常很小，但 write_file 之类会塞整篇正文，一并限长。
+const (
+	trajectoryToolOutputMaxChars = 4000
+	trajectoryToolInputMaxChars  = 4000
 )
 
 // endCortexTurn 是回合/会话结束点的 cortex 收口：把 agent 累积历史喂给
@@ -370,8 +385,8 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 				}
 				trajectorySteps = append(trajectorySteps, cortex.TrajectoryStep{
 					ToolName:   toolName,
-					ToolInput:  toolInputStr,
-					ToolOutput: stepResult,
+					ToolInput:  utils.TruncateDetailed(toolInputStr, trajectoryToolInputMaxChars),
+					ToolOutput: utils.TruncateDetailed(stepResult, trajectoryToolOutputMaxChars),
 					Success:    result.Err == nil,
 					Timestamp:  time.Now(),
 				})
@@ -544,15 +559,34 @@ func (a *Agent) getRecentHistory(count int) []string {
 	return history
 }
 
-// injectMemoryIntoSystemPrompt injects memory content into the system prompt
+// injectMemoryIntoSystemPrompt 记录 cortex 冻结快照记忆（memory + user profile），
+// 供本轮出站消息注入。
+//
+// 名字保留（调用点语义不变），但**不再往 history 里写**。旧实现把
+// "\n\n[MEMORY]...\n\n[USER PROFILE]..." 追加到第一条 system 消息上，有两个硬伤：
+//  1. 每个 cortex 回合追加一次 ⇒ 基础 system prompt 随轮数无限膨胀（只靠
+//     truncateHistory 的 maxSystemLen 字节预算兜底）；
+//  2. 基础 system prompt 每轮都变 ⇒ prompt 前缀缓存（OpenAI/Gemini 自动缓存、
+//     Anthropic cache_control）永远不可能命中，稳定前缀长度恒为 0。
+//
+// 现在只覆盖 agent 上的快照字段，注入位置交给 withContextBlocks 的易变区
+// （排在静态规则链与 [Workspace] 之后，因此不破坏可缓存前缀）。
 func (a *Agent) injectMemoryIntoSystemPrompt(memory, user string) {
-	for i, msg := range a.history {
-		if msg.Role == "system" {
-			injection := fmt.Sprintf("\n\n[MEMORY]\n%s\n\n[USER PROFILE]\n%s", memory, user)
-			a.history[i].Content += injection
-			return
-		}
+	var b strings.Builder
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString("[MEMORY]\n")
+		b.WriteString(memory)
 	}
+	if strings.TrimSpace(user) != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("[USER PROFILE]\n")
+		b.WriteString(user)
+	}
+	a.mu.Lock()
+	a.snapshotMemory = b.String()
+	a.mu.Unlock()
 }
 
 // minCortexMaxTurns 是 cortex 计划收敛回合上限时的下限。

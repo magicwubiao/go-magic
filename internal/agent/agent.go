@@ -90,11 +90,20 @@ type Agent struct {
 	// Mutex for concurrent access protection
 	mu sync.RWMutex
 
-	provider    provider.Provider
-	registry    ToolRegistry
-	tools       []map[string]interface{} // tools schema for provider
-	history     []provider.Message
-	maxTurns    int
+	provider provider.Provider
+	registry ToolRegistry
+	tools    []map[string]interface{} // tools schema for provider
+	history  []provider.Message
+	maxTurns int
+	// maxTurnsExplicit 记录调用方是否**显式**配置过回合上限（config
+	// agent.max_turns 经 WithMaxTurns 传入）。只有未显式配置时，
+	// deriveMaxTurnsFromTurnTimeout 才用回合时限折算出的值把它顶上去 ——
+	// 用户显式给的值永远优先。
+	maxTurnsExplicit bool
+	// turnTimeout 是本回合的执行时限（服务端由 config agent.turn_timeout_minutes
+	// 推出，见 server.turnTimeout）。零值表示未知/不限时；它**只**参与 maxTurns
+	// 的推导，不在这里施加任何超时（超时由调用方的 context 负责）。
+	turnTimeout time.Duration
 	maxTotalLen int // max BYTES in message history (messageWeight sums len(), not runes)
 	maxMsgLen   int // max chars per message
 	// skillsCtx 记录当前注入系统提示的技能清单块，供 SetSkillsContext
@@ -153,6 +162,13 @@ type Agent struct {
 	// dynamicMemoryKey 用于防止同一次输入重复召回。
 	dynamicMemory    string
 	dynamicMemoryKey string
+
+	// snapshotMemory 是 cortex 冻结快照记忆（[MEMORY] + [USER PROFILE]）的当前
+	// 文本，每轮由 cortex 路径覆盖写入。它**不**写进 history 里的 system 消息：
+	// 旧实现每轮往 history[0].Content 追加，一是让基础 system prompt 随轮数无限
+	// 膨胀（只靠 maxSystemLen 字节预算兜底），二是每轮都变 ⇒ prompt 前缀缓存
+	// 永远不可能命中。现在它作为易变块由 withContextBlocks 注入到稳定前缀之后。
+	snapshotMemory string
 
 	// 静态规则链：ruleDir 非空（= 会话工作目录）时，出站消息在头部 system
 	// 之后、动态记忆之前插入从工作目录向上逐级发现的规则文件
@@ -256,21 +272,132 @@ type SteeringConfig struct {
 	MaxTokenBudget int64
 }
 
-// defaultCompressThresholdTokens 是上下文压缩的默认 token 阈值（历史字符数 / 4）。
+// compressThresholdWindowPercent 是**小窗口**对压缩触发点的向下收紧比例。
 //
-// 旧值 8000（≈3.2 万字符）是 8K 上下文时代的遗留：读一个稍大的文件就会越过它，
-// 触发压缩把刚读到的内容摘要掉；模型于是重读、再压缩 —— 形成"读完就忘"的正反馈
-// 死循环（2026-10-08 事故：一个改顶部导航的简单任务空转到 30 分钟回合墙，283 次
-// 调用里 86% 是只读、写入仅 1 次）。
+// 它只参与 min() 的左侧：触发点 = min(窗口 × 本比例, compressThresholdCeilingTokens)。
+// 取 60% 是为了给输出 token、系统提示与突发的大块工具结果留出约 2/5 的余量 ——
+// 长任务里工具结果是成块涌入的，余量给足才不会"刚压完就又越线"。
 //
-// 当前主力模型（deepseek-v4.1 / glm-5.3 等）上下文窗口为 128K 级，32000 tokens
-// （≈12.8 万字符）既能让典型工作集留在上下文里，又为输出与系统提示留足余量。
-// 可通过 config agent.compress_threshold_tokens 或 WithCompression 覆盖。
-const defaultCompressThresholdTokens = 32000
+// 注意它**不再**把阈值随大窗口一起放大：1M 窗口的模型不会因此得到 600K 的触发点
+// （那等于每轮请求都背上 60 万 token 的输入，成本与 context rot 都不划算）。
+// 天花板由 compressThresholdCeilingTokens 负责。
+const compressThresholdWindowPercent = 60
+
+// compressThresholdCeilingTokens 是压缩触发点的**绝对上限**（token）。
+//
+// 这是"按当前世代主流模型设定的一个合理值"，取代"跟着每个模型窗口走"的做法：
+// 模型换代极快（窗口数据登记在 pkg/catalog，换代时条目成批更新），而触发点本来就
+// 是个成本/注意力取舍，不必等于窗口的某个固定比例。
+//
+//   - 主流新模型都是 1M 级窗口，按 60% 算就是 60 万 token/轮：每轮都为这堆内容付
+//     全价，且长上下文存在 context rot / lost-in-the-middle，塞满反而降智。
+//   - 200K（≈80 万字符）是"再往上收益明显衰减"的实用拐点：按每轮 ~6K 字符的
+//     工具结果估算，够跑到 ~125 轮才压一次，几百轮的长任务整程只压几次。
+//   - 它对小窗口模型完全无风险：阈值恒取 min(窗口×60%, 本值)，窗口小于 ~333K 时
+//     窗口自己才是约束（200K 窗口 ⇒ 120K，128K 窗口 ⇒ 76.8K，8K 窗口 ⇒ 4.9K）。
+//
+// 由此"维护模型窗口数据"从"影响决策"降级为"只影响收紧精度"：目录里漏登记或
+// 登记滞后，最坏后果是该模型按假设窗口保守地多压几次（软失败，滚动摘要后损失很小），
+// 不会再出现早年的"按窗口的 3% 疯狂压缩"，也不会把阈值抬到超过真实窗口 ——
+// 而超限是不自愈的（见 provider.DefaultModelContextLen 的说明）。
+//
+// 想更激进/更保守，改 config agent.compress_threshold_tokens 即可。注意那里传
+// **正数 = 显式覆盖**，此时小窗口的收紧也不再生效，请自行确认不超过模型真实窗口。
+const compressThresholdCeilingTokens = 200000
+
+// defaultCompressThresholdTokens 是"模型窗口未知"时的压缩触发阈值（token）。
+//
+// 它不是另一个魔法数字，而是由**假设窗口**按与已知窗口完全相同的算式派生
+// （同样经 compressThresholdCeilingTokens 截断）：
+//
+//	min(假设窗口 provider.DefaultModelContextLen(128K) × 60%, ceiling 200K) = 76800
+//
+// 于是"未知窗口"与"已知 128K 窗口"恰好算出同一个值，没有第三套口径。旧值 32000
+// 其实是"128K 窗口的 25%"年代的产物，与自动口径自相矛盾：落到兜底的模型
+// （未收录的新模型、本地/自定义端点、Cohere Command、Perplexity Sonar、gpt-oss…）
+// 会被无谓地多压一倍。更早的 8000（≈3.2 万字符）是 8K 上下文时代的遗留 ——
+// 读一个稍大的文件就会越过它，压缩掉刚读到的内容，模型于是重读、再压缩，形成
+// "读完就忘"的正反馈死循环（2026-10-08 事故：一个改顶部导航的简单任务空转到
+// 30 分钟回合墙，283 次调用里 86% 是只读、写入仅 1 次）。
+//
+// 假设窗口**故意不跟着当前世代一起抬高**（不取 256K/1M），因为失效方向不对称：
+// 猜小只是多压几次（滚动摘要后是低损软失败），猜大则请求超过真实窗口，而上下文
+// 超限不会自愈 —— 分类器为 FailoverContextOverflow 给出的 Action "compress" /
+// Compress 字段全仓无人消费（四处调用点只读 Abort 与 Delay）⇒ 立即重试 → 再撞 →
+// 被重复失败检测升级成回合失败。理由详见 provider.DefaultModelContextLen。
+//
+// 注意它**只框住"窗口未知"这一条支路**：大窗口模型的实际触发点由
+// compressThresholdCeilingTokens(200K) 封顶，与小窗口比例无关，所以本值不受
+// 世代更替影响，无需跟着模型换代重算。
+//
+// 用户仍可通过 config agent.compress_threshold_tokens 显式覆盖。
+const defaultCompressThresholdTokens = provider.DefaultModelContextLen * compressThresholdWindowPercent / 100
+
+// defaultMaxTotalLen 是"模型窗口未知"时的历史字节硬上限，同样由假设窗口派生
+// （窗口 × 4 字节，与 autoHistoryByteLimit 同式；旧值 200000 **字节**只相当于
+// 假设窗口的 39%，不要与 compressThresholdCeilingTokens 的 200000 token 混淆）。
+// historyHardLimit() 还会再取"触发点 × 5/4"的较大者，保证字节级硬删永远晚于
+// 压缩触发。
+const defaultMaxTotalLen = provider.DefaultModelContextLen * 4
 
 // defaultCompressProtectLastN 是压缩时尾部保护的基准条数（Compress 内还会按
 // 历史长度自适应放大到至少 len/4，见 compress.Compressor.Compress）。
 const defaultCompressProtectLastN = 8
+
+// assumedWindow 返回用于**收紧**的模型窗口：已知用真值，未知用假设窗口
+// （provider.DefaultModelContextLen）。
+//
+// 让"未知"也走同一条算式，是为了根除"两条路径各自维护一套比例"的老问题：
+// 以前未知窗口有自己的一套写死值（阈值 32000 / 硬上限 200000），与已知窗口的
+// 60% / ×4 口径并存，改任一处都会留下不一致。
+//
+// 它只出现在 min() 的左侧 —— 即**只用来把阈值往下拉**。阈值的天花板是
+// compressThresholdCeilingTokens(200K)，与本函数返回值无关。
+func assumedWindow(prov provider.Provider) int {
+	if w := provider.ModelContextLenFor(prov); w > 0 {
+		return w
+	}
+	return provider.DefaultModelContextLen
+}
+
+// autoCompressThreshold 推导压缩触发阈值（token）。
+//
+// 语义：config 的 agent.compress_threshold_tokens 为 0（默认）表示"自动"。
+// 窗口由 provider.ModelContextLenFor 解析（pkg/catalog → provider 自报列表，
+// 见该函数的注释）；解析不出来时按假设窗口 provider.DefaultModelContextLen(128K)
+// 继续算，得到 defaultCompressThresholdTokens(76800) —— 宁可早压缩，也不要把阈值
+// 抬到超过一个可能很小的真实窗口。
+//
+// 只有一条算式：min(窗口 × 60%, compressThresholdCeilingTokens)。两条边界各司其职：
+//   - 窗口 < ~333K 时由窗口比例管（留出余量，小窗口不被过度承诺）；
+//   - 更大的窗口由 ceiling 封顶（每轮成本与注意力质量可控）。
+//
+// 因此本函数**不依赖目录保持最新**：目录漏登记或滞后只是少一层收紧（按假设窗口
+// 保守取值），方向安全。
+func autoCompressThreshold(prov provider.Provider) int {
+	threshold := assumedWindow(prov) * compressThresholdWindowPercent / 100
+	if threshold > compressThresholdCeilingTokens {
+		return compressThresholdCeilingTokens
+	}
+	return threshold
+}
+
+// autoHistoryByteLimit 按当前模型的窗口推导历史上限（字节）。
+//
+// 口径与 messageWeight 一致（len()，字节）。窗口 token 数 × 4 是 ASCII 下的
+// 字节等价量，即"把窗口装满"的位置；historyHardLimit() 还会在此基础上为压缩
+// 触发点留出 25% 余量。窗口未知时同样按假设窗口算，得到 defaultMaxTotalLen。
+//
+// 它**不**跟着 compressThresholdCeilingTokens 一起封顶：字节硬上限是最后一道
+// 防线（超限才删、且不留摘要），只随真实窗口走。大窗口模型下压缩触发点被 ceiling
+// 压在 200K token（80 万字节），而硬上限是窗口 × 4 字节，于是"先压缩、后硬删"的
+// 顺序被拉得更开（1M 窗口下余量 5 倍），符合预期。
+//
+// 这条修正的是旧写死 200000 字节带来的两头错配：1M 窗口的模型被限制在窗口的
+// 5%（压缩还没轮到就先撞硬删），而 8K 窗口的模型反而被允许发 50K token 的请求。
+func autoHistoryByteLimit(prov provider.Provider) int {
+	return assumedWindow(prov) * 4
+}
 
 // NewAIAgent creates a new AI agent
 func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[string]interface{}, systemPrompt string) *Agent {
@@ -299,8 +426,8 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		// 单位是**字节**（messageWeight 用 len()），注释里的 "~50K tokens" 按
 		// ASCII 4 字节/token 折算（中文 3 字节/字、≈1 token/字，实际更高）。
 		// 生效的硬上限由 historyHardLimit() 取"本值"与"压缩触发点 ×5/4"的较大者。
-		maxTotalLen:    200000, // 200K bytes max history (~50K tokens ASCII)
-		maxMsgLen:      50000,  // 50K bytes per message (~12K tokens ASCII)
+		maxTotalLen:    autoHistoryByteLimit(prov),
+		maxMsgLen:      50000, // 50K bytes per message (~12K tokens ASCII)
 		maxTokenBudget: 0,
 		// sameToolLimit 比的是"工具名 + 参数指纹"：同一回合里 read_file 读 3 个
 		// 不同文件是完全正常的，只有反复发起**同一个调用**才是死循环信号。
@@ -329,7 +456,7 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		hooks:                 hooks.NewHookManager(),
 		bus:                   bus.NewEventBus(),
 		budget:                budget.Preset("parent"),
-		compressor:            compress.NewCompressor(defaultCompressThresholdTokens),
+		compressor:            compress.NewCompressor(autoCompressThreshold(prov)),
 		errorClassifier:       retry.NewClassifier(),
 		failureDetector:       retry.NewRepeatedFailureDetector(retry.DefaultRepeatedFailureConfig()),
 		smartRecovery:         retry.NewSmartRecovery(retry.DefaultSmartRecoveryConfig()),
@@ -436,6 +563,10 @@ func NewEnhancedAgent(prov provider.Provider, registry ToolRegistry, tools []map
 		opt(agent)
 	}
 
+	// 选项全部应用后再决定回合上限：显式配置优先，缺省时按回合时限折算
+	// （见 deriveMaxTurnsFromTurnTimeout 的说明）。
+	agent.deriveMaxTurnsFromTurnTimeout()
+
 	return agent
 }
 
@@ -477,23 +608,77 @@ func WithLoopLimits(sameToolLimit, consecutiveLimit int) AgentOption {
 	}
 }
 
-// WithMaxTurns overrides the per-turn tool-loop cap (built-in default 300,
-// overridable via config agent.max_turns which also defaults to 300).
-// Values <= 0 are ignored so callers can pass config straight through.
+// WithMaxTurns overrides the per-turn tool-loop cap (built-in default 150,
+// overridable via config agent.max_turns). Values <= 0 are ignored so callers
+// can pass config straight through.
+//
+// 一旦显式设置，deriveMaxTurnsFromTurnTimeout 就不再按回合时限覆盖它。
 func WithMaxTurns(n int) AgentOption {
 	return func(a *Agent) {
 		if n > 0 {
 			a.maxTurns = n
+			a.maxTurnsExplicit = true
 		}
+	}
+}
+
+// WithTurnTimeout 告知 agent 本回合的执行时限（wall-clock）。
+//
+// 它**不**在 agent 内施加超时（超时由调用方的 context 负责），只用于在调用方
+// 没有显式配置 maxTurns 时，把时限折算成回合上限 —— 见
+// deriveMaxTurnsFromTurnTimeout。这样 config 里把 turn_timeout_minutes 调大
+// （上限 24h）时，maxTurns 会自动跟着放大，不会出现"时间还很充裕却被 150 轮
+// 静默掐断"的错配。
+func WithTurnTimeout(d time.Duration) AgentOption {
+	return func(a *Agent) {
+		if d > 0 {
+			a.turnTimeout = d
+		}
+	}
+}
+
+// maxDerivedMaxTurns 是按回合时限推导 maxTurns 的硬上限。
+//
+// 24h 时限 ÷ 30s 基准 ≈ 2880，理论上可以更大；这里封顶 2000 是为了让"回合
+// 上限"始终是一个有限数（工具调用记账、循环检测历史都按轮增长），避免配置写
+// 极端值时无界。
+const maxDerivedMaxTurns = 2000
+
+// deriveMaxTurnsFromTurnTimeout 在**未显式配置** maxTurns 时，用回合时限折算
+// 出一个回合上限。
+//
+// 折算基准取 defaultTurnDuration（30s，与 deadline 优雅收尾用的是同一个基准）。
+// 折出来比当前值**小**时不动：小窗口时限下 150 本来就跑不满（30 分钟 ÷ 30s ≈ 60
+// 轮），此时 maxTurns 根本不是约束，压低它只会有害。只有时限足够宽（例如用户把
+// turn_timeout_minutes 配到 2h ⇒ 240 轮）时才把它顶上去 —— 这正是要修的那处错配：
+// 此前 maxTurns(150) 与回合时限是两个独立写死的常量，时限放大后 maxTurns 成了
+// 真瓶颈且没有任何提示。
+//
+// 必须在所有 AgentOption 应用**之后**调用。
+func (a *Agent) deriveMaxTurnsFromTurnTimeout() {
+	if a.maxTurnsExplicit || a.turnTimeout <= 0 {
+		return
+	}
+	derived := int(a.turnTimeout / defaultTurnDuration)
+	if derived > maxDerivedMaxTurns {
+		derived = maxDerivedMaxTurns
+	}
+	if derived > a.maxTurns {
+		log.Infof("[Agent] maxTurns raised %d -> %d to fit turn timeout %s (config agent.max_turns is unset; set it to pin an explicit cap)",
+			a.maxTurns, derived, a.turnTimeout)
+		a.maxTurns = derived
 	}
 }
 
 // WithCompression 调整上下文压缩策略。两项都直接决定"模型会不会因为上下文被
 // 摘要掉而反复重读同一批文件"：
 //
-//   - thresholdTokens：触发压缩的 token 阈值（历史字符数/4）。越高越不容易触发，
-//     默认 defaultCompressThresholdTokens(32000)。旧的硬编码 8000 是 8K 上下文
-//     时代的遗留，读一个文件就会触发。
+//   - thresholdTokens：触发压缩的 token 阈值（历史字符数/4）。**0 = 自动**：
+//     min(当前模型上下文窗口 × 60%, compressThresholdCeilingTokens 200K)
+//     （见 autoCompressThreshold）；窗口未知时按假设窗口
+//     provider.DefaultModelContextLen 算，即 defaultCompressThresholdTokens(76800)。
+//     传正数则显式覆盖自动值（此时小窗口的向下收紧也一并失效，请确认不超过模型
+//     真实窗口）。旧的硬编码 8000 是 8K 上下文时代的遗留，读一个文件就会触发。
 //   - protectLastN：压缩时尾部原样保留的消息条数，默认 defaultCompressProtectLastN(8)；
 //     Compress 内部还会按历史长度自适应放大到至少 len/4。
 //
@@ -1176,7 +1361,8 @@ func (a *Agent) toolCallHistoryLength() int {
 // 现场完全无法还原（max_turns 与回合超时是两条不同的撞墙路径，见
 // NewEnhancedAgent 里的上限说明）。诊断信息统一在这里拼。
 func (a *Agent) maxTurnsExhaustedError() error {
-	return fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v",
+	return fmt.Errorf("exceeded maximum turns (%d). Completed %d turns with %d tool calls. Recent tools: %v. "+
+		"This is the per-turn tool-loop cap; raise config agent.max_turns to allow longer single turns, or agent.turn_timeout_minutes if the wall-clock budget was the real limit",
 		a.maxTurns, a.iterationCount, a.toolCallHistoryLength(), a.recentToolCallNames(5))
 }
 
@@ -1924,12 +2110,25 @@ func (a *Agent) compressContext() bool {
 		"detail": "Context window full, compressing history...",
 	})
 
-	msgs := make([]compress.Message, 0, len(a.history))
+	// 三类消息分开处理（"摘要不再累积"的关键）：
+	//   baseSystems  —— 原始 system 提示（不含压缩摘要）：永远留在头部，不参与压缩；
+	//   priorSummary —— 上一次压缩留下的摘要，只取**最新一条**：作为 prior 交给摘要器
+	//                   滚动吸收，因此 history 中不会再出现第二条摘要；
+	//   rest         —— 其余对话/工具消息，才是压缩的真正对象。
+	var baseSystems []provider.Message
+	priorSummary := ""
+	rest := make([]compress.Message, 0, len(a.history))
 	for _, msg := range a.history {
 		if msg.Role == "system" {
+			if strings.Contains(msg.Content, compress.SummaryPrefix) {
+				// 循环按下标递增 ⇒ 后出现的覆盖先出现的，留下最新一版摘要。
+				priorSummary = stripCompactionSummary(msg.Content)
+				continue
+			}
+			baseSystems = append(baseSystems, msg)
 			continue
 		}
-		msgs = append(msgs, compress.Message{
+		rest = append(rest, compress.Message{
 			Role:         msg.Role,
 			Content:      msg.Content,
 			ToolCalls:    msg.ToolCalls,
@@ -1937,19 +2136,22 @@ func (a *Agent) compressContext() bool {
 			ContentParts: msg.ContentParts,
 		})
 	}
-	result, err := a.compressor.Compress(msgs, "")
+
+	result, err := a.compressor.CompressWithPrior(rest, priorSummary, "")
 	if err != nil || result == nil {
 		return false
 	}
-
-	// Replace history with the compressed version: system prompts keep their
-	// original position at the head, then the compressor's head/summary/tail.
-	newHistory := make([]provider.Message, 0, len(a.history))
-	for _, msg := range a.history {
-		if msg.Role == "system" {
-			newHistory = append(newHistory, msg)
-		}
+	// 消息太少时 CompressWithPrior 原样返回（CompressedCount == len(rest)）。
+	// 此时必须放弃替换：否则会把 priorSummary 的来源（旧摘要消息）一并丢掉 ——
+	// 那正是"压缩失败还要销毁历史"的形态。
+	if result.CompressedCount >= len(rest) {
+		return false
 	}
+
+	// 新历史 = 原始 system 提示 + 压缩结果（head + **唯一**的新摘要 + tail）。
+	// 旧摘要消息在这里被丢弃 —— 它的内容已通过 priorSummary 滚动进新摘要。
+	newHistory := make([]provider.Message, 0, len(baseSystems)+len(result.Messages))
+	newHistory = append(newHistory, baseSystems...)
 	for _, msg := range result.Messages {
 		newHistory = append(newHistory, provider.Message{
 			Role:         msg.Role,
@@ -1959,27 +2161,41 @@ func (a *Agent) compressContext() bool {
 			ContentParts: msg.ContentParts,
 		})
 	}
-	a.history = newHistory
 
+	a.history = newHistory
 	after := a.GetHistoryLength()
-	if after < before {
-		a.mu.RLock()
-		session := a.session
-		a.mu.RUnlock()
-		log.Infof("[AGENT] context compacted: %d->%d msgs, %d->%d chars session=%s",
-			beforeMsgs, len(a.history), before, after, session)
-		if lost := todoMsgsBefore - countTodoToolMessages(a.history); lost > 0 {
-			// 待办 ID 只存在于 create 的工具结果里，而它通常正落在被摘要的中段 ⇒
-			// 压缩之后模型既无法 complete、也不再知道列表在案。2026-10-09 事故
-			// 正是如此（建 4 条只标 1 条，且那 1 条在压缩之前）。
-			// 现在由 activePlanBlock 每轮从持久层重注入兜住；这里留痕是为了让
-			// "模型忽然不认账"在线上可定位，而不是只能人肉读思考轨迹。
-			log.Warnf("[AGENT] compaction dropped %d todo tool result(s) from context "+
-				"(todo IDs live only there; the Active Plan block re-injects the live list each request) session=%s",
-				lost, session)
-		}
+	a.mu.RLock()
+	session := a.session
+	a.mu.RUnlock()
+	if after >= before {
+		// 字符数没有下降：摘要本身比被替换掉的中段还长（历史很短时常见）。仍保留
+		// 替换结果 —— 消息数已减少、旧摘要已被滚动吸收，结构上是净收益；但必须记
+		// WARN，否则"压了等于没压"在线上完全不可见（旧实现在这里静默通过）。
+		log.Warnf("[AGENT] compaction did not shrink history (chars %d->%d, msgs %d->%d) session=%s",
+			before, after, beforeMsgs, len(a.history), session)
+		return false
 	}
-	return after < before
+	log.Infof("[AGENT] context compacted: %d->%d msgs, %d->%d chars session=%s",
+		beforeMsgs, len(a.history), before, after, session)
+	if lost := todoMsgsBefore - countTodoToolMessages(a.history); lost > 0 {
+		// 待办 ID 只存在于 create 的工具结果里，而它通常正落在被摘要的中段 ⇒
+		// 压缩之后模型既无法 complete、也不再知道列表在案。2026-10-09 事故
+		// 正是如此（建 4 条只标 1 条，且那 1 条在压缩之前）。
+		// 现在由 activePlanBlock 每轮从持久层重注入兜住；这里留痕是为了让
+		// "模型忽然不认账"在线上可定位，而不是只能人肉读思考轨迹。
+		log.Warnf("[AGENT] compaction dropped %d todo tool result(s) from context "+
+			"(todo IDs live only there; the Active Plan block re-injects the live list each request) session=%s",
+			lost, session)
+	}
+	return true
+}
+
+// stripCompactionSummary 去掉摘要消息的 SummaryPrefix 与紧随其后的空行，
+// 只留下上一版摘要的正文。滚动压缩（CompressWithPrior）把它作为 prior 输入，
+// 让更早的历史逐次接力，而不是随旧摘要消息被丢弃。
+func stripCompactionSummary(content string) string {
+	s := strings.TrimPrefix(content, compress.SummaryPrefix)
+	return strings.TrimSpace(s)
 }
 
 // countTodoToolMessages 统计历史里**属于 `todo` 工具**的结果消息数。
@@ -3921,11 +4137,13 @@ func (a *Agent) GetHistoryLength() int {
 //
 // 但两条阈值的口径本来不同步——压缩触发点是 token 配置
 // （agent.compress_threshold_tokens → compressor.ThresholdTokens，按
-// 4 字节/token 折算），硬上限却是 NewAIAgent 里固定写死的 200000 字节
-// （注释记作 ~50K tokens）。默认配置（32K tokens ⇒ 128K 字节触发点 < 200K
-// 上限）下顺序是对的，但这是**隐式**的：管理员把阈值调到 60000（⇒ 240K 字节
+// 4 字节/token 折算），硬上限则是另一个写死的字节数（历史上固定为 200000）。
+// 阈值抬得越高越容易越过这条隐式假设：管理员把阈值调到 60000（⇒ 240K 字节
 // 触发点）就变成"先硬截断、后压缩"，而且那条路径不留摘要。
-// historyHardLimit 把"硬上限 ≥ 压缩触发点"从隐式假设变成结构性保证。
+// historyHardLimit 把"硬上限 ≥ 压缩触发点"从隐式假设变成结构性保证；同时
+// 两个默认值现在都由"假设窗口"派生，触发点再经 compressThresholdCeilingTokens
+// 封顶（见 autoHistoryByteLimit / autoCompressThreshold），口径不会再各自漂移。
+// ceiling 让大窗口模型的触发点**变小**，所以它只会把这条余量拉得更开。
 const (
 	hardCapSlackNum = 5
 	hardCapSlackDen = 4
@@ -4626,10 +4844,33 @@ func (a *Agent) ensureRuleContext() {
 	a.ruleSig = sig
 }
 
-// withContextBlocks 把静态规则链与动态记忆作为 system 消息插入出站消息
-// 头部 system 之后（顺序：规则 → 记忆；无 system 时置于最前）。消息系统已
+// snapshotMemoryBlock 读取 cortex 冻结快照记忆（加锁读，避免与 cortex 路径的
+// 覆盖写并发）。无快照时返回空串。
+func (a *Agent) snapshotMemoryBlock() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.snapshotMemory
+}
+
+// withContextBlocks 把规则链 / 工作目录 / 快照记忆 / 动态记忆 / 在案计划作为
+// system 消息插入出站消息头部 system 之后（无 system 时置于最前）。消息系统已
 // 容忍连续 system（messages.go），且 Zhipu 1214 约束只要求 system 之后紧跟
-// user，注入位置满足两端约束。两者都为空时原样返回。
+// user，注入位置满足两端约束。五段全空时原样返回。
+//
+// **顺序按「跨轮稳定性」从高到低排，这是有意设计，勿随意调换**：
+//
+//	① ruleContext    静态规则链 —— 只在规则文件变化时重载（ensureRuleContext 有签名门）
+//	② [Workspace]    绑定会话目录 —— 会话内恒定
+//	③ snapshotMemory cortex 快照记忆 —— 内容变化频率远低于逐轮召回
+//	④ dynamicMemory  动态记忆 —— 每 turn 按输入召回一次
+//	⑤ [Active Plan]  在案计划 —— 每轮从待办持久层重算
+//
+// 理由：prompt 前缀缓存（OpenAI/Gemini 服务端自动缓存、Anthropic 显式
+// cache_control）按**最长公共前缀**命中，只要稳定段逐字节不变，其后追加什么
+// 都不影响前缀命中。旧顺序把最易变的 [Active Plan] 放在最前，等于每轮第一段
+// 就变，可缓存前缀长度恒为 0 —— 几百轮任务里 system / 规则 / 工作目录这些每轮
+// 原价重发。改为稳定优先后，①②成为可缓存前缀（Anthropic 断点见 anthropic.go
+// buildRequest）。
 func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
 	if len(msgs) == 0 {
 		return msgs
@@ -4642,30 +4883,37 @@ func (a *Agent) withContextBlocks(msgs []provider.Message) []provider.Message {
 	// 当前目录并声明其他路径的记忆不具权威性。memoryScope 即会话目录的
 	// 归一化键，随 SetMemoryScope 更新，不会像 system prompt 那样过期。
 	hasWorkspace := a.memoryScope != ""
+	// cortex 冻结快照记忆：由 injectMemoryIntoSystemPrompt 覆盖写入（不再追加进
+	// history[0]，见该函数的说明）。
+	snapshot := a.snapshotMemoryBlock()
+	hasSnapshot := snapshot != ""
 	// 在案计划（根治）：待办列表必须每轮从持久层重算注入，否则会随历史压缩蒸发
 	// —— 见 activePlanBlock 与 tool.ActivePlanForSession 的说明。
 	planBlock := a.activePlanBlock()
 	hasPlan := planBlock != ""
-	if !hasRule && !hasMemory && !hasWorkspace && !hasPlan {
+	if !hasRule && !hasMemory && !hasWorkspace && !hasSnapshot && !hasPlan {
 		return msgs
 	}
 
-	var extras []provider.Message
-	// 放在最前：与 [Workspace] 同属"权威 ground truth"区，紧跟头部 system prompt
-	// 之后，模型会当成指令而不是对话内容来读。
-	if hasPlan {
-		extras = append(extras, provider.Message{Role: "system", Content: planBlock})
+	// 稳定优先（见函数注释）：规则 → 工作目录 → 快照记忆 → 动态记忆 → 计划。
+	// 最易变的一段压在最后，紧挨对话。
+	extras := make([]provider.Message, 0, 5)
+	if hasRule {
+		extras = append(extras, provider.Message{Role: "system", Content: a.ruleContext})
 	}
 	if hasWorkspace {
 		extras = append(extras, provider.Message{Role: "system", Content: fmt.Sprintf(
 			"[Workspace]\nCurrent working directory: %s\nResolve every file, command and repository operation against this directory. Memory entries that reference other project paths are not authoritative for this workspace.",
 			a.memoryScope)})
 	}
-	if hasRule {
-		extras = append(extras, provider.Message{Role: "system", Content: a.ruleContext})
+	if hasSnapshot {
+		extras = append(extras, provider.Message{Role: "system", Content: snapshot})
 	}
 	if hasMemory {
 		extras = append(extras, provider.Message{Role: "system", Content: a.dynamicMemory})
+	}
+	if hasPlan {
+		extras = append(extras, provider.Message{Role: "system", Content: planBlock})
 	}
 
 	out := make([]provider.Message, 0, len(msgs)+len(extras))

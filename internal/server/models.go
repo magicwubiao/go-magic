@@ -264,8 +264,8 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 	// → negative/positive name heuristics) so the capabilities reported here
 	// match what the request path actually does with image parts. The old
 	// duplicated per-family switch drifted from the conversion logic.
-	contextLen := 128000
-	maxOutput := 4096
+	contextLen := provider.DefaultModelContextLen
+	maxOutput := provider.DefaultModelMaxOutput
 	supportsVision := provider.ModelSupportsVision(modelName)
 	supportsReasoning := false
 	modelFamily := providerName
@@ -288,73 +288,18 @@ func (s *Server) handleModelInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	modelLower := strings.ToLower(modelName)
-	switch {
-	case strings.Contains(modelLower, "gpt-5.6"):
-		contextLen = 1050000
-		maxOutput = 128000
-		modelFamily = "openai"
-	case strings.Contains(modelLower, "gpt-5"):
-		contextLen = 400000
-		maxOutput = 128000
-		modelFamily = "openai"
-	case strings.Contains(modelLower, "gpt-4o"):
-		contextLen = 128000
-		maxOutput = 16384
-		modelFamily = "openai"
-	case strings.Contains(modelLower, "gpt-4-turbo") || strings.Contains(modelLower, "gpt-4-1106"):
-		contextLen = 128000
-		maxOutput = 4096
-		modelFamily = "openai"
-	case strings.Contains(modelLower, "gpt-4"):
-		contextLen = 8192
-		maxOutput = 8192
-		modelFamily = "openai"
-	case strings.Contains(modelLower, "gpt-3.5"):
-		contextLen = 16385
-		maxOutput = 4096
-		modelFamily = "openai"
-	case strings.Contains(modelLower, "claude-sonnet-5") || strings.Contains(modelLower, "claude-opus-5") || strings.Contains(modelLower, "claude-fable") || strings.Contains(modelLower, "claude-haiku-4") || strings.Contains(modelLower, "claude-4"):
-		contextLen = 200000
-		maxOutput = 64000
-		modelFamily = "anthropic"
-	case strings.Contains(modelLower, "claude-3-5") || strings.Contains(modelLower, "claude-3.5"):
-		contextLen = 200000
-		maxOutput = 8192
-		modelFamily = "anthropic"
-	case strings.Contains(modelLower, "claude-3"):
-		contextLen = 200000
-		maxOutput = 4096
-		modelFamily = "anthropic"
-	case strings.Contains(modelLower, "claude"):
-		contextLen = 100000
-		maxOutput = 4096
-		modelFamily = "anthropic"
-	case strings.Contains(modelLower, "deepseek"):
-		contextLen = 64000
-		maxOutput = 8192
-		modelFamily = "deepseek"
-	case strings.Contains(modelLower, "gemini"):
-		contextLen = 1000000
-		maxOutput = 8192
-		modelFamily = "google"
-	case strings.Contains(modelLower, "llama"):
-		contextLen = 128000
-		maxOutput = 4096
-		modelFamily = "meta"
-	case strings.Contains(modelLower, "qwen"):
-		contextLen = 128000
-		maxOutput = 8192
-		modelFamily = "alibaba"
-	case strings.Contains(modelLower, "glm") || strings.Contains(modelLower, "chatglm"):
-		contextLen = 128000
-		maxOutput = 4096
-		modelFamily = "zhipu"
-	case strings.Contains(modelLower, "o1") || strings.Contains(modelLower, "o3"):
-		contextLen = 200000
-		maxOutput = 100000
-		supportsReasoning = true
-		modelFamily = "openai"
+	// 窗口：单一数据源是 pkg/catalog（provider.ModelContextLen 查的就是它），
+	// 与 agent 的压缩阈值共用同一份数据。命中才覆盖上一步 Modeler 给出的值 ——
+	// provider 的模型列表可能来自用户配置或在线拉取（带不上窗口），而目录里
+	// 有登记时以目录为准。
+	//
+	// max_output_tokens / model_family / supports_reasoning 原先来自一份按名称
+	// 推断的规则表，该表已删除（与 catalog 重复维护、必然漂移）。catalog 不登记
+	// 这两项，故：max_output_tokens 退回 DefaultModelMaxOutput（仅展示，请求路径
+	// 不受约束）；model_family 用配置的 provider 名；supports_reasoning 恒为 false
+	// （无数据源；前端亦未消费 /model/info，字段保留仅为兼容）。
+	if n := provider.ModelContextLen(modelName); n > 0 {
+		contextLen = n
 	}
 
 	// Try to get capabilities from provider

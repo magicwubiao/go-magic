@@ -372,8 +372,16 @@ type Manager struct {
 	// Async save to avoid blocking on disk I/O
 	patternsDirty bool
 	historyDirty  bool
-	saveMu        sync.Mutex     // prevents concurrent disk writes
-	savesWG       sync.WaitGroup // tracks in-flight async saves (see FlushPendingSaves)
+	// 审批历史的 JSONL 增量写状态（读写都在 m.mu 内，见 saveHistory/loadHistory）。
+	//
+	// historyPersistedHead 是"已经落盘的那段前缀"（按指针比较，元素即 m.history
+	// 里的那些 *ApprovalRecord）；historyIsJSONL 指示磁盘文件当前是否已是 JSONL
+	// 形态 —— 旧版 JSON 数组文件不能被追加写（往数组文档尾部追加一行 JSON 会
+	// 产出非法 JSON），必须先整写迁移。
+	historyPersistedHead []*ApprovalRecord
+	historyIsJSONL       bool
+	saveMu               sync.Mutex     // prevents concurrent disk writes
+	savesWG              sync.WaitGroup // tracks in-flight async saves (see FlushPendingSaves)
 }
 
 // NewManager creates a new approval manager.
@@ -2200,14 +2208,52 @@ func (m *Manager) saveWhitelist() error {
 	return os.WriteFile(wlPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
+// parseApprovalHistoryFile 解析审批历史文件，兼容两种格式：
+//
+//   - JSONL（每行一条记录）—— 当前写入格式，支持追加；
+//   - JSON 数组 —— 旧版整写格式，读入后由下一次 saveHistory 整写迁移为 JSONL。
+//
+// 返回 isJSONL 表示文件是否已是 JSONL（只有 JSONL 才能安全追加）。
+// 单行损坏（例如进程在写入中途被杀，留下半行）只跳过该行，不影响其余记录。
+func parseApprovalHistoryFile(data []byte) (records []*ApprovalRecord, isJSONL bool) {
+	s := strings.TrimSpace(string(data))
+	if s == "" {
+		return nil, false
+	}
+	// 旧格式：整个文件是一个 JSON 数组。
+	if strings.HasPrefix(s, "[") {
+		var arr []*ApprovalRecord
+		if err := json.Unmarshal([]byte(s), &arr); err != nil {
+			return nil, false
+		}
+		return arr, false
+	}
+	// JSONL：每行一条记录。
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec ApprovalRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		r := rec
+		records = append(records, &r)
+	}
+	return records, len(records) > 0
+}
+
 // loadHistory loads approval history from disk.
 func (m *Manager) loadHistory() {
 	data, err := os.ReadFile(m.historyDB)
 	if err != nil {
 		return
 	}
-	var records []*ApprovalRecord
-	if err := json.Unmarshal(data, &records); err != nil {
+	records, isJSONL := parseApprovalHistoryFile(data)
+	if len(records) == 0 {
+		// 空文件或整体损坏：保持空历史；文件若还是旧格式，下次写入会整写迁移。
+		m.historyIsJSONL = isJSONL
 		return
 	}
 	// 按时间升序排序，保证 m.history 末尾是最新记录。
@@ -2217,9 +2263,62 @@ func (m *Manager) loadHistory() {
 		return records[i].Timestamp.Before(records[j].Timestamp)
 	})
 	m.history = records
+	if isJSONL {
+		// 已落盘前缀 = 刚读进来的这批（指针即 m.history 里的指针）。
+		m.historyPersistedHead = records
+		m.historyIsJSONL = true
+	}
+	// 旧数组格式不设前缀 ⇒ 下一次 saveHistory 必定整写并迁移为 JSONL。
+}
+
+// rewriteHistoryFile 把全部记录以 JSONL 形式整写覆盖（compaction / 首次迁移）。
+func (m *Manager) rewriteHistoryFile(records []*ApprovalRecord) error {
+	var buf []byte
+	for _, rec := range records {
+		line, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		buf = append(buf, line...)
+		buf = append(buf, '\n')
+	}
+	return os.WriteFile(m.historyDB, buf, 0644)
+}
+
+// appendHistoryLines 把若干记录以 JSONL 追加到文件末尾。
+func (m *Manager) appendHistoryLines(records []*ApprovalRecord) error {
+	f, err := os.OpenFile(m.historyDB, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	for _, rec := range records {
+		if err := enc.Encode(rec); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+// markHistoryPersisted 记录"已落盘前缀"。
+func (m *Manager) markHistoryPersisted(records []*ApprovalRecord) {
+	m.mu.Lock()
+	m.historyPersistedHead = records
+	m.historyIsJSONL = true
+	m.mu.Unlock()
 }
 
 // saveHistory saves approval history to disk if dirty.
+//
+// 写盘策略（改造点）：历史只增不减的常态下走 **JSONL 追加**，把每次落库从
+// "整包 MarshalIndent 重写"降到"追加新增的那几条"。文件越大越省 —— 长任务里
+// 审批历史可达上千条，整写每次都要重新序列化全部记录。
+//
+// 但 m.history 并非只增：超过 10000 条会裁剪到最近 5000 条（见记录入口），
+// ClearHistory 会按时间过滤。一旦"已落盘前缀"在内存里对不上（被裁剪/过滤/
+// 清空），就退回整写（compaction），保证文件与内存一致。
 func (m *Manager) saveHistory() error {
 	// 检查 dirty flag
 	m.mu.RLock()
@@ -2240,6 +2339,8 @@ func (m *Manager) saveHistory() error {
 	}
 	records := make([]*ApprovalRecord, len(m.history))
 	copy(records, m.history)
+	persisted := m.historyPersistedHead
+	isJSONL := m.historyIsJSONL
 	m.historyDirty = false
 	m.mu.Unlock()
 
@@ -2249,11 +2350,32 @@ func (m *Manager) saveHistory() error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
+	// 追加路径：文件已是 JSONL，且已落盘前缀在内存里原封未动。
+	if isJSONL && len(persisted) <= len(records) {
+		samePrefix := true
+		for i, rec := range persisted {
+			if records[i] != rec {
+				samePrefix = false
+				break
+			}
+		}
+		if samePrefix {
+			if tail := records[len(persisted):]; len(tail) > 0 {
+				if err := m.appendHistoryLines(tail); err != nil {
+					return err
+				}
+			}
+			m.markHistoryPersisted(records)
+			return nil
+		}
+	}
+
+	// 整写路径：首次迁移（旧数组格式/文件不存在）或历史被裁剪/过滤/清空。
+	if err := m.rewriteHistoryFile(records); err != nil {
 		return err
 	}
-	return os.WriteFile(m.historyDB, data, 0644)
+	m.markHistoryPersisted(records)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

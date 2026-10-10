@@ -87,6 +87,12 @@ func NewTrajectoryStore(baseDir string) (*TrajectoryStore, error) {
 	return ts, nil
 }
 
+// maxTrajectorySteps 限制单条轨迹保留的步骤数。几百轮的长任务会累积几百个
+// step，而每个 step 都带一段工具输出（已在 agent 侧截断到 4K 字符）。这里再
+// 按条数封顶，单条轨迹的体积才有上界；超出时保留**最近**的步骤（链尾更接近
+// 最终结果，对模式学习与复盘更有价值）。
+const maxTrajectorySteps = 200
+
 // RecordTrajectory records a completed trajectory
 func (ts *TrajectoryStore) RecordTrajectory(trajectory *Trajectory) error {
 	ts.mu.Lock()
@@ -98,6 +104,11 @@ func (ts *TrajectoryStore) RecordTrajectory(trajectory *Trajectory) error {
 	}
 	trajectory.EndTime = time.Now()
 	trajectory.Duration = trajectory.EndTime.Sub(trajectory.StartTime)
+
+	// Bound the step list before it reaches memory and disk.
+	if len(trajectory.Steps) > maxTrajectorySteps {
+		trajectory.Steps = trajectory.Steps[len(trajectory.Steps)-maxTrajectorySteps:]
+	}
 
 	// Generate ID if not set
 	if trajectory.ID == "" {

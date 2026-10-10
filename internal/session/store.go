@@ -464,17 +464,30 @@ func (s *Store) SaveSessionDataFromMap(ctx context.Context, id, platform string,
 	return s.saveSessionDataInternal(ctx, id, platform, inputTokens, outputTokens, cacheTokens)
 }
 
+// saveSessionDataInternal 增量累加一个会话的 token 计数。
+//
+// **不变量：这里绝不写 platform 列。** platform 是会话的"客户端身份"
+// （web / wecom / qq / tui …）：前端侧栏、搜索与"按工作目录查看会话"面板
+// 都按它区分 web 会话与各平台 bot 会话（`!s.source || s.source === 'web'`，
+// 以及 `ListSessionSummariesByUserWorkDir` 只收 web 与空 platform 这两类）。
+//
+// 而调用方传进来的 platform 是**另一套语义**的值——server 的队列记账路径
+// 传的是"当前 LLM 供应商名"（mimo / huoshan / …）。旧实现把它写进 UPDATE，
+// 于是每跑完一个回合，web 会话的 platform 就被改写成供应商名：会话随即从
+// 前端侧栏与目录分组里消失，侧栏里那条残留条目的标题也不再刷新
+// （用户报"对话标题不更新了"）。token 记账只准动 token 列。
+//
+// platform 仅用于"会话行还不存在"时兜底 INSERT——网关会在会话行缺失时补建。
 func (s *Store) saveSessionDataInternal(ctx context.Context, id, platform string, inputTokens, outputTokens, cacheTokens int) error {
 	updateQuery := `
 	UPDATE sessions SET 
-		platform = ?, 
 		input_tokens = input_tokens + ?, 
 		output_tokens = output_tokens + ?,
 		cache_read_tokens = cache_read_tokens + ?,
 		updated_at = CURRENT_TIMESTAMP
 	WHERE id = ?
 	`
-	result, err := s.db.ExecContext(ctx, updateQuery, platform, inputTokens, outputTokens, cacheTokens, id)
+	result, err := s.db.ExecContext(ctx, updateQuery, inputTokens, outputTokens, cacheTokens, id)
 	if err != nil {
 		return err
 	}

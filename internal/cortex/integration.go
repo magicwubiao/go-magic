@@ -51,7 +51,6 @@ type Manager struct {
 	// NEW: Hermes-inspired systems
 	Soul              *SoulManager       // System personality (SOUL.md)
 	UserProfile       *UserProfile       // User preferences (USER.md)
-	PromptCache       *PromptCache       // Prompt caching
 	ContextCompressor *ContextCompressor // Context compression
 	TrajectoryStore   *TrajectoryStore   // Trajectory learning
 	GEPAEngine        *GEPAEngine        // Self-evolution engine
@@ -215,7 +214,6 @@ func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, prof
 	// NEW: Hermes-inspired systems
 	mgr.Soul = NewSoulManager(cortexDir)
 	mgr.UserProfile = NewUserProfile(userProfileDir)
-	mgr.PromptCache = nil // Initialized in Start()
 	mgr.ContextCompressor = NewContextCompressor(prov, 0, 0)
 	mgr.TrajectoryStore = nil // Initialized in Start()
 
@@ -356,17 +354,6 @@ func (m *Manager) Start() error {
 	// NEW: Load USER.md profile
 	if err := m.UserProfile.Load(); err != nil {
 		return err
-	}
-
-	// NEW: Initialize Prompt Cache（失败不再静默吞错）
-	if m.provider != nil {
-		pc, err := NewPromptCache(m.provider, filepath.Join(cortexDir, "prompt_cache"))
-		if err == nil {
-			m.PromptCache = pc
-		} else {
-			log.Warnf("[Cortex] PromptCache init failed: %v", err)
-			m.recordInitFailure("prompt_cache", err)
-		}
 	}
 
 	// NEW: Initialize Trajectory Store（失败不再静默吞错）

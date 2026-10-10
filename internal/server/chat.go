@@ -543,12 +543,15 @@ func (s *Server) accountTurnUsage(sessionID string) {
 	if s.sessionStore == nil {
 		return
 	}
-	if sess, err := s.sessionStore.LoadSession(context.Background(), sessionID); err == nil && sess != nil {
-		sess.InputTokens += dIn
-		sess.OutputTokens += dOut
-		sess.CacheReadTokens += dCache
-		_ = s.sessionStore.SaveSession(context.Background(), sess)
-	}
+	// 增量记账：只 UPDATE token 列，不 LoadSession 回读几 MB 的 messages
+	// 大字段再全量重写（几百轮长任务里那是每回合一次 O(n) 读 + O(n) 写）。
+	//
+	// 第三个实参是**会话的客户端平台**，不是 LLM 供应商：这里必须是 "web"。
+	// 曾经错传 s.cfgProvider()（供应商名，如 mimo / huoshan）——它会覆盖
+	// sessions.platform，而前端按 `source === 'web'` 过滤侧栏/搜索/目录分组，
+	// 于是每跑完一个回合，会话就从侧栏和"按工作目录查看会话"里消失，残留
+	// 条目的标题也不再更新。只有"会话行不存在"时才会用到它（兜底 INSERT）。
+	_ = s.sessionStore.SaveSessionDataFromMap(context.Background(), sessionID, "web", dIn, dOut, dCache)
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
