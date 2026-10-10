@@ -908,7 +908,19 @@ export const useChatStore = defineStore('chat', () => {
     const state = sessionStates.value[sessionId]
     if (!state) return
 
-    state.activeTurnStartedAt = activeStartedAt || 0
+    // 认领时刻的对账：服务端给了值就用它（取更早者，避免本地兜底值比服务端
+    // 晚而出现时长回跳）；服务端确认空闲（无活跃回合且没给时刻）才清零。
+    //
+    // 不能写成 `state.activeTurnStartedAt = activeStartedAt || 0`：本端正常发起
+    // 回合时 active_started_at 可能为 0（未对账过），那样每次对账都会把起点抹掉，
+    // 显示退回本地计数器并"从头开始计"。
+    if (activeStartedAt > 0) {
+      state.activeTurnStartedAt = state.activeTurnStartedAt > 0
+        ? Math.min(state.activeTurnStartedAt, activeStartedAt)
+        : activeStartedAt
+    } else if (!activeId) {
+      state.activeTurnStartedAt = 0
+    }
 
     const serverIds = new Set(serverQueued.map(q => q.id))
 
@@ -1215,6 +1227,27 @@ export const useChatStore = defineStore('chat', () => {
           if (data.type === 'stream_started') {
             if (data.started === false) {
               return
+            }
+            // 本回合的起点（unix 秒）：优先服务端随事件下发的认领时刻
+            // （active_started_at），它才是"已执行时长"的权威口径。缺它时
+            // （旧版服务端 / 竞态窗口）用本端收到事件的时刻兜底。
+            //
+            // 这里必须把起点写进会话状态、而不是只让组件自己起一个本地
+            // 计数器：本地计数器以"streaming 变 true"为重置条件，切换会话时
+            // streaming 会 false→true，切回来就归零——用户看到的就是
+            // "切换 session 后执行时间从头开始计"。写进会话状态后，切走再
+            // 回来读到的仍是同一个起点。
+            {
+              const serverStartedAt = Number(data.active_started_at || 0)
+              if (serverStartedAt > 0) {
+                // 服务端口径优先，但取更早者：重连/重放时本地可能已有更早的
+                // 兜底值，取 min 可避免时长突然回跳。
+                state.activeTurnStartedAt = state.activeTurnStartedAt > 0
+                  ? Math.min(state.activeTurnStartedAt, serverStartedAt)
+                  : serverStartedAt
+              } else if (state.activeTurnStartedAt === 0) {
+                state.activeTurnStartedAt = Math.floor(Date.now() / 1000)
+              }
             }
             // 下一条排队消息已经开始执行，看门狗的职责完成。
             stopQueueWatchdog(sessionId)

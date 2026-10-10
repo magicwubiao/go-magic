@@ -1214,36 +1214,15 @@ const jumpTitle = computed(() => (
     : t('chat.jumpToBottom')
 ))
 
-// Elapsed timer for streaming
-const elapsedSeconds = ref(0)
-let elapsedTimer: ReturnType<typeof setInterval> | null = null
-
-watch(() => chatStore.streaming, (streaming) => {
-  if (streaming) {
-    elapsedSeconds.value = 0
-    elapsedTimer = setInterval(() => {
-      elapsedSeconds.value++
-    }, 1000)
-  } else {
-    if (elapsedTimer) {
-      clearInterval(elapsedTimer)
-      elapsedTimer = null
-    }
-  }
-})
-
-onUnmounted(() => {
-  if (elapsedTimer) clearInterval(elapsedTimer)
-})
-
-// 回合状态行显示的已执行秒数：优先服务端口径（active_started_at，
-// 刷新页面不归零）；服务端数据尚未同步（旧流重挂、事件竞态窗口）时
-// 回退本地从 streaming 起算的计时，保证"刚起步"阶段也有合理读数。
-const turnElapsedForDisplay = computed(() => {
-  const serverSecs = chatStore.activeTurnElapsedSeconds
-  if (serverSecs > 0) return serverSecs
-  return elapsedSeconds.value
-})
+// 回合状态行显示的已执行秒数。唯一来源是 store 里的**会话级起点**
+// （activeTurnStartedAt）：它由 stream_started 随事件下发的 active_started_at
+// 写入，也会被 /running、queue_changed 的对账校正，属于会话状态而非组件状态，
+// 所以切换会话、组件被 keep-alive 停用都不会把时长清零。
+//
+// 这里曾经另起一个"组件本地、从 streaming 起算"的计数器做兜底。它的问题
+// 恰恰在兜底被高频触发的场景：本地计数器以 streaming false→true 为重置条件，
+// 而切换会话必然经历这两跳，于是"切走再切回来"执行时间从头开始计。
+const turnElapsedForDisplay = computed(() => chatStore.activeTurnElapsedSeconds)
 
 // Model selection
 const modelOptions = computed(() => modelsStore.modelSelectOptions)

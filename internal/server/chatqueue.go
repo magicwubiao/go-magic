@@ -598,6 +598,15 @@ func (s *Server) queueInfoFor(sessionID string) queueSnapshot {
 	return queueSnapshot{}
 }
 
+// turnStartedAtOf 返回当前回合被认领的时刻（零值表示空闲）。供 stream_started
+// 载荷带上 active_started_at 使用——前端因此无需等一次 queue_changed / /running
+// 对账就能拿到权威的回合起点，切走再切回来也不会把"已执行时长"从头计。
+func (q *sessionQueue) turnStartedAtOf() time.Time {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.turnStartedAt
+}
+
 // shortenQueuedContent 截断排队消息的预览文本，按 rune 计数避免切断多字节字符。
 func shortenQueuedContent(content string) string {
 	content = strings.TrimSpace(content)
@@ -1024,7 +1033,7 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	}
 	ctx = run.applyTo(ctx)
 
-	queue.broadcast(turnEvent{data: sseTurnStarted(item)})
+	queue.broadcast(turnEvent{data: sseTurnStarted(item, queue.turnStartedAtOf())})
 
 	// 用户消息在本回合真正开跑时落库（而不是入队时）：入队后可能等待很久
 	// 甚至被 /cancel 清掉，提前落库会让"被丢弃的排队消息"污染会话历史。
@@ -1451,12 +1460,23 @@ func (q *sessionQueue) cancelWasRequested() bool {
 
 // sseTurnStarted 是回合开始的广播载荷。前端据此把某条排队消息切换为
 // "正在执行"并开始渲染流式内容。
-func sseTurnStarted(item *queuedTurn) string {
+//
+// startedAt 是本回合被认领的时刻（见 sessionQueue.turnStartedAt），随载荷
+// 以 active_started_at 下发。**这不是可有可无的字段**：前端"当前回合已执行
+// X 分钟"必须基于服务端认领时刻，否则一旦本端没有收到过 queue_changed 对账，
+// 就只能退回本地从 streaming 起算的计数器，而那个计数器在切换会话
+// （streaming false→true）时会归零，表现为"切走再切回来，执行时间从头开始计"。
+func sseTurnStarted(item *queuedTurn, startedAt time.Time) string {
+	var activeStartedAt int64
+	if !startedAt.IsZero() {
+		activeStartedAt = startedAt.Unix()
+	}
 	b, _ := json.Marshal(map[string]interface{}{
-		"type":    "stream_started",
-		"started": true,
-		"id":      item.id,
-		"content": shortenQueuedContent(item.content),
+		"type":              "stream_started",
+		"started":           true,
+		"id":                item.id,
+		"content":           shortenQueuedContent(item.content),
+		"active_started_at": activeStartedAt,
 	})
 	return "data: " + string(b) + "\n\n"
 }
