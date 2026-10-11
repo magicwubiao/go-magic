@@ -335,32 +335,22 @@
                           </a>
                         </template>
                       </div>
-                      <!-- Live tool activity: parsed from the agent stream's
-                           tool markers and forwarded as SSE tool events.
-                           Aggregated per tool name — one row per tool with
-                           success/failure counts keeps tool-heavy turns
-                           compact instead of one row per call. -->
-                      <div v-if="msg.role === 'assistant' && msg._tools?.length" class="tool-strip">
-                        <div v-for="agg in aggregatedToolRuns(msg)" :key="agg.name" class="tool-row">
-                          <n-icon size="12" class="tool-row-icon"><SettingsOutline /></n-icon>
-                          <span class="tool-row-name">{{ agg.name }}</span>
-                          <span v-if="agg.total > 1" class="tool-row-count">×{{ agg.total }}</span>
-                          <span class="tool-row-status" :class="{ running: agg.running > 0 }">
-                            <span v-if="agg.ok" class="tool-stat ok">✓{{ agg.ok }}</span>
-                            <span v-if="agg.fail" class="tool-stat fail">✗{{ agg.fail }}</span>
-                            <span v-if="agg.running" class="tool-stat running">{{ t('bots.toolRunning') }}</span>
-                            <span v-else-if="agg.lastDuration" class="tool-stat duration">{{ agg.lastDuration }}</span>
-                          </span>
-                        </div>
-                      </div>
-                      <n-spin v-if="msg._streaming && !msg.content" size="small" class="stream-spin" />
+                      <!-- 执行过程：思考 + 工具调用合并进统一的 ProcessBlock（与 Chat 页一致）。 -->
+                      <ProcessBlock
+                        v-if="msg.role === 'assistant' && (botToolCallEvents(msg).length > 0 || (msg.content && msg.content.trim()))"
+                        :content="msg.content"
+                        :tools="botToolCallEvents(msg)"
+                        :streaming="!!msg._streaming"
+                        include-content-without-segments
+                      />
+                      <n-spin v-if="msg._streaming && !msg.content && !msg._tools?.length" size="small" class="stream-spin" />
+                      <!-- 最终回答（含 <think> 剥离与"无正文"提示），独立于执行过程下方。 -->
                       <template v-if="msg.role === 'assistant' && msg.content">
                         <ReasoningContent
                           :content="msg.content"
                           :streaming="msg._streaming"
                           :allow-promote="!isToolStep(msg)"
                           :empty-hint="msg._streaming ? '' : t('bots.noAnswer')"
-                          show-thinking
                         />
                       </template>
                       <div
@@ -985,7 +975,7 @@ import {
 import {
   AddOutline, ArrowBackOutline, AttachOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
   CreateOutline, DocumentOutline, DownloadOutline, EllipsisHorizontalOutline, FlashOutline, PeopleOutline,
-  SearchOutline, SettingsOutline, TimeOutline, TrashOutline,
+  SearchOutline, TimeOutline, TrashOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useBotsStore } from '@/stores/bots'
@@ -1000,6 +990,8 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import ReasoningContent from '@/components/ReasoningContent.vue'
+import ProcessBlock from '@/components/ProcessBlock.vue'
+import type { ToolCallEvent } from '@/stores/chat'
 import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 
 const { t } = useI18n()
@@ -1543,19 +1535,7 @@ function retryFailedSend() {
 }
 
 // ========== Live tool activity (streaming turns) ==========
-// The store caps msg._tools at 20 entries. Instead of one row per call,
-// aggregate per tool name — "write_file ×5 ✓4 ✗1" — so a tool-heavy turn
-// stays one line per distinct tool. Running tools sort first (they're what
-// the user is waiting on), then most-recent activity; rows cap at 6.
-interface ToolRunAgg {
-  name: string
-  total: number
-  ok: number
-  fail: number
-  running: number
-  lastDuration?: string
-  lastIdx: number
-}
+// 工具事件已统一交给 ProcessBlock / ToolCallCard 渲染（与 Chat 页一致）。
 
 // 是否为"工具步骤"气泡：气泡里的文本只是这一步的思考，不是回合的回答。
 // hasToolCalls 来自服务端（历史消息：该 assistant 消息带 tool_calls），
@@ -1566,30 +1546,44 @@ function isToolStep(msg: BotMessage): boolean {
   return !!msg.hasToolCalls || !!msg._tools?.length
 }
 
-function aggregatedToolRuns(msg: BotMessage): ToolRunAgg[] {
-  const byName = new Map<string, ToolRunAgg>()
+// Bot 工具事件（tool_start / tool_result 分条存）→ ToolCallEvent 列表，
+// 供统一的 ProcessBlock / ToolCallCard 渲染（中文标签、命令摘要、成败与耗时）。
+// tool_result 会合并到最近一个同名且尚未完成的 tool_start 上。
+function botToolCallEvents(msg: BotMessage): ToolCallEvent[] {
   const events = msg._tools || []
-  events.forEach((te, idx) => {
-    let agg = byName.get(te.name)
-    if (!agg) {
-      agg = { name: te.name, total: 0, ok: 0, fail: 0, running: 0, lastIdx: idx }
-      byName.set(te.name, agg)
+  const out: ToolCallEvent[] = []
+  let seq = 0
+  events.forEach((te) => {
+    if (te.type === 'tool_result') {
+      for (let i = out.length - 1; i >= 0; i--) {
+        if (out[i].name === te.name && out[i].status === 'running') {
+          out[i].status = te.success === false ? 'error' : 'completed'
+          out[i].success = te.success
+          out[i].duration = te.duration
+          out[i].content = te.content
+          return
+        }
+      }
+      // 没有配对的 start（丢包/截断）：补一条已完成的
+      out.push({
+        id: `bot_tool_${seq++}`,
+        name: te.name,
+        args: te.args_text || '',
+        status: te.success === false ? 'error' : 'completed',
+        success: te.success,
+        duration: te.duration,
+        content: te.content,
+      })
+      return
     }
-    agg.total++
-    agg.lastIdx = idx
-    if (te.success === undefined) {
-      agg.running++
-    } else if (te.success === true) {
-      agg.ok++
-      if (te.duration) agg.lastDuration = te.duration
-    } else {
-      agg.fail++
-      if (te.duration) agg.lastDuration = te.duration
-    }
+    out.push({
+      id: `bot_tool_${seq++}`,
+      name: te.name,
+      args: te.args_text || '',
+      status: 'running',
+    })
   })
-  const list = Array.from(byName.values())
-  list.sort((a, b) => (b.running - a.running) || (b.lastIdx - a.lastIdx))
-  return list.slice(0, 6)
+  return out
 }
 
 // ========== Chat attachments (pending chips + message rendering) ==========
@@ -3654,114 +3648,7 @@ async function loadCandidates() {
 }
 
 /* ========== Live tool activity strip (streaming bubbles) ========== */
-.tool-strip {
-  flex-basis: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px;
-  margin-bottom: 6px;
-  border: 1px dashed rgba(255, 255, 255, 0.35);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: rgba(255, 255, 255, 0.92);
-  min-width: 0;
-}
-
-.tool-row-icon {
-  flex-shrink: 0;
-  opacity: 0.8;
-}
-
-.tool-row-name {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tool-row-status {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  opacity: 0.9;
-}
-
-.tool-row-status.running {
-  animation: tool-pulse 1.2s ease-in-out infinite;
-}
-
-.tool-row-count {
-  flex-shrink: 0;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.tool-stat {
-  font-variant-numeric: tabular-nums;
-}
-
-.tool-stat.ok {
-  color: #b7f0c6;
-}
-
-.tool-stat.fail {
-  color: #ffc2cd;
-}
-
-.tool-stat.running {
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.tool-stat.duration {
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 10px;
-}
-
-@keyframes tool-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-
-.agent-bubble .tool-strip {
-  border-color: #e0e0e0;
-  background: #f7f7f8;
-}
-
-.agent-bubble .tool-row {
-  color: #555;
-}
-
-.agent-bubble .tool-row-count {
-  color: #999;
-}
-
-.agent-bubble .tool-stat.ok {
-  color: #18a058;
-}
-
-.agent-bubble .tool-stat.fail {
-  color: #d03050;
-}
-
-.agent-bubble .tool-stat.running {
-  color: #555;
-}
-
-.agent-bubble .tool-stat.duration {
-  color: #999;
-}
+/* 已统一由 ProcessBlock / ToolCallCard 渲染，样式见组件内部。 */
 
 /* ========== Failed-send retry bar ========== */
 .retry-bar {
@@ -4332,35 +4219,6 @@ async function loadCandidates() {
     background: #26262b;
     border-color: #374151;
     color: #d1d5db;
-  }
-  .tool-strip {
-    border-color: #4b5563;
-    background: rgba(255, 255, 255, 0.05);
-  }
-  .tool-row {
-    color: #d1d5db;
-  }
-  .agent-bubble .tool-strip {
-    border-color: #4b5563;
-    background: #26262b;
-  }
-  .agent-bubble .tool-row {
-    color: #9ca3af;
-  }
-  .tool-row-count {
-    color: rgba(255, 255, 255, 0.45);
-  }
-  .tool-stat.ok {
-    color: #6ee7a0;
-  }
-  .tool-stat.fail {
-    color: #fda4af;
-  }
-  .tool-stat.running {
-    color: #d1d5db;
-  }
-  .tool-stat.duration {
-    color: rgba(255, 255, 255, 0.45);
   }
   .retry-bar {
     border-color: #78350f;

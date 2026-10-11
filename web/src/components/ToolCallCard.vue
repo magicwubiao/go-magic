@@ -108,6 +108,57 @@ const TOOL_LABELS: Record<string, string> = {
   todo_write: '更新待办',
   ListDir: '列出目录',
   list_dir: '列出目录',
+  terminal: '运行命令',
+  Terminal: '运行命令',
+  search_in_files: '搜索内容',
+  search_files: '搜索文件',
+  list_files: '列出目录',
+  fetch_url: '抓取网页',
+  http_request: '请求接口',
+  memory_store: '保存记忆',
+  memory_recall: '检索记忆',
+  browser_navigate: '打开网页',
+  browser_back: '后退',
+  browser_forward: '前进',
+  browser_refresh: '刷新页面',
+  browser_click: '点击元素',
+  browser_type: '输入文本',
+  browser_press: '按键',
+  browser_scroll: '滚动页面',
+  browser_wait: '等待页面',
+  browser_snapshot: '页面快照',
+  browser_vision: '页面识别',
+  browser_console: '执行脚本',
+  browser_get_info: '读取页面信息',
+  browser_get_images: '读取图片',
+  browser_get_cookies: '读取 Cookie',
+  browser_set_cookies: '设置 Cookie',
+  browser_clear_cache: '清除缓存',
+  browser_dialog: '处理弹窗',
+  execute_code: '执行代码',
+  process: '管理进程',
+  ssh: '远程执行',
+  docker: '容器操作',
+  modal: '云端执行',
+  daytona: '云端执行',
+  singularity: '容器执行',
+  gitignore: '更新忽略规则',
+  ha_get_state: '读取设备状态',
+  ha_call_service: '调用设备服务',
+  ha_list_entities: '列出设备',
+  ha_list_services: '列出服务',
+  ha_events: '读取事件',
+  ha_config: '读取配置',
+  image_generate: '生成图片',
+  generate_image: '生成图片',
+  task: '子任务',
+  delegate: '子任务',
+  delegate_task: '子任务',
+  clarify: '询问用户',
+  ask_user: '询问用户',
+  todo: '更新待办',
+  remember_memory: '保存记忆',
+  message_agent: '发消息给智能体',
 }
 
 const toolLabel = computed(() => {
@@ -174,12 +225,22 @@ const argsLang = computed(() => argsView.value.lang)
 
 // 头部单行摘要：取主参数的首个非空行（命令取命令本身），截到 90 字符。
 // 让折叠状态下的每条卡片直接可读，而不只是"terminal 运行成功 2.2s"。
+// 美化过的多行 JSON（首行只是"{"）压成单行 "key: value key2: value2"，
+// 否则摘要只剩一个花括号，等于没摘要（如 process/todo 工具）。
 const summary = computed(() => {
-  const line = argsView.value.text
+  let line = argsView.value.text
     .split('\n')
     .map((l) => l.trim())
     .find((l) => l !== '') || ''
-  const clean = line.replace(/^[+-]\s?/, '')
+  if (!line || line === '{' || line === '[' || line === '}') {
+    const parsed = tryParseArgs(props.tool.args || '')
+    if (parsed) {
+      line = Object.entries(parsed)
+        .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+        .join('  ')
+    }
+  }
+  const clean = line.replace(/^[+-]\s?/, '').replace(/\s+/g, ' ')
   return clean.length > 90 ? `${clean.slice(0, 90)}…` : clean
 })
 </script>

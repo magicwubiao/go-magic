@@ -31,16 +31,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NCollapseTransition } from 'naive-ui'
 import { stripZeroWidth } from '@/utils/text'
 import ReasoningBody from './ReasoningBody.vue'
 
-const props = defineProps<{ text: string }>()
+const props = defineProps<{
+  text: string
+  // 流式进行中：新出现的思考段默认展开（实时看思路），结束后渲染的默认收起。
+  streaming?: boolean
+}>()
 
 const { t } = useI18n()
-const open = ref(true)
+// 默认收起：过程区里工具卡片是主角，思考按需展开。
+const open = ref(props.streaming === true)
+
+watch(
+  () => !!props.streaming,
+  (v) => {
+    // 只在变为流式时展开一次；结束后不强行收起已展开的段（尊重用户）。
+    if (v) open.value = true
+  },
+)
 
 // 按 <think>...</think> 拆分（大小写不敏感；未闭合的 think 归思考——流式窗口）。
 const parts = computed<Array<{ isThink: boolean; text: string }>>(() => {

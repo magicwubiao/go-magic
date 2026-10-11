@@ -22,6 +22,7 @@
           <ThoughtBlock
             v-if="item.kind === 'text'"
             :text="item.text || ''"
+            :streaming="!!props.streaming"
           />
           <ToolCallCard
             v-else-if="item.tool"
@@ -53,9 +54,35 @@ const props = defineProps<{
   segments?: ReadonlyArray<unknown> | ProcessSegment[]
   tools: ToolCallEvent[]
   streaming?: boolean
+  // 无 segments 时（例如 Bot 的实时流）是否也把 content 渲染进过程区。
+  // Chat 页无 segments 时 content 由父组件正文渲染，置 false；
+  // Bot 页没有正文组件承载思考，需置 true 才能在过程区看到思考。
+  includeContentWithoutSegments?: boolean
 }>()
 
 const { t } = useI18n()
+
+// 只抽取 <think>...</think> 内的思考文本（无 segments 的 Bot 场景用）。
+// 未闭合的 <think> 视为思考（流式窗口）。
+function extractThinkOnly(content: string): string {
+  const low = content.toLowerCase()
+  const OPEN = '<think>'
+  const CLOSE = '</think>'
+  const parts: string[] = []
+  let cursor = 0
+  while (true) {
+    const oi = low.indexOf(OPEN, cursor)
+    if (oi === -1) break
+    const ci = low.indexOf(CLOSE, oi + OPEN.length)
+    if (ci === -1) {
+      parts.push(content.substring(oi + OPEN.length))
+      break
+    }
+    parts.push(content.substring(oi + OPEN.length, ci))
+    cursor = ci + CLOSE.length
+  }
+  return parts.map((p) => p.trim()).filter(Boolean).join('\n\n')
+}
 
 // 默认跟随执行状态：执行中自动展开看进展，结束自动折叠；
 // 用户手动 toggle 后固定，不再被状态改回。
@@ -130,7 +157,14 @@ const items = computed<Array<{ key: string; kind: 'text' | 'tool'; text?: string
     lastTextIdx !== -1 && !segs.slice(lastTextIdx + 1).some((s) => s.kind === 'tool')
 
   if (segs.length === 0) {
-    // 无 segments：整段文本就是最终回答（由父组件渲染），过程区只放工具卡片
+    // 无 segments：默认整段文本交给父组件正文渲染，过程区只放工具卡片。
+    // Bot 场景（includeContentWithoutSegments）没有独立正文组件承载思考，
+    // 这里只取 <think> 段放进过程区（思考外的叙述属于正文，交给
+    // ReasoningContent 渲染，避免与正文重复）。
+    if (props.includeContentWithoutSegments && props.content) {
+      const thinkText = extractThinkOnly(props.content)
+      if (thinkText) out.push({ key: 'text_think', kind: 'text', text: thinkText })
+    }
     return out
   }
   segs.forEach((seg, idx) => {
