@@ -57,8 +57,7 @@ export interface Message {
   // 后端落库返回：assistant 消息对应的本轮全部文件操作（含 read 等非变更动作）。
   // 刷新/重开后由该字段驱动"变更的文件"展示；流式进行中数据源是 tool_calls_snapshot[].file_ops。
   file_ops?: FileOp[]
-  // 前端附加：assistant 回复对应本轮执行的工具调用摘要（UI 展示用）。
-  // 后端 /sessions/{id}/messages 暂不返回该字段，前端在 streaming 结束时写入内存快照。
+  // 服务端保存并随会话回放返回；流式结束时前端也写入同结构内存快照。
   tool_calls_snapshot?: unknown[]
   // 前端附加：与 tool_calls_snapshot 搭配的时间线，
   // 让历史消息中"思考文本 ↔ 工具块"的穿插顺序能和 streaming 时完全一致。
@@ -652,6 +651,11 @@ export class ChatStream {
             if (dataLines.length) {
               this.dispatch('message', { data: dataLines.join('\n') })
             }
+          }
+          // EOF is not a successful turn completion. Only done/error handlers
+          // close this stream; an unexpected EOF must enter recovery as well.
+          if (!this.closed) {
+            this.dispatchError(new Error('Chat stream ended before completion'))
           }
         } catch (err) {
           if (!this.closed) {

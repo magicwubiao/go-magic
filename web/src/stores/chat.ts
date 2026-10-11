@@ -699,25 +699,21 @@ export const useChatStore = defineStore('chat', () => {
     if (!state) return
     stopStreamRecovery(sessionId)
     const partialContent = state.streamContent
-    const hadPartial = !!partialContent || state.toolCalls.length > 0
     pushTextSegmentIfNeeded(sessionId)
     const partialToolCalls = [...state.toolCalls]
     const partialTimeline = [...state.streamingSegments]
     clearStreamingState(sessionId)
-    if (hadPartial) {
-      state.messages.push({
-        id: Date.now().toString(),
-        role: 'assistant' as const,
-        content: partialContent + '\n\n*[Connection interrupted, partial response saved]*',
-        timestamp: new Date().toISOString(),
-        session_id: sessionId,
-        tool_calls_snapshot: partialToolCalls as unknown[],
-        streaming_timeline_snapshot: partialTimeline as unknown[],
-      })
-      loadSessions()
-    } else if (!state.messages.some(m => m.role === 'assistant' && m.session_id === sessionId)) {
-      error.value = { message: 'Connection lost' }
-    }
+    state.messages.push({
+      id: `assistant_interrupted_${Date.now()}`,
+      role: 'assistant' as const,
+      content: partialContent + '\n\n⚠️ Connection interrupted; the result of this turn could not be confirmed. Received content was kept; review the execution record before deciding whether to retry.',
+      timestamp: new Date().toISOString(),
+      session_id: sessionId,
+      tool_calls_snapshot: partialToolCalls as unknown[],
+      streaming_timeline_snapshot: partialTimeline as unknown[],
+    })
+    error.value = { message: 'Connection interrupted; turn result unconfirmed' }
+    loadSessions()
   }
 
   function startStreamRecovery(sessionId: string): void {
@@ -726,6 +722,7 @@ export const useChatStore = defineStore('chat', () => {
     if (sessionRecoveryTimers.value[sessionId]) return
 
     const startedAt = Date.now()
+    const previousAssistantId = [...state.messages].reverse().find(m => m.role === 'assistant')?.id
     let emptyFinishes = 0
 
     const tick = async (): Promise<void> => {
@@ -744,7 +741,7 @@ export const useChatStore = defineStore('chat', () => {
           const res = await sessionsApi.getSession(sessionId)
           const serverMsgs = res.messages || []
           const last = serverMsgs[serverMsgs.length - 1]
-          if (last && last.role === 'assistant') {
+          if (last && last.role === 'assistant' && last.id !== previousAssistantId) {
             // 回合已在服务端完成并落库：用服务端最终消息替换内存态
             st.messages = serverMsgs
             clearStreamingState(sessionId)
@@ -1448,37 +1445,28 @@ export const useChatStore = defineStore('chat', () => {
 
             if (sessionFlushTimers.value[sessionId]) {
               clearTimeout(sessionFlushTimers.value[sessionId]!)
+              sessionFlushTimers.value = { ...sessionFlushTimers.value, [sessionId]: null }
             }
             flushStreamBuffer(sessionId)
-            if (sessionEventSources.value[sessionId]) {
-              sessionEventSources.value[sessionId]!.close()
-              sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
-            }
-
-            // fix: 错误发生时不能丢弃已流式显示的内容。与 onerror 分支一致，
-            // 把出错前已生成的文本/工具调用/时间线固化为一条 assistant 消息，
-            // 否则用户会看到"已执行的对话凭空消失"。
+            // error only ends this turn. Wait for done before deciding whether
+            // to close the connection; queued turns still reuse this stream.
             pushTextSegmentIfNeeded(sessionId)
             const errToolCalls = [...state.toolCalls]
             const errTimeline = [...state.streamingSegments]
             const errContent = state.streamContent
-            const executedSomething = !!errContent || errToolCalls.length > 0
-
-            // 与 done 分支同理：这里不能放进 nextTick。下一条排队消息的
-            // stream_started 是同步固化用户消息的，延后 push 会让出错回答
-            // 排到后一条问题之后，对话顺序错乱。
-            if (executedSomething) {
+            // Even a failure before the first token needs a visible reply.
+            {
               let msgContent = errContent || ''
               if (!msgContent && errToolCalls.length > 0) {
                 const steps = errToolCalls.map(tc => {
                   const mark = tc.status === 'error' ? '✗' : '✓'
                   return `- ${mark} ${tc.name}`
                 }).join('\n')
-                msgContent = `⚠️ 对话在此轮执行中途出错（${data.error}），以下为出错前已完成的操作：\n\n${steps}`
-              } else {
-                msgContent += `\n\n⚠️ 对话在此轮执行中途出错（${data.error}）`
+                msgContent = `⚠️ The conversation failed mid-turn (${data.error}); operations completed before the failure:\n\n${steps}`
+              } else if (!msgContent.includes('⚠️ This turn was interrupted:')) {
+                msgContent += `\n\n⚠️ The conversation failed mid-turn (${data.error})`
               }
-              const errId = `assistant_err_${Date.now()}`
+              const errId = state.activeTurnId ? `assistant_${state.activeTurnId}` : `assistant_err_${Date.now()}`
               if (!state.messages.some(m => m.id === errId)) {
                 state.messages.push({
                   id: errId,
@@ -1574,7 +1562,11 @@ export const useChatStore = defineStore('chat', () => {
             // 顺序调试有据可查（能直接把消息对回服务端的队列项）。
             const doneTurnId = String(data.turn_id || '')
             const assistantId = doneTurnId ? `assistant_${doneTurnId}` : `assistant_${Date.now()}`
-            if (!state.messages.some(m => m.id === assistantId)) {
+            const existingAssistant = state.messages.find(m => m.id === assistantId)
+            if (existingAssistant) {
+              // error already materialized this reply; done still carries file changes.
+              existingAssistant.file_ops = finalFileOps
+            } else if (finalContent || finalToolCalls.length > 0) {
               state.messages.push({
                 id: assistantId,
                 role: 'assistant' as const,

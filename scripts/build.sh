@@ -141,13 +141,24 @@ cmd_docker() {
 
     await_web || exit 1
 
+    # Build metadata baked into the binary (Dockerfile ARG VERSION/COMMIT/BUILD_DATE);
+    # without them `magic version` / /api/health inside the container report "dev".
+    local commit build_date
+    commit="$(gm_git_commit)"
+    build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local build_args=(
+        --build-arg "VERSION=$VERSION"
+        --build-arg "COMMIT=$commit"
+        --build-arg "BUILD_DATE=$build_date"
+    )
+
     if [[ "$PUSH" == "true" ]]; then
-        docker buildx build --platform linux/amd64,linux/arm64 \
+        docker buildx build --platform linux/amd64,linux/arm64 "${build_args[@]}" \
             -t "$DOCKER_REPO:$VERSION" -t "$DOCKER_REPO:latest" --push "$REPO_ROOT"
         gm_ok "pushed multi-arch image $DOCKER_REPO:$VERSION"
     else
         # Build the local image only; no implicit --push like the old script did
-        docker build -t "$DOCKER_REPO:$VERSION" -t "$DOCKER_REPO:latest" "$REPO_ROOT"
+        docker build "${build_args[@]}" -t "$DOCKER_REPO:$VERSION" -t "$DOCKER_REPO:latest" "$REPO_ROOT"
         gm_ok "image built: $DOCKER_REPO:$VERSION, $DOCKER_REPO:latest"
     fi
 }

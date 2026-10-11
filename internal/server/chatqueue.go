@@ -1047,6 +1047,39 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	deliveredAny := false
 
 	var fullResponse strings.Builder
+	var toolSnapshots []types.ToolExecutionSnapshot
+	checkpointSaved := false
+	lastCheckpoint := time.Time{}
+	checkpoint := func(force bool, final bool, ops []types.FileOp) {
+		if s.sessionStore == nil || (!force && time.Since(lastCheckpoint) < 3*time.Second) {
+			return
+		}
+		text := fullResponse.String()
+		if strings.TrimSpace(provider.StripThinkTrails(text)) == "" && len(toolSnapshots) == 0 {
+			return
+		}
+		if !final {
+			text += queuedTurnErrorNotice(text, fmt.Errorf("checkpoint saved mid-turn; the turn has not confirmed completion yet"))
+		} else if strings.TrimSpace(provider.StripThinkTrails(text)) == "" {
+			text += queuedTurnErrorNotice(text, fmt.Errorf("no final answer was produced; tool execution records were kept"))
+		}
+		msg := types.Message{ID: "assistant_" + item.id, Role: "assistant", Content: text,
+			Timestamp: time.Now(), FileOps: ops, ToolCallsSnapshot: toolSnapshots}
+		ok, err := s.sessionStore.UpsertSessionMessage(context.Background(), sessionID, msg)
+		if err != nil {
+			log.Warnf("[CHATQ] checkpoint failed session=%s: %v", sessionID, err)
+			return
+		}
+		checkpointSaved = checkpointSaved || ok
+		lastCheckpoint = time.Now()
+	}
+	// A panic still leaves the latest observed work available after reopening.
+	turnFinished := false
+	defer func() {
+		if !turnFinished {
+			checkpoint(true, false, nil)
+		}
+	}()
 	streamHandler := func(chunk string, done bool) {
 		if done || chunk == "" {
 			return
@@ -1064,6 +1097,11 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 			re := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|(.*)<<<`)
 			if m := re.FindStringSubmatch(chunk); m != nil {
 				toolName, toolArgs := m[1], m[2]
+				toolSnapshots = append(toolSnapshots, types.ToolExecutionSnapshot{
+					ID: fmt.Sprintf("%s_tool_%d", item.id, len(toolSnapshots)), Name: toolName,
+					Args: truncateRunes(toolArgs, 4000), Status: "running", FileOps: extractFileOps(toolName, toolArgs, ""),
+				})
+				checkpoint(true, false, nil)
 				argsSummary := toolArgs
 				if len(argsSummary) > 200 {
 					argsSummary = truncateRunes(argsSummary, 200) + "..."
@@ -1093,6 +1131,19 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 					toolSuccess := submatch[2] == "true"
 					toolDuration := submatch[3]
 					toolContent := chunk[startMatch[1]:endMatch[0]]
+					for i := range toolSnapshots {
+						if toolSnapshots[i].Name == toolName && toolSnapshots[i].Status == "running" {
+							toolSnapshots[i].Status = "completed"
+							if !toolSuccess {
+								toolSnapshots[i].Status = "error"
+							}
+							toolSnapshots[i].Success = toolSuccess
+							toolSnapshots[i].Duration = toolDuration
+							toolSnapshots[i].Content = truncateRunes(strings.TrimSpace(toolContent), 4000)
+							break
+						}
+					}
+					checkpoint(true, false, nil)
 					if len(toolContent) > 500 {
 						toolContent = utils.Truncate(toolContent, 500)
 					}
@@ -1117,6 +1168,7 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 		}
 
 		fullResponse.WriteString(chunk)
+		checkpoint(false, false, nil)
 		ev, _ := json.Marshal(map[string]string{"delta": chunk})
 		if queue.broadcast(turnEvent{data: "data: " + string(ev) + "\n\n"}) {
 			deliveredAny = true
@@ -1143,7 +1195,22 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	// 本轮"变更的文件"（写前快照 + 净 diff，见 fileops.go）在回合真正结束后
 	// 才能取到；先落库再广播 done，保证前端拿到 done 时数据已经一致。
 	finalOps := run.fileOps.Result()
-	s.persistAssistantMessage(sessionID, fullResponse.String(), streamed.String(), finalOps, deliveredAny)
+	// 错误提示也是回合结果：先推给在线客户端，再与部分回答一起落库。
+	// 不依赖临时 error alert，避免工具已执行但没有正文时刷新后整轮消失。
+	if streamErr != nil && !cancelled {
+		notice := queuedTurnErrorNotice(fullResponse.String(), streamErr)
+		fullResponse.WriteString(notice)
+		ev, _ := json.Marshal(map[string]string{"delta": notice})
+		queue.broadcast(turnEvent{data: "data: " + string(ev) + "\n\n"})
+	}
+	if cancelled {
+		fullResponse.WriteString(queuedTurnErrorNotice(fullResponse.String(), fmt.Errorf("用户已停止本轮执行")))
+	}
+	checkpoint(true, true, finalOps)
+	turnFinished = true
+	if !checkpointSaved {
+		s.persistAssistantMessage(sessionID, fullResponse.String(), streamed.String(), finalOps, deliveredAny)
+	}
 
 	// 用量记账：队列路径的回合跑在 worker 里，不会经过旧 /api/chat 那套收尾，
 	// 这里不显式记一笔，/usage 页面就再也不会有新数据（表现为"用量统计不到"）。
@@ -1163,6 +1230,16 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	// 保证 done 帧的 queue_depth/queue_idle 把残留回合计算在内——见
 	// runQueue 收尾处的竞态与顺序说明。
 	return finalOps
+}
+
+// queuedTurnErrorNotice closes an unfinished think block before adding a
+// visible, persistable error. Otherwise reasoning-only failures hide the notice.
+func queuedTurnErrorNotice(response string, err error) string {
+	prefix := "\n\n"
+	if strings.LastIndex(response, "<think>") > strings.LastIndex(response, "</think>") {
+		prefix = "\n</think>\n\n"
+	}
+	return prefix + fmt.Sprintf("⚠️ This turn was interrupted: %s. Completed operations were not rolled back automatically; review the execution record before deciding whether to retry.", err)
 }
 
 // pendingCount 返回尚未执行的排队消息条数（不含正在执行的这一条）。

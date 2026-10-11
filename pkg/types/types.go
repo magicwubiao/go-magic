@@ -20,6 +20,20 @@ type Message struct {
 	// 注意：仅供会话持久化/展示使用；agent history 里的消息该字段恒为 nil，
 	// 序列化给 provider 时因 omitempty 不会泄漏到请求载荷。
 	FileOps []FileOp `json:"file_ops,omitempty"`
+	// UI-only execution records; never interpreted as provider tool calls.
+	ToolCallsSnapshot []ToolExecutionSnapshot `json:"tool_calls_snapshot,omitempty"`
+}
+
+// ToolExecutionSnapshot retains the observed state, including unfinished calls.
+type ToolExecutionSnapshot struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Args     string   `json:"args"`
+	Status   string   `json:"status"`
+	Success  bool     `json:"success"`
+	Duration string   `json:"duration,omitempty"`
+	Content  string   `json:"content,omitempty"`
+	FileOps  []FileOp `json:"file_ops,omitempty"`
 }
 
 // FileOp 描述一次工具调用对单个文件的操作。Action 取值与后端 extractFileOps

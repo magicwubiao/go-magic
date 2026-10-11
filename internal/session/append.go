@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -168,4 +169,47 @@ func (s *Store) touchSessionRow(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	return affected > 0, nil
+}
+
+// UpsertSessionMessage updates a stable turn checkpoint without adding duplicate
+// assistant messages. JSON is patched in SQL so concurrent guide appends survive.
+func (s *Store) UpsertSessionMessage(ctx context.Context, id string, msg types.Message) (bool, error) {
+	if id == "" || msg.ID == "" {
+		return false, fmt.Errorf("session/message id is empty")
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var path string
+	err = tx.QueryRowContext(ctx, `SELECT '$[' || key || ']' FROM sessions, json_each(sessions.messages)
+		WHERE sessions.id = ? AND json_extract(value, '$.id') = ? LIMIT 1`, id, msg.ID).Scan(&path)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	var res sql.Result
+	if err == sql.ErrNoRows {
+		res, err = tx.ExecContext(ctx, `UPDATE sessions SET messages = json_insert(
+			CASE WHEN json_type(messages) = 'array' THEN messages ELSE '[]' END, '$[#]', json(?)),
+			msg_count = msg_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, string(b), id)
+	} else {
+		res, err = tx.ExecContext(ctx, `UPDATE sessions SET messages = json_set(messages, ?, json(?)),
+			updated_at = CURRENT_TIMESTAMP WHERE id = ?`, path, string(b), id)
+	}
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
