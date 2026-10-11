@@ -16,14 +16,6 @@
       </span>
     </button>
 
-    <!-- 折叠态摘要：最后一句思考 / 最后一个工具摘要，点击即展开 -->
-    <button
-      v-if="!expanded && collapsedHint"
-      class="process-hint"
-      type="button"
-      @click="toggle"
-    >{{ collapsedHint }}</button>
-
     <n-collapse-transition :show="expanded">
       <div class="process-body">
         <template v-for="item in items" :key="item.key">
@@ -47,7 +39,6 @@ import { useI18n } from 'vue-i18n'
 import { NCollapseTransition } from 'naive-ui'
 import ToolCallCard from './ToolCallCard.vue'
 import ThoughtBlock from './ThoughtBlock.vue'
-import { stripZeroWidth } from '@/utils/text'
 import type { ToolCallEvent } from '@/stores/chat'
 
 interface ProcessSegment {
@@ -166,35 +157,6 @@ const statusText = computed(() => {
   return t('chat.processDone')
 })
 
-// ---- 折叠态摘要：优先最后一段思考的纯文本，否则最后一个工具的参数摘要 ----
-function plainText(src: string): string {
-  return stripZeroWidth(src)
-    .replace(/<\/?\s*think[^>]*>/gi, ' ') // 残留的 <think>/<think x> 标签不入预览
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[#*`>\-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-const collapsedHint = computed(() => {
-  const list = items.value
-  for (let i = list.length - 1; i >= 0; i--) {
-    const it = list[i]
-    if (it.kind === 'text' && it.text) {
-      const p = plainText(it.text)
-      if (p) return p.length > 110 ? `${p.slice(0, 110)}…` : p
-    }
-    if (it.kind === 'tool' && it.tool) {
-      const label = it.tool.name || ''
-      const arg = (it.tool.args || '').trim()
-      const oneLine = arg.split('\n').map((l) => l.trim()).find((l) => l) || ''
-      const s = oneLine.length > 90 ? `${oneLine.slice(0, 90)}…` : oneLine
-      return s ? `${label} ${s}` : label
-    }
-  }
-  return ''
-})
-
 // ---- 耗时：取所有工具耗时之和（字符串形如 "2.2s"） ----
 const durationText = computed(() => {
   let total = 0
@@ -280,27 +242,6 @@ const durationText = computed(() => {
   color: #6b7280;
 }
 
-.process-hint {
-  display: block;
-  width: 100%;
-  margin-top: 2px;
-  padding: 0;
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #b0b5bd;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: none;
-}
-.process-hint:hover {
-  color: #8b919a;
-}
-
 .process-body {
   display: flex;
   flex-direction: column;
@@ -334,12 +275,6 @@ const durationText = computed(() => {
   }
   .process-chevron {
     color: #6b7280;
-  }
-  .process-hint {
-    color: #565b64;
-  }
-  .process-hint:hover {
-    color: #8b919a;
   }
 }
 </style>
