@@ -1367,6 +1367,9 @@ func convertDBMessagesToAPI(sessionID string, msgs []types.Message) []map[string
 		if len(m.ToolCallsSnapshot) > 0 {
 			msg["tool_calls_snapshot"] = m.ToolCallsSnapshot
 		}
+		if len(m.TimelineSnapshot) > 0 {
+			msg["streaming_timeline_snapshot"] = m.TimelineSnapshot
+		}
 		// 附件随会话回放：落库时用户消息保留了附件部件（base64 已剥掉，只留
 		// name/url），但这里以前整块丢弃 → 刷新页面/切回会话后前端拿不到文件
 		// 名，只会在气泡里留下 [文件] 占位（chat.fileBtn）。名字与缩略图是

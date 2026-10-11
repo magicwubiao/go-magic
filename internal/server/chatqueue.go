@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/agent"
@@ -1048,6 +1049,9 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 
 	var fullResponse strings.Builder
 	var toolSnapshots []types.ToolExecutionSnapshot
+	// 执行时间线：记录"文本段 ↔ 工具段"的发生顺序，落库后刷新页面仍能还原
+	// 思考/工具的穿插展示（与前端 streamingSegments 同构）。
+	var timelineSegs []types.TimelineSegment
 	checkpointSaved := false
 	lastCheckpoint := time.Time{}
 	checkpoint := func(force bool, final bool, ops []types.FileOp) {
@@ -1064,7 +1068,8 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 			text += queuedTurnErrorNotice(text, fmt.Errorf("no final answer was produced; tool execution records were kept"))
 		}
 		msg := types.Message{ID: "assistant_" + item.id, Role: "assistant", Content: text,
-			Timestamp: time.Now(), FileOps: ops, ToolCallsSnapshot: toolSnapshots}
+			Timestamp: time.Now(), FileOps: ops, ToolCallsSnapshot: toolSnapshots,
+			TimelineSnapshot: timelineSegs}
 		ok, err := s.sessionStore.UpsertSessionMessage(context.Background(), sessionID, msg)
 		if err != nil {
 			log.Warnf("[CHATQ] checkpoint failed session=%s: %v", sessionID, err)
@@ -1097,10 +1102,22 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 			re := regexp.MustCompile(`>>>TOOL_START\|([^|]+)\|(.*)<<<`)
 			if m := re.FindStringSubmatch(chunk); m != nil {
 				toolName, toolArgs := m[1], m[2]
+				toolID := fmt.Sprintf("%s_tool_%d", item.id, len(toolSnapshots))
 				toolSnapshots = append(toolSnapshots, types.ToolExecutionSnapshot{
-					ID: fmt.Sprintf("%s_tool_%d", item.id, len(toolSnapshots)), Name: toolName,
+					ID: toolID, Name: toolName,
 					Args: truncateRunes(toolArgs, 4000), Status: "running", FileOps: extractFileOps(toolName, toolArgs, ""),
 				})
+				// 时间线：先把当前已累积文本收成 text 段（end=当前长度），再插入工具段。
+				// 与前端 pushToolSegment 的顺序一致：先切文本、再记工具。
+				// end 用 **rune 数**：前端对 content 做 substring（按 UTF-16 码元），
+				// Go 的 len() 是字节数，中文会错位——必须换算成 rune 数。
+				if n := utf8.RuneCountInString(fullResponse.String()); n > 0 {
+					if len(timelineSegs) == 0 || timelineSegs[len(timelineSegs)-1].Kind != "text" ||
+						timelineSegs[len(timelineSegs)-1].End != n {
+						timelineSegs = append(timelineSegs, types.TimelineSegment{Kind: "text", End: n})
+					}
+				}
+				timelineSegs = append(timelineSegs, types.TimelineSegment{Kind: "tool", ToolCallID: toolID})
 				checkpoint(true, false, nil)
 				argsSummary := toolArgs
 				if len(argsSummary) > 200 {
@@ -1205,6 +1222,19 @@ func (s *Server) runQueuedTurn(sessionID string, queue *sessionQueue, ctx contex
 	}
 	if cancelled {
 		fullResponse.WriteString(queuedTurnErrorNotice(fullResponse.String(), fmt.Errorf("用户已停止本轮执行")))
+	}
+	// 收尾：把最后的文本收成 text 段，时间线覆盖到全文末尾（否则最后一段文本
+	// 不在时间线里，前端渲染时会漏掉）。只在确实有工具段时才补，避免纯文本
+	// 回合也写一份多余时间线。
+	if len(timelineSegs) > 0 {
+		if n := utf8.RuneCountInString(fullResponse.String()); n > 0 {
+			last := timelineSegs[len(timelineSegs)-1]
+			if last.Kind != "text" {
+				timelineSegs = append(timelineSegs, types.TimelineSegment{Kind: "text", End: n})
+			} else {
+				timelineSegs[len(timelineSegs)-1].End = n
+			}
+		}
 	}
 	checkpoint(true, true, finalOps)
 	turnFinished = true

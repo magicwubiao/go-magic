@@ -22,6 +22,17 @@ type Message struct {
 	FileOps []FileOp `json:"file_ops,omitempty"`
 	// UI-only execution records; never interpreted as provider tool calls.
 	ToolCallsSnapshot []ToolExecutionSnapshot `json:"tool_calls_snapshot,omitempty"`
+	// UI-only 执行时间线：记录一次回合内"文本段 ↔ 工具调用"的发生顺序，
+	// 供前端把思考/工具按时间穿插渲染。持久化后刷新页面仍能还原执行过程。
+	TimelineSnapshot []TimelineSegment `json:"streaming_timeline_snapshot,omitempty"`
+}
+
+// TimelineSegment 描述回合时间线上的一个片段：文本段记录其结束偏移（end），
+// 工具段记录对应的工具调用 ID。前端据此对原始文本做 [start, end) 切片。
+type TimelineSegment struct {
+	Kind       string `json:"kind"` // "text" | "tool"
+	End        int    `json:"end,omitempty"`
+	ToolCallID string `json:"toolCallId,omitempty"`
 }
 
 // ToolExecutionSnapshot retains the observed state, including unfinished calls.
