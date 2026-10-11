@@ -253,7 +253,7 @@
               v-if="showNewFolderInput"
               v-model:value="newFolderName"
               size="tiny"
-              placeholder="文件夹名"
+              :placeholder="t('chat.newFolderPlaceholder')"
               style="width: 140px;"
               @keyup.enter="createNewFolder"
               @blur="cancelNewFolder"

@@ -419,7 +419,7 @@ async function loadProviderCatalog() {
     if (!presets['siliconflow']) {
       presets['siliconflow'] = { baseUrl: 'https://api.siliconflow.cn/v1', models: [] }
       if (!configured.has('siliconflow')) {
-        options.push({ label: '硅基流动 SiliconFlow', value: 'siliconflow' })
+        options.push({ label: t('modelsProviders.siliconflowLabel'), value: 'siliconflow' })
       }
     }
     providerPresets.value = presets

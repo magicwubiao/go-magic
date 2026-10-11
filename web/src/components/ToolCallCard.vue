@@ -10,7 +10,7 @@
       :aria-expanded="expanded"
     >
       <span class="tool-call-icon">
-        <span v-if="tool.status === 'running'" class="tool-call-spinner" aria-label="运行中"></span>
+        <span v-if="tool.status === 'running'" class="tool-call-spinner" :aria-label="t('chat.runRunning')"></span>
         <svg v-else-if="isSuccess" class="tool-call-svg" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.4" />
           <path d="M4.5 8.5l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
@@ -54,6 +54,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolCallEvent } from '@/stores/chat'
 import { NCollapseTransition } from 'naive-ui'
+import { toolDisplayName } from '@/utils/toolCallView'
 
 const props = defineProps<{
   tool: ToolCallEvent
@@ -84,86 +85,11 @@ const statusLabel = computed(() => {
   return t('chat.runSuccess')
 })
 
-// 工具中文标签
-const TOOL_LABELS: Record<string, string> = {
-  bash: '运行命令',
-  shell: '运行命令',
-  exec: '运行命令',
-  Read: '读取文件',
-  read_file: '读取文件',
-  Write: '写入文件',
-  write_file: '写入文件',
-  Edit: '编辑文件',
-  edit_file: '编辑文件',
-  MultiEdit: '批量编辑',
-  Glob: '搜索文件',
-  glob_files: '搜索文件',
-  Grep: '搜索内容',
-  grep_files: '搜索内容',
-  WebFetch: '抓取网页',
-  web_fetch: '抓取网页',
-  WebSearch: '搜索网页',
-  web_search: '搜索网页',
-  TodoWrite: '更新待办',
-  todo_write: '更新待办',
-  ListDir: '列出目录',
-  list_dir: '列出目录',
-  terminal: '运行命令',
-  Terminal: '运行命令',
-  search_in_files: '搜索内容',
-  search_files: '搜索文件',
-  list_files: '列出目录',
-  fetch_url: '抓取网页',
-  http_request: '请求接口',
-  memory_store: '保存记忆',
-  memory_recall: '检索记忆',
-  browser_navigate: '打开网页',
-  browser_back: '后退',
-  browser_forward: '前进',
-  browser_refresh: '刷新页面',
-  browser_click: '点击元素',
-  browser_type: '输入文本',
-  browser_press: '按键',
-  browser_scroll: '滚动页面',
-  browser_wait: '等待页面',
-  browser_snapshot: '页面快照',
-  browser_vision: '页面识别',
-  browser_console: '执行脚本',
-  browser_get_info: '读取页面信息',
-  browser_get_images: '读取图片',
-  browser_get_cookies: '读取 Cookie',
-  browser_set_cookies: '设置 Cookie',
-  browser_clear_cache: '清除缓存',
-  browser_dialog: '处理弹窗',
-  execute_code: '执行代码',
-  process: '管理进程',
-  ssh: '远程执行',
-  docker: '容器操作',
-  modal: '云端执行',
-  daytona: '云端执行',
-  singularity: '容器执行',
-  gitignore: '更新忽略规则',
-  ha_get_state: '读取设备状态',
-  ha_call_service: '调用设备服务',
-  ha_list_entities: '列出设备',
-  ha_list_services: '列出服务',
-  ha_events: '读取事件',
-  ha_config: '读取配置',
-  image_generate: '生成图片',
-  generate_image: '生成图片',
-  task: '子任务',
-  delegate: '子任务',
-  delegate_task: '子任务',
-  clarify: '询问用户',
-  ask_user: '询问用户',
-  todo: '更新待办',
-  remember_memory: '保存记忆',
-  message_agent: '发消息给智能体',
-}
-
+// 工具标签统一由 utils/toolCallView 从 i18n 解析（与坞 / ToolCallBlock 共用一份）
 const toolLabel = computed(() => {
   const name = props.tool.name || ''
-  return TOOL_LABELS[name] || name || t('chat.toolCall')
+  const label = toolDisplayName(name)
+  return label || t('chat.toolCall')
 })
 
 // ---- 解析 args ----

@@ -3,15 +3,21 @@ import en from './en'
 import zh from './zh'
 
 function getDefaultLocale(): 'zh' | 'en' {
+  // English is the default for the product. Only honor an explicit user choice
+  // (persisted via the language switch); do NOT auto-follow the browser locale,
+  // otherwise a Chinese browser would silently start in Chinese on first visit.
   const saved = localStorage.getItem('locale')
   if (saved === 'zh' || saved === 'en') return saved
-  // Infer from browser language
-  const browserLang = navigator.language || (navigator as any).userLanguage || ''
-  if (browserLang.startsWith('zh')) return 'zh'
   return 'en'
 }
 
 const savedLocale = getDefaultLocale()
+
+// Reflect the resolved locale on <html lang> from the very first paint, so
+// assistive tech and `:lang()` styles match what is actually rendered.
+if (typeof document !== 'undefined') {
+  document.documentElement.setAttribute('lang', savedLocale)
+}
 
 export const i18n = createI18n({
   legacy: false,

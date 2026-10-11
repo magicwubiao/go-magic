@@ -9,18 +9,37 @@
  * 因此把纯函数抽到这里，三个组件共用。只做文本推导，不碰 Vue 响应式。
  */
 import type { ToolCallEvent } from '@/stores/chat'
+import { i18n } from '@/locales'
+
+/**
+ * 取某命名空间下 `key` 的译文；缺失时返回空串（由调用方回退）。
+ *
+ * 用 `te` 先探测存在性，避免 vue-i18n 在缺 key 时把整条 key 路径（如
+ * `toolLabels.bash`）当作译文返回 —— 那样调用方拿到的就不是空串，回退
+ * 逻辑会被绕过，界面上直接漏出 `toolLabels.bash` 这种字样。
+ */
+function tr(ns: 'toolLabels' | 'toolShortLabels' | 'toolActions', key: string): string {
+  const path = `${ns}.${key}`
+  if (!i18n.global.te(path)) return ''
+  return i18n.global.t(path)
+}
 
 /** 工具名 → 人类可读标签。未命中时回退为原始 name（由调用方决定兜底文案）。 */
 export function toolDisplayName(name: string): string {
-  return TOOL_LABELS[name] || name || ''
+  return tr('toolLabels', name) || name || ''
 }
 
 /**
- * 工具名 → 短标签（坞里空间紧张，用比卡片更短的措辞）。
+ * 工具名 → 短标签（坞里空间紧张，用比卡片更短的中文/英文措辞）。
  * 例如 `Read` 在卡片里是「读取文件」，在坞里只占「读取」。
  */
 export function toolShortName(name: string): string {
-  return TOOL_SHORT_LABELS[name] || TOOL_LABELS[name] || name || ''
+  return tr('toolShortLabels', name) || tr('toolLabels', name) || name || ''
+}
+
+/** 文件变更行里的动作短标（read/write/delete/...）。 */
+export function toolActionLabel(action: string): string {
+  return tr('toolActions', action) || action
 }
 
 /** 用 emoji 做类型标识：坞里没有空间放图标组件，emoji 是最省事且跨平台一致的做法。 */
@@ -31,27 +50,26 @@ export function toolEmoji(name: string): string {
 /**
  * 反查：短标签 → emoji。
  *
- * 坞里的步骤 title 存的是**短标签**（「读取」）而不是工具名（`Read`），
+ * 坞里的步骤 title 存的是**短标签**（「读取」/「Read」）而不是工具名（`Read`），
  * 因此不能直接拿 title 去查 TOOL_EMOJIS —— 那样每个图标都会退化成 🔧。
  * 这里把短标签反向映射回一个代表性工具名，再取 emoji。
  * 多个工具共享同一短标签（Read/read_file 都叫「读取」）时，取第一个即可，
  * 它们本来就该用同一个图标。
  *
- * 注意：必须**惰性**构建。写成模块顶层的立即执行函数会踩 TDZ —— 它会在
- * TOOL_SHORT_LABELS / TOOL_EMOJIS 这两个 const 初始化之前就读取它们，
- * 生产构建里表现为整个前端白屏（`ReferenceError: Cannot access 'Am'
- * before initialization`），因为 ESM 的 const 在声明前处于暂时性死区。
- * 缓存一份即可，不必每次重建。
+ * 短标签现在来自 i18n（随语言变化），因此缓存需要按当前语言失效重建：
+ * 记录构建时用的语言，语言一变就重建。否则切换语言后图标会沿用旧语言的映射。
  */
-let shortLabelToEmoji: Record<string, string> | null = null
+let shortLabelToEmoji: { locale: string; map: Record<string, string> } | null = null
 
 function getShortLabelToEmoji(): Record<string, string> {
-  if (shortLabelToEmoji) return shortLabelToEmoji
+  const locale = String(i18n.global.locale.value)
+  if (shortLabelToEmoji && shortLabelToEmoji.locale === locale) return shortLabelToEmoji.map
   const m: Record<string, string> = {}
-  for (const [tool, short] of Object.entries(TOOL_SHORT_LABELS)) {
-    if (!(short in m)) m[short] = TOOL_EMOJIS[tool] || '🔧'
+  for (const tool of Object.keys(TOOL_EMOJIS)) {
+    const short = toolShortName(tool)
+    if (short && !(short in m)) m[short] = TOOL_EMOJIS[tool] || '🔧'
   }
-  shortLabelToEmoji = m
+  shortLabelToEmoji = { locale, map: m }
   return m
 }
 
@@ -123,102 +141,6 @@ export function oneLineArgSummary(rawArgs: string, max = 96): string {
 export function toolCallSummary(tc: Pick<ToolCallEvent, 'args' | 'args_text'>, max = 96): string {
   const raw = tc.args_text && tc.args_text !== tc.args ? tc.args_text : tc.args
   return oneLineArgSummary(raw || '', max)
-}
-
-const TOOL_LABELS: Record<string, string> = {
-  bash: '运行命令',
-  shell: '运行命令',
-  exec: '运行命令',
-  execute_command: '运行命令',
-  execute_code: '执行代码',
-  Read: '读取文件',
-  read_file: '读取文件',
-  Write: '写入文件',
-  write_file: '写入文件',
-  Edit: '编辑文件',
-  edit_file: '编辑文件',
-  file_edit: '编辑文件',
-  MultiEdit: '批量编辑',
-  Glob: '搜索文件',
-  glob_files: '搜索文件',
-  list_files: '列出文件',
-  directory_tree: '目录树',
-  Grep: '搜索内容',
-  grep_files: '搜索内容',
-  search_in_files: '搜索内容',
-  WebFetch: '抓取网页',
-  web_fetch: '抓取网页',
-  WebSearch: '搜索网页',
-  web_search: '搜索网页',
-  web_select: '网页选择',
-  browser_navigate: '打开网页',
-  TodoWrite: '更新待办',
-  todo_write: '更新待办',
-  todo: '更新待办',
-  ListDir: '列出目录',
-  list_dir: '列出目录',
-  delegate_task: '派发子任务',
-  memory_store: '写入记忆',
-  memory_recall: '检索记忆',
-  session_search: '检索会话',
-  cronjob: '定时任务',
-  skill: '加载技能',
-  clarify: '请求澄清',
-  image_gen: '生成图片',
-  image_edit: '编辑图片',
-  tts: '语音合成',
-  asr: '语音识别',
-  send_message: '发送消息',
-  gitignore: '忽略规则',
-  batch_file_ops: '批量文件操作',
-  project_analyze: '分析项目',
-  diff_patch: '应用补丁',
-  present_files: '展示文件',
-}
-
-/** 坞专用短标签：比卡片更省字。 */
-const TOOL_SHORT_LABELS: Record<string, string> = {
-  bash: '运行命令',
-  shell: '运行命令',
-  exec: '运行命令',
-  execute_command: '运行命令',
-  execute_code: '执行代码',
-  Read: '读取',
-  read_file: '读取',
-  Write: '写入',
-  write_file: '写入',
-  Edit: '编辑',
-  edit_file: '编辑',
-  file_edit: '编辑',
-  MultiEdit: '批量编辑',
-  Glob: '找文件',
-  glob_files: '找文件',
-  Grep: '搜内容',
-  grep_files: '搜内容',
-  search_in_files: '搜内容',
-  WebFetch: '抓网页',
-  web_fetch: '抓网页',
-  WebSearch: '搜网页',
-  web_search: '搜网页',
-  ListDir: '列目录',
-  list_dir: '列目录',
-  list_files: '列文件',
-  TodoWrite: '更新待办',
-  todo_write: '更新待办',
-  present_files: '展示文件',
-  delegate_task: '派发任务',
-  memory_store: '写记忆',
-  memory_recall: '读记忆',
-  session_search: '搜会话',
-  cronjob: '定时任务',
-  image_gen: '生成图片',
-  image_edit: '编辑图片',
-  send_message: '发消息',
-  browser_navigate: '开网页',
-  web_select: '选网页',
-  project_analyze: '分析项目',
-  diff_patch: '应用补丁',
-  batch_file_ops: '批量操作',
 }
 
 const TOOL_EMOJIS: Record<string, string> = {

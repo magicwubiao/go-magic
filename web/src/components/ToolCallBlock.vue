@@ -14,7 +14,7 @@
 
     <div v-if="expanded" class="tool-details">
       <div v-if="toolCall.file_ops && toolCall.file_ops.length" class="tool-file-ops">
-        <div class="detail-label">操作文件：</div>
+        <div class="detail-label">{{ t('chat.toolFilesLabel') }}</div>
         <div class="file-op-list">
           <div v-for="(op, idx) in toolCall.file_ops" :key="idx" class="file-op-item">
             <span class="file-op-action" :class="`action-${op.action}`">{{ actionLabel(op.action) }}</span>
@@ -24,19 +24,19 @@
       </div>
 
       <div v-if="prettyArgs" class="tool-args">
-        <div class="detail-label">参数：</div>
+        <div class="detail-label">{{ t('chat.toolArgsLabel') }}</div>
         <pre class="args-content">{{ prettyArgs }}</pre>
       </div>
 
       <div v-if="toolCall.status !== 'running' && toolCall.content" class="tool-content">
         <div class="detail-label">
-          <span>{{ toolCall.status === 'error' ? '错误信息' : '返回结果' }}：</span>
-          <span v-if="toolCall.status === 'error'" class="content-status error">失败</span>
-          <span v-else class="content-status success">成功</span>
+          <span>{{ toolCall.status === 'error' ? t('chat.toolErrorOutput') : t('chat.toolResultOutput') }}</span>
+          <span v-if="toolCall.status === 'error'" class="content-status error">{{ t('chat.runFailed') }}</span>
+          <span v-else class="content-status success">{{ t('chat.runSuccess') }}</span>
         </div>
         <pre class="content-preview" @click.stop>{{ contentPreview }}</pre>
         <button v-if="contentTooLong && !showFullContent" class="expand-more-btn" @click.stop="showFullContent = true">
-          展开全部 ({{ contentLength }} 字符)
+          {{ t('chat.toolExpandAll', { n: contentLength }) }}
         </button>
       </div>
     </div>
@@ -45,11 +45,15 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ToolCallEvent } from '@/stores/chat'
+import { toolActionLabel } from '@/utils/toolCallView'
 
 const props = defineProps<{
   toolCall: ToolCallEvent
 }>()
+
+const { t } = useI18n()
 
 const expanded = ref(false)
 const showFullContent = ref(false)
@@ -98,16 +102,7 @@ const contentPreview = computed(() => {
 })
 
 function actionLabel(a: string): string {
-  const map: Record<string, string> = {
-    read: '读',
-    write: '写',
-    delete: '删',
-    list: '列',
-    search: '搜',
-    batch: '批',
-    access: '访',
-  }
-  return map[a] || a
+  return toolActionLabel(a)
 }
 </script>
 
