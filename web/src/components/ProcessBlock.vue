@@ -1,9 +1,9 @@
 <template>
   <!-- 执行过程：把「思考 + 工具调用」合并成一个折叠区（WorkBuddy 风格）。
-       折叠态：一个头部（状态点 + 标题 + 工具次数 / 耗时），外加最后一步摘要。
-       展开态：按发生顺序穿插渲染 思考段 ↔ 工具调用卡片。
+       最外层折叠 = 纯显隐开关（渲染不受状态影响），默认折叠。
+       展开后：按发生顺序穿插 思考段（各自独立可折叠） ↔ 工具调用卡片。
        最终回答由父组件单独渲染在折叠区之外，不受这里影响。 -->
-  <div v-if="hasProcess" class="process-block" :class="{ collapsed: !expanded }">
+  <div v-if="hasProcess" class="process-block">
     <button class="process-toggle" type="button" :aria-expanded="expanded" @click="toggle">
       <span class="process-indicator" :class="{ pulsing: streaming, failed: hasError }"></span>
       <span class="process-title">{{ statusText }}</span>
@@ -27,9 +27,10 @@
     <n-collapse-transition :show="expanded">
       <div class="process-body">
         <template v-for="item in items" :key="item.key">
-          <div v-if="item.kind === 'text'" class="process-thought">
-            <ReasoningBody :text="item.text || ''" />
-          </div>
+          <ThoughtBlock
+            v-if="item.kind === 'text'"
+            :text="item.text || ''"
+          />
           <ToolCallCard
             v-else-if="item.tool"
             :tool="item.tool"
@@ -41,11 +42,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NCollapseTransition } from 'naive-ui'
 import ToolCallCard from './ToolCallCard.vue'
-import ReasoningBody from './ReasoningBody.vue'
+import ThoughtBlock from './ThoughtBlock.vue'
 import { stripZeroWidth } from '@/utils/text'
 import type { ToolCallEvent } from '@/stores/chat'
 
@@ -56,8 +57,7 @@ interface ProcessSegment {
 }
 
 const props = defineProps<{
-  // 完整文本（含 <think> 标签）。文本段通过 [start, end) 切片取用；
-  // 无 segments 时整段文本作为单个思考段。
+  // 完整文本（含 <think> 标签）。文本段通过 [start, end) 切片取用。
   content: string
   segments?: ReadonlyArray<unknown> | ProcessSegment[]
   tools: ToolCallEvent[]
@@ -66,23 +66,10 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-// 默认展开，让用户看到实时过程；用户手动 toggle 后固定，不再自动改回。
-const userToggled = ref(false)
-const expanded = ref(true)
-
-watch(
-  () => !!props.streaming,
-  (v, old) => {
-    if (userToggled.value) return
-    // 流式中展开看过程，流结束后自动折叠（成品导向）
-    if (v) expanded.value = true
-    else if (old) expanded.value = false
-  },
-  { immediate: true },
-)
+// 默认折叠；最外层就是纯粹的显隐开关，不受 streaming / 状态变化影响。
+const expanded = ref(false)
 
 function toggle() {
-  userToggled.value = true
   expanded.value = !expanded.value
 }
 
@@ -121,15 +108,30 @@ const toolsById = computed<Record<string, ToolCallEvent>>(() => {
 })
 
 // ---- 解析出展示项：有 segments 时按序切片，否则单段兜底 ----
+// 注意：最后一个 text 段若其后没有 tool 段，它是「最终回答」，由父组件的
+// ReasoningContent 单独渲染，不放进过程区（否则和下方正文重复）。
 const items = computed<Array<{ key: string; kind: 'text' | 'tool'; text?: string; tool?: ToolCallEvent }>>(() => {
   const segs = normalizedSegments.value
   const out: Array<{ key: string; kind: 'text' | 'tool'; text?: string; tool?: ToolCallEvent }> = []
+
+  // 找最后一个 text 段下标，并判断其后是否还有 tool 段
+  let lastTextIdx = -1
+  for (let i = segs.length - 1; i >= 0; i--) {
+    if (segs[i].kind === 'text') {
+      lastTextIdx = i
+      break
+    }
+  }
+  const lastTextIsFinal =
+    lastTextIdx !== -1 && !segs.slice(lastTextIdx + 1).some((s) => s.kind === 'tool')
+
   if (segs.length === 0) {
-    if (props.content) out.push({ key: 'text_all', kind: 'text', text: props.content })
+    // 无 segments：整段文本就是最终回答（由父组件渲染），过程区只放工具卡片
     return out
   }
   segs.forEach((seg, idx) => {
     if (seg.kind === 'text') {
+      if (lastTextIsFinal && idx === lastTextIdx) return // 最终回答不进过程区
       const start = Math.max(0, Math.min(textStartOf(idx), seg.end as number))
       const text = props.content.substring(start, seg.end as number)
       out.push({ key: `seg_${idx}`, kind: 'text', text })
@@ -196,12 +198,7 @@ const durationText = computed(() => {
 
 <style scoped>
 .process-block {
-  border-left: 2px solid #e5e7eb;
-  padding-left: 14px;
   margin-bottom: 2px;
-}
-.process-block.collapsed {
-  border-left-color: #f3f4f6;
 }
 
 .process-toggle {
@@ -297,20 +294,7 @@ const durationText = computed(() => {
   padding: 10px 0 6px 0;
 }
 
-/* 思考段：以左侧强调线区分于工具卡片 */
-.process-thought {
-  border-left: 2px solid #eef0f3;
-  padding-left: 10px;
-  margin: 2px 0;
-}
-
 @media (prefers-color-scheme: dark) {
-  .process-block {
-    border-left-color: #374151;
-  }
-  .process-block.collapsed {
-    border-left-color: #2c2c33;
-  }
   .process-toggle {
     color: #9ca3af;
   }
@@ -342,9 +326,6 @@ const durationText = computed(() => {
   }
   .process-hint:hover {
     color: #8b919a;
-  }
-  .process-thought {
-    border-left-color: #2c2d31;
   }
 }
 </style>
