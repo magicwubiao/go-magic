@@ -42,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NCollapseTransition } from 'naive-ui'
 import ToolCallCard from './ToolCallCard.vue'
@@ -66,10 +66,23 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-// 默认折叠；最外层就是纯粹的显隐开关，不受 streaming / 状态变化影响。
-const expanded = ref(false)
+// 默认跟随执行状态：执行中自动展开看进展，结束自动折叠；
+// 用户手动 toggle 后固定，不再被状态改回。
+const userToggled = ref(false)
+const expanded = ref(!!props.streaming)
+
+watch(
+  () => !!props.streaming,
+  (v, old) => {
+    if (userToggled.value) return
+    if (v) expanded.value = true
+    else if (old) expanded.value = false
+  },
+  { immediate: true },
+)
 
 function toggle() {
+  userToggled.value = true
   expanded.value = !expanded.value
 }
 
@@ -156,6 +169,7 @@ const statusText = computed(() => {
 // ---- 折叠态摘要：优先最后一段思考的纯文本，否则最后一个工具的参数摘要 ----
 function plainText(src: string): string {
   return stripZeroWidth(src)
+    .replace(/<\/?\s*think[^>]*>/gi, ' ') // 残留的 <think>/<think x> 标签不入预览
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[#*`>\-]+/g, ' ')
     .replace(/\s+/g, ' ')
