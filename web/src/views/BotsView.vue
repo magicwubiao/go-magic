@@ -360,6 +360,7 @@
                           :streaming="msg._streaming"
                           :allow-promote="!isToolStep(msg)"
                           :empty-hint="msg._streaming ? '' : t('bots.noAnswer')"
+                          show-thinking
                         />
                       </template>
                       <div
@@ -580,7 +581,7 @@
                       </template>
                     </div>
                     <template v-if="!isRoomUserMsg(msg)">
-                      <ReasoningContent :content="msg.content" :streaming="false" />
+                      <ReasoningContent :content="msg.content" :streaming="false" show-thinking />
                     </template>
                     <div v-else-if="msg.content || !msg.attachments?.length" class="bubble-content" v-html="msg.content ? renderMarkdown(msg.content) : '<span class=\'placeholder\'>...</span>'"></div>
                   </div>

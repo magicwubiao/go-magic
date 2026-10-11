@@ -25,7 +25,9 @@
         </svg>
       </span>
       <span class="tool-call-name">{{ toolLabel }}</span>
-      <span class="tool-call-status-text" :class="statusClass">{{ statusLabel }}</span>
+      <!-- 折叠态也能看到"执行了什么"：取主参数首行做单行摘要 -->
+      <span v-if="summary" class="tool-call-summary" :title="summary">{{ summary }}</span>
+      <span v-if="statusClass !== 'success'" class="tool-call-status-text" :class="statusClass">{{ statusLabel }}</span>
       <span v-if="tool.duration" class="tool-call-duration">{{ tool.duration }}</span>
       <span class="tool-call-chevron" :class="{ open: expanded }">
         <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
@@ -169,6 +171,17 @@ const argsView = computed(() => {
 
 const argsPreview = computed(() => argsView.value.text)
 const argsLang = computed(() => argsView.value.lang)
+
+// 头部单行摘要：取主参数的首个非空行（命令取命令本身），截到 90 字符。
+// 让折叠状态下的每条卡片直接可读，而不只是"terminal 运行成功 2.2s"。
+const summary = computed(() => {
+  const line = argsView.value.text
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l !== '') || ''
+  const clean = line.replace(/^[+-]\s?/, '')
+  return clean.length > 90 ? `${clean.slice(0, 90)}…` : clean
+})
 </script>
 
 <style scoped>
@@ -236,15 +249,23 @@ const argsLang = computed(() => argsView.value.lang)
 }
 
 .tool-call-name {
-  flex: 1;
+  flex-shrink: 0;
   font-weight: 500;
   color: #374151;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .tool-call-card.status-error .tool-call-name {
   color: #8a3a3a;
+}
+
+.tool-call-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 11.5px;
+  color: #9ca3af;
 }
 
 .tool-call-status-text {
@@ -347,6 +368,8 @@ const argsLang = computed(() => argsView.value.lang)
 
   .tool-call-name { color: #d6d9df; }
   .tool-call-card.status-error .tool-call-name { color: #f0a4a4; }
+
+  .tool-call-summary { color: #6b6e76; }
 
   .tool-call-status-text.success { color: #63c98e; }
   .tool-call-status-text.error { color: #e89292; }
