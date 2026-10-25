@@ -3,15 +3,13 @@
     v-model:show="visible"
     preset="card"
     class="file-preview-modal modal-responsive modal-scroll"
-    :title="name"
     :style="modalStyle"
     :mask-closable="!unsavedChanges"
     :close-on-esc="!unsavedChanges"
+    :bordered="false"
+    :header-style="{ display: 'none' }"
     @close="handleCloseAttempt"
   >
-    <template #header-extra>
-      <n-tag v-if="typeof size === 'number'" size="small" type="info">{{ formatSize(size) }}</n-tag>
-    </template>
 
     <div v-if="loading" class="preview-state">
       <n-spin size="large" />
@@ -29,38 +27,43 @@
     </div>
 
     <div v-else>
-      <!-- 工具条：左侧编辑/保存，右侧复制/下载/全屏（统一入口，移动端自动折行） -->
+      <!-- 紧凑头部：一行放下 文件名 + 大小 + 全部操作按钮。
+           旧版是「卡片标题 + 带文字工具条」两层堆叠，头部占掉 100px+；
+           改成单行后正文可视高度显著提升。按钮一律纯图标 + title 提示。 -->
       <div class="preview-toolbar">
-        <n-space :size="8" :wrap="true" class="preview-toolbar-group preview-toolbar-group--primary">
-          <n-button
-            v-if="canEdit && isEditing"
-            size="small"
-            type="primary"
-            :loading="saving"
-            :disabled="!unsavedChanges"
-            @click="save"
-          >
-            <template #icon>
-              <n-icon :component="SaveOutline" />
-            </template>
-            <span v-if="!isMobile" class="btn-label">{{ t('common.save') }}</span>
-          </n-button>
-          <n-button
-            v-if="canEdit"
-            size="small"
-            :type="isEditing ? 'warning' : 'default'"
-            @click="toggleEdit"
-          >
-            <template #icon>
-              <n-icon :component="isEditing ? CloseOutline : PencilOutline" />
-            </template>
-            <span v-if="!isMobile" class="btn-label">{{ isEditing ? t('common.cancel') : t('common.edit') }}</span>
-          </n-button>
-        </n-space>
+        <span class="preview-title" :title="name">{{ name }}</span>
+        <n-tag v-if="typeof size === 'number'" size="small" type="info">{{ formatSize(size) }}</n-tag>
 
-        <!-- 视图控制：缩放 / 折行 / Markdown 渲染 / 新标签打开。
-             按当前类型出现，不堆一排永远禁用的按钮。 -->
-        <n-space :size="8" :wrap="true" class="preview-toolbar-group">
+        <div class="preview-actions">
+          <!-- 编辑/保存 -->
+          <template v-if="canEdit">
+            <n-button
+              v-if="isEditing"
+              size="small"
+              type="primary"
+              :loading="saving"
+              :disabled="!unsavedChanges"
+              :title="t('common.save')"
+              @click="save"
+            >
+              <template #icon>
+                <n-icon :component="SaveOutline" />
+              </template>
+            </n-button>
+            <n-button
+              size="small"
+              :type="isEditing ? 'warning' : 'default'"
+              :title="isEditing ? t('common.cancel') : t('common.edit')"
+              @click="toggleEdit"
+            >
+              <template #icon>
+                <n-icon :component="isEditing ? CloseOutline : PencilOutline" />
+              </template>
+            </n-button>
+            <span v-if="isEditing && unsavedChanges" class="toolbar-divider" />
+          </template>
+
+          <!-- 视图控制：按当前类型出现，不堆一排永远禁用的按钮 -->
           <template v-if="kind === 'image' && !imageError">
             <n-button size="small" quaternary :title="t('chat.zoomOut')" @click="zoomBy(1 / 1.25)">
               <template #icon><n-icon :component="RemoveOutline" /></template>
@@ -71,7 +74,6 @@
             <n-button size="small" quaternary :title="t('chat.zoomReset')" @click="resetImageZoom">
               <template #icon><n-icon :component="RefreshOutline" /></template>
             </n-button>
-            <!-- 缩放比例指示：没有它用户只能靠感觉估计当前是几倍 -->
             <span class="zoom-label">{{ zoomLabel }}</span>
           </template>
           <n-button
@@ -82,7 +84,6 @@
             @click="wrapLines = !wrapLines"
           >
             <template #icon><n-icon :component="TextOutline" /></template>
-            <span v-if="!isMobile" class="btn-label">{{ wrapLines ? t('chat.unwrapLines') : t('chat.wrapLines') }}</span>
           </n-button>
           <n-button
             v-if="isMarkdown && content"
@@ -92,7 +93,6 @@
             @click="markdownRendered = !markdownRendered"
           >
             <template #icon><n-icon :component="markdownRendered ? CodeSlashOutline : EyeOutline" /></template>
-            <span v-if="!isMobile" class="btn-label">{{ markdownRendered ? t('chat.markdownSource') : t('chat.markdownPreview') }}</span>
           </n-button>
           <!-- HTML：默认渲染页面，可切到源码。没有这个入口时，HTML 预览是一
                个只能看渲染结果的黑盒——排版/脚本一出问题就无从下手。
@@ -110,9 +110,6 @@
             <template #icon>
               <n-icon :component="htmlSource ? EyeOutline : CodeSlashOutline" />
             </template>
-            <span v-if="!isMobile" class="btn-label">
-              {{ htmlSource ? t('chat.htmlPreview') : t('chat.htmlSource') }}
-            </span>
           </n-button>
           <n-button
             v-if="openableUrl"
@@ -122,11 +119,10 @@
             @click="openInNewTab"
           >
             <template #icon><n-icon :component="OpenOutline" /></template>
-            <span v-if="!isMobile" class="btn-label">{{ t('chat.openInNewTab') }}</span>
           </n-button>
-        </n-space>
 
-        <n-space :size="8" :wrap="true" class="preview-toolbar-group">
+          <span class="toolbar-divider" />
+
           <n-button
             size="small"
             quaternary
@@ -134,10 +130,7 @@
             :title="t('chat.copyContent')"
             @click="copyContent"
           >
-            <template #icon>
-              <n-icon :component="CopyOutline" />
-            </template>
-            <span v-if="!isMobile" class="btn-label">{{ t('chat.copyContent') }}</span>
+            <template #icon><n-icon :component="CopyOutline" /></template>
           </n-button>
           <n-button
             size="small"
@@ -146,10 +139,7 @@
             :title="t('chat.download')"
             @click="download"
           >
-            <template #icon>
-              <n-icon :component="DownloadOutline" />
-            </template>
-            <span v-if="!isMobile" class="btn-label">{{ t('chat.download') }}</span>
+            <template #icon><n-icon :component="DownloadOutline" /></template>
           </n-button>
           <n-button
             size="small"
@@ -160,11 +150,13 @@
             <template #icon>
               <n-icon :component="fullscreen ? ContractOutline : ExpandOutline" />
             </template>
-            <span v-if="!isMobile" class="btn-label">
-              {{ fullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen') }}
-            </span>
           </n-button>
-        </n-space>
+          <!-- 卡片标题栏已隐藏，关闭按钮收进工具栏最右侧；
+               走 handleCloseAttempt 以保留未保存确认 -->
+          <n-button size="small" quaternary :title="t('common.close')" @click="closeFromToolbar">
+            <template #icon><n-icon :component="CloseOutline" /></template>
+          </n-button>
+        </div>
       </div>
 
       <div v-if="unsavedChanges" class="unsaved-hint">
@@ -314,7 +306,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
-import { NButton, NIcon, NModal, NSpace, NSpin, NTag, NText } from 'naive-ui'
+import { NButton, NIcon, NModal, NSpin, NTag, NText } from 'naive-ui'
 import {
   AddOutline,
   AlertCircleOutline,
@@ -1038,6 +1030,15 @@ function handleCloseAttempt(): boolean {
   return false
 }
 
+// 工具栏上的关闭按钮：无未保存改动时直接关，有改动则走确认拦截
+function closeFromToolbar() {
+  if (!unsavedChanges.value) {
+    visible.value = false
+    return
+  }
+  handleCloseAttempt()
+}
+
 // 捕获阶段拦截：全屏下 ESC 先退出全屏；编辑态下 Ctrl/Cmd+S 保存
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && fullscreen.value) {
@@ -1099,21 +1100,45 @@ onUnmounted(() => {
   margin-top: 12px;
 }
 
+/* 紧凑头部：文件名 + 大小徽标 + 图标按钮组一行放下 */
 .preview-toolbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 16px;
-  background: #fafafa;
-  border: 1px solid #e8e8e8;
-  border-radius: 8px;
-  margin-bottom: 12px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.preview-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: #e0e0e0;
 }
 
 .preview-content-container {
-  max-height: 60vh;
+  max-height: calc(85vh - 60px);
   overflow: auto;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
@@ -1216,7 +1241,7 @@ onUnmounted(() => {
 
 .preview-image {
   max-width: 100%;
-  max-height: 60vh;
+  max-height: 70vh;
   border-radius: 4px;
   cursor: zoom-in;
 }
@@ -1234,7 +1259,7 @@ onUnmounted(() => {
 
 .markdown-preview-frame {
   width: 100%;
-  height: 60vh;
+  height: 70vh;
   border: none;
   display: block;
 }
@@ -1259,7 +1284,7 @@ onUnmounted(() => {
 
 .html-preview-container {
   position: relative;
-  max-height: 60vh;
+  max-height: 70vh;
   overflow: hidden;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
@@ -1284,14 +1309,14 @@ onUnmounted(() => {
 
 .html-preview-frame {
   width: 100%;
-  height: 60vh;
+  height: 70vh;
   border: none;
   display: block;
 }
 
 .preview-media-frame {
   width: 100%;
-  max-height: 60vh;
+  max-height: 70vh;
   display: block;
   background: #000;
 }
@@ -1466,19 +1491,21 @@ onUnmounted(() => {
   border-radius: 6px;
 }
 
-/* 小屏适配：给工具条留白、压缩内容高度，避免按钮被挤出视口 */
+/* 小屏适配：文件名放宽占满整行，按钮组折行；内容高度加大 */
 @media (max-width: 768px) {
   .preview-toolbar {
-    padding: 8px 10px;
-    margin-bottom: 8px;
+    padding: 4px 4px;
+    margin-bottom: 6px;
   }
 
-  .preview-toolbar-group {
-    width: 100%;
+  .preview-title {
+    max-width: 100%;
+    flex-basis: 100%;
   }
 
-  .preview-toolbar-group :deep(.n-space) {
+  .preview-actions {
     width: 100%;
+    margin-left: 0;
   }
 
   .preview-content-container {
