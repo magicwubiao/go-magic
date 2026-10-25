@@ -374,6 +374,7 @@ export default {
     terminalStartFailed: '终端启动失败',
     terminalExecFailed: '命令执行失败',
     terminalPlaceholder: '输入命令，回车执行',
+    terminalRunning: '执行中…',
     loadFilesFailed: '加载目录失败',
     newFile: '新建文件',
     fileCreated: '文件已创建',

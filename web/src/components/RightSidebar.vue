@@ -171,7 +171,10 @@
               <span v-else class="terminal-text">{{ line.text }}</span>
             </div>
             <div v-if="termRunning" class="terminal-line running">
-              <n-spin size="small" />
+              <!-- 终端风格的忙碌指示：Braille 转轮字符动画，与等宽字体输出一致。
+                   原来的圆形 n-spin 是 UI 控件语言，混在纯文本终端里很违和。 -->
+              <span class="terminal-spinner">{{ termSpinnerChar }}</span>
+              <span class="terminal-text terminal-spinner-label">{{ t('chat.terminalRunning') }}</span>
             </div>
           </template>
         </div>
@@ -743,6 +746,22 @@ const termCwd = ref('')
 const termInput = ref('')
 const termLines = ref<TermLine[]>([])
 const termRunning = ref(false)
+// 终端风格转轮：Braille 点阵字符序列，每 80ms 前进一步，仅在命令执行期间走
+const TERM_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const termSpinIdx = ref(0)
+const termSpinnerChar = computed(() => TERM_SPINNER_FRAMES[termSpinIdx.value % TERM_SPINNER_FRAMES.length])
+let termSpinTimer: ReturnType<typeof setInterval> | null = null
+
+watch(termRunning, (running) => {
+  if (running && !termSpinTimer) {
+    termSpinTimer = setInterval(() => { termSpinIdx.value++ }, 80)
+  } else if (!running && termSpinTimer) {
+    clearInterval(termSpinTimer)
+    termSpinTimer = null
+    termSpinIdx.value = 0
+  }
+})
+
 const termCreating = ref(false)
 const termHistory = ref<string[]>([])
 const termHistoryIdx = ref(-1)
@@ -764,6 +783,10 @@ watch(() => chatStore.activeSessionId, () => {
 })
 
 onUnmounted(() => {
+  if (termSpinTimer) {
+    clearInterval(termSpinTimer)
+    termSpinTimer = null
+  }
   if (termSessionId.value) {
     void terminalApi.closeTerminal(termSessionId.value).catch(() => {})
   }
@@ -1563,6 +1586,13 @@ async function doUpload(files: File[]) {
 .terminal-line.status .status-ok { color: #18a058; }
 .terminal-line.status .status-bad { color: #d03050; }
 .terminal-line.running { padding: 4px 0; }
+.terminal-spinner {
+  display: inline-block;
+  width: 1.2em;
+  color: #18a058;
+  font-family: inherit;
+}
+.terminal-spinner-label { color: #999; }
 
 .terminal-input-row {
   display: flex;

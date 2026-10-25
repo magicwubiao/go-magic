@@ -372,6 +372,7 @@ export default {
     terminalStartFailed: 'Failed to start terminal',
     terminalExecFailed: 'Command failed',
     terminalPlaceholder: 'Type a command and press Enter',
+    terminalRunning: 'Running…',
     loadFilesFailed: 'Failed to load directory',
     newFile: 'New File',
     fileCreated: 'File created',
