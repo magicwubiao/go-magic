@@ -167,7 +167,7 @@
                 <span class="terminal-prompt-arrow">❯</span>
                 <span class="terminal-text">{{ line.text }}</span>
               </template>
-              <span v-else-if="line.kind === 'status'" class="terminal-text terminal-status" :class="line.text.startsWith('✗') ? 'status-bad' : 'status-ok'">{{ line.text }}</span>
+              <span v-else-if="line.kind === 'status'" class="terminal-text terminal-status status-bad">{{ line.text }}</span>
               <span v-else class="terminal-text">{{ line.text }}</span>
             </div>
             <div v-if="termRunning" class="terminal-line running">
@@ -860,11 +860,12 @@ async function runTerminalCommand() {
     for (const line of out.split('\n')) {
       termLines.value.push({ kind: 'out', text: line })
     }
-    // 状态徽标行：成功绿色、失败红色，附带耗时。
-    const status = res.exit_code === 0
-      ? `✓ ${res.duration_ms}ms`
-      : `✗ exit ${res.exit_code} · ${res.duration_ms}ms`
-    termLines.value.push({ kind: 'status', text: status })
+    // 成功不再追加任何状态行——真实终端里命令成功就是安静地返回，
+    // 「✓ 1315ms」这类徽标是聊天 UI 的语言。失败仍保留红色 exit 码行，
+    // 因为非零退出在终端里也是用户需要主动排查的信息。
+    if (res.exit_code !== 0) {
+      termLines.value.push({ kind: 'status', text: `✗ exit ${res.exit_code}` })
+    }
     if (res.cwd) termCwd.value = res.cwd
   } catch (e: any) {
     termLines.value.push({ kind: 'err', text: e?.message || t('chat.terminalExecFailed') })
@@ -1583,7 +1584,6 @@ async function doUpload(files: File[]) {
   font-size: 11px;
   opacity: 0.85;
 }
-.terminal-line.status .status-ok { color: #18a058; }
 .terminal-line.status .status-bad { color: #d03050; }
 .terminal-line.running { padding: 4px 0; }
 .terminal-spinner {
