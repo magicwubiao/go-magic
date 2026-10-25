@@ -199,6 +199,14 @@ func (s *Server) handleTerminalExec(w http.ResponseWriter, r *http.Request) {
 		ts.cwd = newCwd
 		ts.mu.Unlock()
 		cwd = newCwd
+		// 探测命令（cmd & cd / sh ; pwd）打印的路径是内部实现细节，
+		// 不该出现在用户看到的输出里——剥掉尾部这一行再回传。
+		decodedOut = strings.TrimRight(decodedOut, "\r\n")
+		if i := strings.LastIndexByte(decodedOut, '\n'); i >= 0 {
+			decodedOut = decodedOut[:i+1]
+		} else {
+			decodedOut = ""
+		}
 	}
 
 	jsonResponse(w, map[string]interface{}{
