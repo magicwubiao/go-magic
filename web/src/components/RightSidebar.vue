@@ -1,7 +1,7 @@
 <template>
   <!-- Mobile backdrop -->
   <div v-if="mobileVisible" class="right-sidebar-backdrop" @click="$emit('update:mobileVisible', false)"></div>
-  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }" :style="!isCollapsed && !isMobile ? { width: sidebarWidth + 'px' } : undefined">
+  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }" :style="!isCollapsed && !isMobile ? { width: effectiveSidebarWidth + 'px' } : undefined">
     <!-- Resize handle (desktop only) -->
     <div
       v-if="!isCollapsed && !isMobile"
@@ -663,6 +663,20 @@ function loadSidebarWidth(): number {
 }
 
 const sidebarWidth = ref(loadSidebarWidth())
+
+// 视口可用宽度钳制：聊天区有 min-width: 360px，侧栏自身 flex-shrink: 0，
+// 若不按窗口宽度钳制，拉到最大时会整体溢出视口右缘。
+// CHAT_MIN_WIDTH 与 ChatView 的 .chat-main min-width 保持一致。
+const CHAT_MIN_WIDTH = 360
+const SIDEBAR_EDGE_ALLOWANCE = 2 // 左边框 + resize 热区余量
+const windowWidth = ref(window.innerWidth)
+window.addEventListener('resize', () => {
+  windowWidth.value = window.innerWidth
+})
+const maxSidebarWidth = computed(() =>
+  Math.max(SIDEBAR_WIDTH_MIN, windowWidth.value - CHAT_MIN_WIDTH - SIDEBAR_EDGE_ALLOWANCE)
+)
+const effectiveSidebarWidth = computed(() => Math.min(sidebarWidth.value, maxSidebarWidth.value))
 
 let resizing = false
 function startResize(e: MouseEvent) {
