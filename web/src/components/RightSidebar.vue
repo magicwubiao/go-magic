@@ -1,7 +1,15 @@
 <template>
   <!-- Mobile backdrop -->
   <div v-if="mobileVisible" class="right-sidebar-backdrop" @click="$emit('update:mobileVisible', false)"></div>
-  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }">
+  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }" :style="!isCollapsed && !isMobile ? { width: sidebarWidth + 'px' } : undefined">
+    <!-- Resize handle (desktop only) -->
+    <div
+      v-if="!isCollapsed && !isMobile"
+      class="resize-handle"
+      @mousedown="startResize"
+      @dblclick="resetWidth"
+      :title="t('sidebar.resizeHint')"
+    ></div>
     <!-- Collapse toggle button (desktop only) -->
 <n-button
       size="small"
@@ -112,13 +120,74 @@
           <n-icon :component="FlagOutline" :size="14" />
           <span>{{ t('goals.title') }}</span>
         </div>
-        <div 
-          class="tab-item" 
+        <div
+          class="tab-item"
           :class="{ active: activeTab === 'files' }"
           @click="activeTab = 'files'"
         >
           <n-icon :component="FolderOpenOutline" :size="14" />
           <span>{{ t('chat.files') }}</span>
+        </div>
+        <div
+          class="tab-item"
+          :class="{ active: activeTab === 'terminal' }"
+          @click="activeTab = 'terminal'"
+        >
+          <n-icon :component="TerminalOutline" :size="14" />
+          <span>{{ t('chat.terminal') }}</span>
+        </div>
+      </div>
+
+      <!-- Terminal Tab -->
+      <div v-if="activeTab === 'terminal'" class="tab-content terminal-tab term-light">
+        <div class="tab-header terminal-header">
+          <div class="terminal-header-left">
+            <n-icon :component="TerminalOutline" :size="15" color="#18a058" />
+            <n-text strong style="font-size: 12px;">{{ t('chat.terminal') }}</n-text>
+            <span class="terminal-cwd-chip" :title="termCwd">{{ termCwdShort }}</span>
+          </div>
+          <n-space :size="2" align="center">
+            <n-button size="tiny" quaternary :title="t('chat.terminalClear')" @click="termLines = []">
+              <template #icon><n-icon :component="RefreshOutline" :size="14" /></template>
+            </n-button>
+            <n-button size="tiny" quaternary :title="t('chat.terminalRestart')" @click="restartTerminal" :loading="termCreating">
+              <template #icon><n-icon :component="PowerOutline" :size="14" /></template>
+            </n-button>
+          </n-space>
+        </div>
+        <div class="terminal-output" ref="termOutputRef">
+          <div v-if="!termSessionId && !termCreating" class="terminal-empty">
+            <n-icon :component="TerminalOutline" :size="28" :depth="3" style="opacity: 0.35;" />
+            <n-text depth="3" style="font-size: 12px; margin-top: 8px;">{{ t('chat.terminalEmpty') }}</n-text>
+            <n-button size="tiny" style="margin-top: 8px;" @click="ensureTerminal">{{ t('chat.terminalStart') }}</n-button>
+          </div>
+          <template v-else>
+            <div v-for="(line, i) in termLines" :key="i" class="terminal-line" :class="line.kind">
+              <template v-if="line.kind === 'cmd'">
+                <span class="terminal-prompt-arrow">❯</span>
+                <span class="terminal-text">{{ line.text }}</span>
+              </template>
+              <span v-else-if="line.kind === 'status'" class="terminal-text terminal-status" :class="line.text.startsWith('✗') ? 'status-bad' : 'status-ok'">{{ line.text }}</span>
+              <span v-else class="terminal-text">{{ line.text }}</span>
+            </div>
+            <div v-if="termRunning" class="terminal-line running">
+              <n-spin size="small" />
+            </div>
+          </template>
+        </div>
+        <div class="terminal-input-row" v-if="termSessionId">
+          <span class="terminal-prompt-arrow terminal-prompt-static">❯</span>
+          <input
+            ref="termInputRef"
+            v-model="termInput"
+            class="terminal-input"
+            :disabled="termRunning"
+            :placeholder="t('chat.terminalPlaceholder')"
+            @keyup.enter="runTerminalCommand"
+            @keydown.up.prevent="termHistoryNav(1)"
+            @keydown.down.prevent="termHistoryNav(-1)"
+            spellcheck="false"
+          />
         </div>
       </div>
 
@@ -410,9 +479,9 @@
 
     <!-- Collapsed indicator -->
     <div v-if="isCollapsed" class="collapsed-indicator">
-      <n-icon :component="activeTab === 'goals' ? FlagOutline : FolderOpenOutline" :size="20" :color="activeTab === 'goals' ? '#2080f0' : '#18a058'" />
+      <n-icon :component="collapsedIcon" :size="20" :color="collapsedColor" />
       <n-text style="font-size: 10px; writing-mode: vertical-rl; margin-top: 4px;">
-        {{ activeTab === 'goals' ? t('goals.title') : t('chat.files') }}
+        {{ collapsedLabel }}
       </n-text>
     </div>
 
@@ -498,6 +567,8 @@ import {
   CloudUploadOutline,
   EllipsisVerticalOutline,
   HomeOutline,
+  TerminalOutline,
+  PowerOutline,
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useGoalsStore } from '@/stores/goals'
@@ -510,6 +581,7 @@ import * as sessionsApi from '@/api/sessions'
 
 // 文件预览（含高亮）已抽为公共组件，RightSidebar 与 FilesView 复用
 import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
+import * as terminalApi from '@/api/terminal'
 
 const props = defineProps<{
   mobileVisible?: boolean
@@ -576,7 +648,195 @@ async function removeTodo(id: string) {
 }
 
 const isCollapsed = ref(true)
-const activeTab = ref<'goals' | 'files'>('goals')
+const activeTab = ref<'goals' | 'files' | 'terminal'>('goals')
+
+// ===== Sidebar resize (desktop only) =====
+const SIDEBAR_WIDTH_KEY = 'right_sidebar_width'
+const SIDEBAR_WIDTH_MIN = 220
+const SIDEBAR_WIDTH_MAX = 640
+const SIDEBAR_WIDTH_DEFAULT = 280
+
+function loadSidebarWidth(): number {
+  const raw = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) || '', 10)
+  if (!Number.isFinite(raw)) return SIDEBAR_WIDTH_DEFAULT
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, raw))
+}
+
+const sidebarWidth = ref(loadSidebarWidth())
+
+let resizing = false
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  resizing = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  const onMove = (ev: MouseEvent) => {
+    if (!resizing) return
+    // 侧栏在右侧：向左拖 = 变宽。ev.clientX 到窗口右缘的距离即目标宽度。
+    const target = window.innerWidth - ev.clientX
+    sidebarWidth.value = Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, target))
+  }
+  const onUp = () => {
+    resizing = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
+function resetWidth() {
+  sidebarWidth.value = SIDEBAR_WIDTH_DEFAULT
+  localStorage.removeItem(SIDEBAR_WIDTH_KEY)
+}
+
+const collapsedIcon = computed(() =>
+  activeTab.value === 'goals' ? FlagOutline : activeTab.value === 'terminal' ? TerminalOutline : FolderOpenOutline
+)
+const collapsedColor = computed(() =>
+  activeTab.value === 'goals' ? '#2080f0' : activeTab.value === 'terminal' ? '#555' : '#18a058'
+)
+const collapsedLabel = computed(() =>
+  activeTab.value === 'goals' ? t('goals.title') : activeTab.value === 'terminal' ? t('chat.terminal') : t('chat.files')
+)
+
+// ===== Terminal tab =====
+interface TermLine {
+  kind: 'cmd' | 'out' | 'err' | 'status'
+  text: string
+}
+// 终端固定使用明亮主题（此前提供过明暗切换，按需求移除）。
+
+// 终端头部 cwd 徽标：只显示最后一段路径，完整路径放 title。
+const termCwdShort = computed(() => {
+  if (!termCwd.value) return ''
+  const parts = termCwd.value.replace(/[\\/]+$/, '').split(/[\\/]/)
+  return parts[parts.length - 1] || termCwd.value
+})
+
+// 去掉程序输出里的 ANSI 转义序列（无 PTY 时部分程序仍会输出颜色码，
+// 原样显示会出现 "ESC[32m" 之类的噪声）。
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
+}
+
+const termSessionId = ref('')
+const termCwd = ref('')
+const termInput = ref('')
+const termLines = ref<TermLine[]>([])
+const termRunning = ref(false)
+const termCreating = ref(false)
+const termHistory = ref<string[]>([])
+const termHistoryIdx = ref(-1)
+const termOutputRef = ref<HTMLElement | null>(null)
+const termInputRef = ref<HTMLInputElement | null>(null)
+
+watch(activeTab, async (tab) => {
+  if (tab === 'terminal' && !termSessionId.value) {
+    await ensureTerminal()
+  }
+  if (tab === 'terminal') {
+    nextTick(() => termInputRef.value?.focus())
+  }
+})
+
+watch(() => chatStore.activeSessionId, () => {
+  // 切会话 = 切工作目录，旧终端的 cwd 不再适用，重开。
+  if (termSessionId.value) void restartTerminal()
+})
+
+onUnmounted(() => {
+  if (termSessionId.value) {
+    void terminalApi.closeTerminal(termSessionId.value).catch(() => {})
+  }
+})
+
+async function ensureTerminal() {
+  if (termSessionId.value || termCreating.value) return
+  termCreating.value = true
+  try {
+    const s = await terminalApi.createTerminal(chatStore.activeSessionId || undefined)
+    termSessionId.value = s.id
+    termCwd.value = s.cwd
+  } catch (e: any) {
+    message.error(e?.message || t('chat.terminalStartFailed'))
+  } finally {
+    termCreating.value = false
+  }
+}
+
+async function restartTerminal() {
+  if (termSessionId.value) {
+    const old = termSessionId.value
+    termSessionId.value = ''
+    void terminalApi.closeTerminal(old).catch(() => {})
+  }
+  termLines.value = []
+  await ensureTerminal()
+  nextTick(() => termInputRef.value?.focus())
+}
+
+function scrollTermBottom() {
+  nextTick(() => {
+    const el = termOutputRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function termHistoryNav(dir: number) {
+  if (!termHistory.value.length) return
+  // dir=1 -> 上一条（更早），dir=-1 -> 下一条（更新）
+  let idx = termHistoryIdx.value
+  if (dir > 0) {
+    idx = idx < 0 ? termHistory.value.length - 1 : Math.max(0, idx - 1)
+  } else {
+    idx = idx < 0 ? -1 : idx + 1
+    if (idx >= termHistory.value.length) {
+      termHistoryIdx.value = -1
+      termInput.value = ''
+      return
+    }
+  }
+  termHistoryIdx.value = idx
+  termInput.value = termHistory.value[idx] || ''
+}
+
+async function runTerminalCommand() {
+  const cmd = termInput.value.trim()
+  if (!cmd || !termSessionId.value || termRunning.value) return
+  termInput.value = ''
+  termHistoryIdx.value = -1
+  if (termHistory.value[termHistory.value.length - 1] !== cmd) {
+    termHistory.value.push(cmd)
+    if (termHistory.value.length > 100) termHistory.value.shift()
+  }
+  termLines.value.push({ kind: 'cmd', text: cmd })
+  scrollTermBottom()
+  termRunning.value = true
+  try {
+    const res = await terminalApi.execTerminal(termSessionId.value, cmd)
+    const out = stripAnsi(res.output || '').replace(/\r\n/g, '\n')
+    for (const line of out.split('\n')) {
+      termLines.value.push({ kind: 'out', text: line })
+    }
+    // 状态徽标行：成功绿色、失败红色，附带耗时。
+    const status = res.exit_code === 0
+      ? `✓ ${res.duration_ms}ms`
+      : `✗ exit ${res.exit_code} · ${res.duration_ms}ms`
+    termLines.value.push({ kind: 'status', text: status })
+    if (res.cwd) termCwd.value = res.cwd
+  } catch (e: any) {
+    termLines.value.push({ kind: 'err', text: e?.message || t('chat.terminalExecFailed') })
+  } finally {
+    termRunning.value = false
+    scrollTermBottom()
+    nextTick(() => termInputRef.value?.focus())
+  }
+}
 const expandedGoals = ref<string[]>([])
 const goalSessions = ref<Record<string, any[]>>({})
 const sessionLoading = ref<Record<string, boolean>>({})
@@ -1195,12 +1455,131 @@ async function doUpload(files: File[]) {
   width: 48px;
 }
 
+/* Resize handle: 6px hot zone on the sidebar's left edge */
+.resize-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 11;
+}
+.resize-handle:hover {
+  background: rgba(24, 160, 88, 0.25);
+}
+
+/* ---- Terminal tab（固定明亮主题）---- */
+.terminal-tab { min-height: 0; }
+.terminal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 窄侧栏下标题不换行、按钮组不折行，空间让给 cwd 徽标 */
+.terminal-header { flex-wrap: nowrap; }
+.terminal-header .tab-header-left,
+.terminal-header-left .n-text {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.terminal-header .n-space {
+  flex-wrap: nowrap !important;
+  flex-shrink: 0;
+}
+.terminal-cwd-chip {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 11px;
+  /* 自然宽度、空间不足时截断；给一个上限防止把按钮组挤出容器 */
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(24, 160, 88, 0.12);
+  color: #18a058;
+}
+
+.terminal-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  min-height: 120px;
+  /* 明亮主题：暖白纸感底 + 墨色文字 */
+  background: #f7f8f5;
+  color: #2c3440;
+}
+
+.terminal-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.terminal-line { white-space: pre-wrap; word-break: break-all; }
+/* 命令行：提示符绿色三角 + 命令文本加粗着色 */
+.terminal-line.cmd { margin-top: 6px; }
+.terminal-line.cmd:first-child { margin-top: 0; }
+.terminal-line.cmd .terminal-text {
+  color: #1f6feb;
+  font-weight: 600;
+}
+.terminal-prompt-arrow {
+  color: #18a058;
+  font-weight: 700;
+  margin-right: 6px;
+}
+/* 错误行红色 */
+.terminal-line.err .terminal-text { color: #d03050; }
+/* 状态徽标行：小号浅色，✓ 绿 / ✗ 红 */
+.terminal-line.status { margin: 2px 0 0 0; }
+.terminal-line.status .terminal-status {
+  font-size: 11px;
+  opacity: 0.85;
+}
+.terminal-line.status .status-ok { color: #18a058; }
+.terminal-line.status .status-bad { color: #d03050; }
+.terminal-line.running { padding: 4px 0; }
+
+.terminal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  border-top: 1px solid #e0e2e6;
+  background: #ffffff;
+}
+.terminal-prompt-static { margin-right: 0; }
+.terminal-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  color: #2c3440;
+}
+.terminal-input::placeholder { color: #b0b5bd; }
+
 .collapse-toggle {
   position: absolute;
   left: -14px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 10;
+  /* 必须高于左侧 resize-handle（z-index 11），否则拖拽热区盖住按钮右半边，
+     按钮在缝隙里点不到。 */
+  z-index: 12;
   background: #fff !important;
   border: 1px solid #e0e0e0 !important;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
@@ -1729,6 +2108,10 @@ async function doUpload(files: File[]) {
   .collapse-toggle {
     background: #1e1e1e !important;
     border-color: #333 !important;
+  }
+
+  .resize-handle:hover {
+    background: rgba(24, 160, 88, 0.35);
   }
 
   .right-sidebar-backdrop {

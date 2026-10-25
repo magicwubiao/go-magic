@@ -98,8 +98,13 @@ type Server struct {
 	uploadsMeta *uploadsMetaStore
 	provider    provider.Provider
 	toolReg     *tool.Registry
-	skillMgr    *skills.Manager
-	magicHome   string
+
+	// terminalMu/terminalSessions 保护右侧栏 Web 终端的持久状态
+	// （每个终端会话只记一个当前 cwd）。见 terminal.go。
+	terminalMu       sync.Mutex
+	terminalSessions map[string]*terminalSession
+	skillMgr         *skills.Manager
+	magicHome        string
 	// runtimeProfile 是本次进程真正在用的分身（启动时定死）。
 	// 切换分身只改配置，cortex 与启发时注入的 .env 要重启才跟得上，
 	// 因此不能用 cfg.Profile 当"当前分身"。见 Server.activeProfile。
@@ -1679,6 +1684,10 @@ func (s *Server) buildRouter() *http.ServeMux {
 
 	// Env
 	mux.HandleFunc("/api/env", withCORS(requireAuth(s.handleEnv)))
+
+	// Web terminal (right sidebar): create/query/release sessions + exec
+	mux.HandleFunc("/api/terminal", withCORS(requireAuth(s.handleTerminal)))
+	mux.HandleFunc("/api/terminal/exec", withCORS(requireAuth(s.handleTerminalExec)))
 
 	mux.HandleFunc("/api/fs/dirs", withCORS(requireAuth(s.handleListDirs)))
 	mux.HandleFunc("/api/fs/workdir-history", withCORS(requireAuth(s.handleWorkDirHistory)))

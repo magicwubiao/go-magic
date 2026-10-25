@@ -3,6 +3,11 @@ export default {
     title: 'Magic AI',
     description: 'AI 网关管理'
   },
+  sidebar: {
+    expand: '展开',
+    collapse: '折叠',
+    resizeHint: '拖动调整宽度，双击恢复默认'
+  },
   nav: {
     chat: '会话',
     gateway: '网关',
@@ -361,6 +366,14 @@ export default {
     folderCreateFailed: '创建文件夹失败',
     files: '文件',
     filesEmpty: '空目录',
+    terminal: '终端',
+    terminalClear: '清空输出',
+    terminalRestart: '重启终端',
+    terminalEmpty: '终端未启动',
+    terminalStart: '启动终端',
+    terminalStartFailed: '终端启动失败',
+    terminalExecFailed: '命令执行失败',
+    terminalPlaceholder: '输入命令，回车执行',
     loadFilesFailed: '加载目录失败',
     newFile: '新建文件',
     fileCreated: '文件已创建',

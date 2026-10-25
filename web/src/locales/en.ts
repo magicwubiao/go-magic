@@ -3,6 +3,11 @@ export default {
     title: 'Magic AI',
     description: 'AI Gateway Management'
   },
+  sidebar: {
+    expand: 'Expand',
+    collapse: 'Collapse',
+    resizeHint: 'Drag to resize, double-click to reset'
+  },
   nav: {
     chat: 'Sessions',
     gateway: 'Gateway',
@@ -359,6 +364,14 @@ export default {
     folderCreateFailed: 'Failed to create folder',
     files: 'Files',
     filesEmpty: 'Empty directory',
+    terminal: 'Terminal',
+    terminalClear: 'Clear output',
+    terminalRestart: 'Restart terminal',
+    terminalEmpty: 'Terminal not started',
+    terminalStart: 'Start terminal',
+    terminalStartFailed: 'Failed to start terminal',
+    terminalExecFailed: 'Command failed',
+    terminalPlaceholder: 'Type a command and press Enter',
     loadFilesFailed: 'Failed to load directory',
     newFile: 'New File',
     fileCreated: 'File created',
