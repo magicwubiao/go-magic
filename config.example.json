@@ -58,6 +58,17 @@
       "models": ["llama3.3", "qwen3", "codellama"]
     }
   },
+  "image_gen": {
+    "comment_api_key": "Image generation key for the image_gen / image_edit tools. Empty = both tools stay out of the model's tool list. IMAGE_GEN_API_KEY overrides this value.",
+    "api_key": "",
+    "comment_provider": "dall-e (default), stable-diffusion, midjourney, together.",
+    "provider": "dall-e",
+    "comment_base_url": "Override the API base (self-hosted or relay gateway). Empty = official endpoint per provider.",
+    "base_url": "",
+    "default_size": "1024x1024",
+    "default_style": "digital-art",
+    "output_dir": "./generated_images"
+  },
   "bot_mode": {
     "enabled": false,
     "comment_inject_bot_protocol": "Add the bot-to-bot messaging protocol section to every bot's system prompt. Omit for the default (true).",

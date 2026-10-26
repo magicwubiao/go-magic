@@ -129,12 +129,6 @@ func TestOptionalToolAvailability(t *testing.T) {
 		t.Error("image_gen with API key should be available")
 	}
 
-	// 未配置 gateway 的 send_message 应不可用
-	msg := NewSendMessageTool(nil)
-	if msg.Available() {
-		t.Error("send_message without gateway should be unavailable")
-	}
-
 	// 未配置 HASS_URL/HASS_TOKEN 的 HA 工具应不可用
 	ha := NewHATool()
 	if ha.Available() {

@@ -177,11 +177,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	// LSP diagnostic tool - semantic analysis after file writes
 	r.Register(NewLSPDiagnosticTool(workDir))
 
-	// Optional tools - these require external API configuration and are not registered by default
-	// Call RegisterOptionalTools() after RegisterAll() to enable them
-	// r.Register(NewImageGenerationTool())  // Optional
-	// r.Register(NewTTSTool())               // Optional
-	// r.Register(NewVideoAnalyzeTool())      // Optional
+	// Media tools (image / voice / audio / X search). 这些工具需要外部 API Key，
+	// 但都实现了 AvailabilityChecker：没配 key 时不会出现在工具清单里，等于没注册。
+	// 注册在此处而不是某个"可选"方法里，是为了让 web / CLI / bot / gateway / cron
+	// 五个入口一致地拿到同一套工具（此前 RegisterOptionalTools 无人调用，整批失效）。
+	r.RegisterMediaTools()
 
 	// Cron job tool
 	r.Register(NewCronJobTool())
@@ -249,12 +249,8 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Vision analysis (hermes-agent vision toolset)
 	r.Register(NewVisionAnalyzeTool())
 
-	// Vision
-	r.Register(NewVisionAnalyzeTool())
-
-	// Desktop GUI control (computer use). 注册在这里而不是 RegisterOptionalTools：
-	// 后者没有任何调用方（见 registry.go 末尾的说明），注册进去等于死代码。
-	// 平台依赖是否齐备由 ComputerUseTool.Available() 在暴露工具清单时过滤。
+	// Desktop GUI control (computer use). 平台依赖是否齐备由
+	// ComputerUseTool.Available() 在暴露工具清单时过滤。
 	r.Register(NewComputerUseTool(""))
 
 	// Legacy web tools - lightweight goquery-based
@@ -309,47 +305,6 @@ func (r *Registry) RegisterAll(workDir string) {
 	// clarify 在 Web chat 会挂起等待用户答复（卡片交互），给足等待窗口；
 	// 内部 bridge 另有同长的答复时限，工具超时只是最后兜底。
 	r.SetTimeout("clarify", 300*time.Second)
-}
-
-// RegisterOptionalTools registers tools that require external API configuration.
-// These are not registered by default to avoid confusing the LLM with non-functional placeholder tools.
-func (r *Registry) RegisterOptionalTools() {
-	r.Register(NewImageGenerationTool(nil))
-	r.Register(NewImageEditTool(nil))
-	r.Register(NewTTSTool())
-	r.Register(NewASRTool())
-	r.Register(NewASRAvailableProvidersTool())
-	r.Register(NewTTSAvailableVoicesTool())
-	r.Register(NewAudioPlayTool())
-	r.Register(NewAudioDownloadTool())
-	r.Register(NewVideoAnalyzeTool())
-
-	// Video generation (pluggable backends: Replicate, Fal.ai, Stability AI)
-	r.Register(NewVideoGenerateTool(nil))
-
-	// X/Twitter search
-	r.Register(NewXSearchTool("", ""))
-
-	// Send message - cross-platform messaging (requires gateway)
-	// Call SetGateway on the tool after gateway is initialized
-	r.Register(NewSendMessageTool(nil))
-}
-
-// RegisterImageGenTool 注册图片生成工具（带配置）
-func (r *Registry) RegisterImageGenTool(config *ImageGenConfig) {
-	if config != nil && config.APIKey != "" {
-		r.Register(NewImageGenerationTool(config))
-		r.SetTimeout("image_gen", 180*time.Second)
-		r.Register(NewImageEditTool(config))
-		r.SetTimeout("image_edit", 180*time.Second)
-	}
-}
-
-// RegisterOptionalToolsWithConfig 使用配置注册可选工具
-func (r *Registry) RegisterOptionalToolsWithConfig(imageGenConfig *ImageGenConfig) {
-	r.RegisterImageGenTool(imageGenConfig)
-	r.Register(NewTTSTool())
-	r.Register(NewVideoAnalyzeTool())
 }
 
 // RegisterEmailTool 注册邮件发送工具（需要配置）

@@ -175,11 +175,12 @@ func InitializeDefaultToolsets() {
 		Includes:    []string{},
 	})
 
-	// TTS
+	// 语音。工具名是 tts/asr（不是 text_to_speech —— 清单里写错名字时
+	// toolset 过滤会静默漏掉整个语音能力，模型永远看不到）。
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "tts",
-		Description: "Text-to-speech tools",
-		Tools:       []string{"text_to_speech"},
+		Description: "Text-to-speech and speech-to-text tools",
+		Tools:       []string{"tts", "asr", "tts_available_voices", "asr_available_providers"},
 		Includes:    []string{},
 	})
 

@@ -116,6 +116,9 @@ type Config struct {
 	MCP      *MCPConfig      `json:"mcp,omitempty"`
 	SubAgent *SubAgentConfig `json:"subagent,omitempty"`
 	Voice    *VoiceConfig    `json:"voice,omitempty"`
+	// ImageGen 图片生成配置段。nil（配置里没写）= 未配置，image_gen/image_edit
+	// 不会出现在工具清单里；IMAGE_GEN_API_KEY 等环境变量可覆盖。
+	ImageGen *ImageGenConfig `json:"image_gen,omitempty"`
 	// Bot Mode: named agent profiles with persistent canonical chats
 	BotMode *BotModeConfig `json:"bot_mode,omitempty"`
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
@@ -498,6 +501,23 @@ type SubAgentConfig struct {
 
 // VoiceConfig represents voice configuration (alias for voice.VoiceConfig)
 type VoiceConfig = voice.VoiceConfig
+
+// ImageGenConfig 图片生成工具（image_gen / image_edit）的配置。
+//
+// 该工具的错误提示一直要求用户"在 config.json 里配 image_gen_api_key"，但这个
+// 字段从未存在过——配置解析会静默丢弃，工具永远拿不到 key，于是永远不可用。
+// 键名保持与工具原本的约定（image_gen_api_key 等）一致，只是搬进结构化配置段。
+type ImageGenConfig struct {
+	// APIKey 图片生成服务的 Key。为空 = 未配置，工具不会暴露给模型。
+	APIKey string `json:"api_key,omitempty"`
+	// Provider 取值 dall-e / stable-diffusion / midjourney / together，默认 dall-e。
+	Provider string `json:"provider,omitempty"`
+	// BaseURL 兼容自建/中转网关；为空时按 provider 取官方地址。
+	BaseURL         string `json:"base_url,omitempty"`
+	DefaultSize     string `json:"default_size,omitempty"`
+	DefaultStyle    string `json:"default_style,omitempty"`
+	OutputDirectory string `json:"output_dir,omitempty"`
+}
 
 // ApprovalConfig represents command approval system configuration
 type ApprovalConfig struct {
@@ -919,6 +939,17 @@ func (c *Config) Save() error {
 				} else {
 					c.Voice.Providers[provName] = existingCreds
 				}
+			}
+		}
+
+		// 图片生成配置同理：前端保存配置时不回传 api_key（只回传非敏感字段），
+		// 磁盘上有 key 就必须保留，否则"改个别的设置"会把图片生成的 key 抹掉。
+		if c.ImageGen != nil && existingCfg.ImageGen != nil {
+			if c.ImageGen.APIKey == "" {
+				c.ImageGen.APIKey = existingCfg.ImageGen.APIKey
+			}
+			if c.ImageGen.BaseURL == "" {
+				c.ImageGen.BaseURL = existingCfg.ImageGen.BaseURL
 			}
 		}
 	}

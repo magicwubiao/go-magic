@@ -2,6 +2,8 @@ package tool
 
 import (
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -19,14 +21,10 @@ import (
 func (t *ImageGenerationTool) Available() bool { return t.config != nil && t.config.APIKey != "" }
 func (t *ImageEditTool) Available() bool       { return t.config != nil && t.config.APIKey != "" }
 
-// VideoGenerateTool：需要视频生成 API Key
-func (t *VideoGenerateTool) Available() bool { return t.config != nil && t.config.APIKey != "" }
+// VideoGenerateTool 已移除（三个 provider 的调用均跑不通，见 media_tools.go 的说明）。
 
-// XSearchTool：需要 XAI API Key 或 Bearer Token
+// XSearchTool：需要 X API Bearer Token（X_BEARER_TOKEN / X_API_KEY）
 func (t *XSearchTool) Available() bool { return t.apiKey != "" || t.bearerToken != "" }
-
-// SendMessageTool：需要已初始化的 gateway
-func (t *SendMessageTool) Available() bool { return t.gateway != nil }
 
 // EmailTool / SMSTool：需要相应配置
 func (t *EmailTool) Available() bool { return t.config != nil && t.config.SMTPHost != "" }
@@ -80,6 +78,8 @@ func ResetEnvProbes() {
 	visionCfgOK = false
 	voiceCfgOnce = sync.Once{}
 	voiceCfgOK = false
+	audioPlayerOnce = sync.Once{}
+	audioPlayerOK = false
 }
 
 // TTSTool：需要显式注入 voice manager，或配置了语音 API Key
@@ -87,6 +87,44 @@ func (t *TTSTool) Available() bool { return t.manager != nil || voiceAPIKeyConfi
 
 // ASRTool：与 TTS 共用语音配置
 func (t *ASRTool) Available() bool { return voiceAPIKeyConfigured() }
+
+// TTSAvailableVoicesTool / ASRAvailableProvidersTool：语音能力查询工具。
+// 门槛与 TTS/ASR 一致 —— 一个 provider 都没配时，查出来也全是 available:false，
+// 只会浪费一轮对话。
+func (t *TTSAvailableVoicesTool) Available() bool    { return voiceAPIKeyConfigured() }
+func (t *ASRAvailableProvidersTool) Available() bool { return voiceAPIKeyConfigured() }
+
+// AudioPlayTool：需要本机存在可用的音频播放器。无头服务器（没有声卡/播放器）
+// 上播放只会报 "no audio player found"，不该让模型看到这个工具。
+var (
+	audioPlayerOnce sync.Once
+	audioPlayerOK   bool
+)
+
+func audioPlayerAvailable() bool {
+	audioPlayerOnce.Do(func() {
+		var candidates []string
+		switch runtime.GOOS {
+		case "darwin":
+			candidates = []string{"afplay"}
+		case "windows":
+			// PlayAudio 走 PowerShell + MediaPlayer。不查 powershell.exe 是因为
+			// PATH 里通常是 powershell（无扩展名），exec.LookPath 会补 PATHEXT。
+			candidates = []string{"powershell"}
+		default:
+			candidates = []string{"mpg123", "mpg321", "ffplay", "paplay"}
+		}
+		for _, bin := range candidates {
+			if _, err := exec.LookPath(bin); err == nil {
+				audioPlayerOK = true
+				return
+			}
+		}
+	})
+	return audioPlayerOK
+}
+
+func (t *AudioPlayTool) Available() bool { return audioPlayerAvailable() }
 
 // VisionAnalyzeTool：需要视觉后端 —— 独立 VISION_API_KEY / OPENAI_API_KEY，
 // 或当前对话模型本身具备视觉能力（与 Execute 的回退链保持一致）。两者都没有
@@ -134,9 +172,7 @@ func visionBackendConfigured() bool {
 var (
 	_ AvailabilityChecker = (*ImageGenerationTool)(nil)
 	_ AvailabilityChecker = (*ImageEditTool)(nil)
-	_ AvailabilityChecker = (*VideoGenerateTool)(nil)
 	_ AvailabilityChecker = (*XSearchTool)(nil)
-	_ AvailabilityChecker = (*SendMessageTool)(nil)
 	_ AvailabilityChecker = (*EmailTool)(nil)
 	_ AvailabilityChecker = (*SMSTool)(nil)
 	_ AvailabilityChecker = (*HATool)(nil)

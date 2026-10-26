@@ -524,25 +524,20 @@ func (t *AudioDownloadTool) Execute(ctx context.Context, params map[string]inter
 		format = "mp3" // 默认使用 mp3
 	}
 
-	// 确定输出路径
-	outputPath := ""
-	if op, ok := params["output_path"].(string); ok && op != "" {
-		outputPath = op
-	} else {
-		// 尝试从 URL 提取文件名
-		urlParts := strings.Split(url, "/")
-		filename := urlParts[len(urlParts)-1]
-		if filename == "" || !strings.Contains(filename, ".") {
-			home, _ := os.UserHomeDir()
-			filename = fmt.Sprintf("download_audio.%s", format)
-			outputPath = filepath.Join(home, filename)
-		} else {
-			home, _ := os.UserHomeDir()
-			outputPath = filepath.Join(home, filename)
+	// 确定输出路径：默认落到会话工作目录。此前默认写 $HOME，
+	// 等于给模型开了一条绕过 write_file 沙箱的任意路径写入通道。
+	outputPath, _ := params["output_path"].(string)
+	if outputPath == "" {
+		filename := "download_audio." + format
+		// 去掉 query 再取末段，避免 "a.mp3?token=xxx" 变成带参数的非法文件名。
+		parts := strings.Split(strings.Split(url, "?")[0], "/")
+		if last := parts[len(parts)-1]; last != "" && strings.Contains(last, ".") {
+			filename = last
 		}
+		outputPath = filename
 	}
 
-	absPath, err := filepath.Abs(outputPath)
+	absPath, err := resolvePath(ctx, outputPath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid output path: %w", err)
 	}
