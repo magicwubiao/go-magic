@@ -1776,6 +1776,9 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// Bots
 	mux.HandleFunc("/api/bots", withCORS(requireAuth(s.handleBots)))
 	mux.HandleFunc("/api/bots/", withCORS(requireAuth(s.handleBotByID)))
+	// AI 填写：精确路径，ServeMux 最长匹配优先于 /api/bots/ 子树，
+	// 不会被名为 "ai-fill" 的普通 Bot 路由命中。
+	mux.HandleFunc("/api/bots/ai-fill", withCORS(requireAuth(s.handleBotAIFill)))
 	// Bot Mode group chat rooms
 	mux.HandleFunc("/api/rooms", withCORS(requireAuth(s.handleRooms)))
 	mux.HandleFunc("/api/rooms/", withCORS(requireAuth(s.handleRoomByID)))

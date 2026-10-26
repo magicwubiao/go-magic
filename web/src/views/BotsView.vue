@@ -679,6 +679,22 @@
             <n-text depth="3" style="font-size: 12px;">{{ t('bots.nameHint') }}</n-text>
           </template>
         </n-form-item>
+        <div v-if="!editingBot" class="ai-fill-box">
+          <n-input
+            v-model:value="aiFillIdea"
+            type="textarea"
+            :rows="2"
+            :placeholder="t('bots.aiFillPlaceholder')"
+            @keydown.enter.ctrl.prevent="handleAIFill"
+          />
+          <div class="ai-fill-actions">
+            <n-button size="small" secondary type="primary" :loading="aiFilling" :disabled="!aiFillIdea.trim()" @click="handleAIFill">
+              <template #icon><n-icon><FlashOutline /></n-icon></template>
+              {{ t('bots.aiFillButton') }}
+            </n-button>
+            <n-text depth="3" style="font-size: 12px;">{{ t('bots.aiFillHint') }}</n-text>
+          </div>
+        </div>
         <n-form-item :label="t('bots.titleLabel')">
           <n-input v-model:value="form.title" :placeholder="t('bots.titlePlaceholder')" />
         </n-form-item>
@@ -986,6 +1002,7 @@ import { stripZeroWidth } from '@/utils/text'
 import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
 import type { Bot, BotRoutine, BotMessage, BotMessageAttachment } from '@/api/bots'
+import { aiFillBot } from '@/api/bots'
 import type { RoomMessage, RoomSendResult, RoomAttachment, RoomSendPayload } from '@/api/rooms'
 import * as sessionsApi from '@/api/sessions'
 import { request } from '@/api/client'
@@ -1223,8 +1240,31 @@ function openCreateModal() {
   form.memory = ''
   form.avatar = ''
   form.env_text = ''
+  aiFillIdea.value = ''
   advancedExpanded.value = false
   showEditModal.value = true
+}
+
+// AI 填写：一句话描述 → LLM 生成表单字段回填（仅新建模式提供）。
+const aiFillIdea = ref('')
+const aiFilling = ref(false)
+
+async function handleAIFill() {
+  const idea = aiFillIdea.value.trim()
+  if (!idea || aiFilling.value) return
+  aiFilling.value = true
+  try {
+    const res = await aiFillBot(idea, form.name.trim() || undefined)
+    if (res.title) form.title = res.title
+    if (res.description) form.description = res.description
+    if (res.system_prompt) form.system_prompt = res.system_prompt
+    if (res.avatar) form.avatar = res.avatar
+    message.success(t('bots.aiFillDone'))
+  } catch (e: any) {
+    message.error(e.message || t('common.operationFailed'))
+  } finally {
+    aiFilling.value = false
+  }
 }
 
 function openEditModal(b: Bot | null) {
@@ -2523,6 +2563,21 @@ async function loadCandidates() {
   padding: 4px 0 10px;
   border-bottom: 1px solid #ececec;
   margin-bottom: 14px;
+}
+
+/* 新建 Bot 弹窗里的 AI 填写区（名称字段下方、表单其余字段上方） */
+.ai-fill-box {
+  margin: -6px 0 14px;
+  padding: 10px;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  background: rgba(24, 160, 88, 0.04);
+}
+.ai-fill-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
 }
 .advanced-toggle .n-icon {
   transition: transform 0.2s ease;

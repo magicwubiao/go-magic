@@ -94,6 +94,25 @@ export async function createBot(bot: Partial<Bot>): Promise<Bot> {
   return request('/bots', { method: 'POST', body: JSON.stringify(bot) })
 }
 
+/**
+ * AI 填写结果：按一句话用途描述生成的表单字段（均为建议值，
+ * 前端回填后由用户确认/修改，再走 createBot 正常保存）。
+ */
+export interface BotAIFillResult {
+  title: string
+  description: string
+  system_prompt: string
+  avatar?: string
+}
+
+/** AI 填写：根据一句话用途描述生成 Bot 的标题/描述/人设等表单字段。 */
+export async function aiFillBot(idea: string, name?: string): Promise<BotAIFillResult> {
+  return request('/bots/ai-fill', {
+    method: 'POST',
+    body: JSON.stringify({ idea, name: name || undefined }),
+  })
+}
+
 export async function getBot(name: string): Promise<Bot> {
   return request(`/bots/${name}`)
 }
