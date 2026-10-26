@@ -1138,10 +1138,20 @@ onUnmounted(() => {
 }
 
 .preview-content-container {
-  max-height: calc(85vh - 60px);
+  /* 卡片被 .modal-scroll 限高 85vh，正文必须再让出「卡片内边距 39px（上 19 + 下 20）
+     + 工具栏 49px（28 按钮 + 上下 14 内边距 + 1 边框 + 8 下间距）」。
+     原来只减 60px，总和是 85vh + 28px，长文本撑满时会超出卡片，
+     卡片跟着冒出第二根滚动条——就是「只多几十像素、只有长文本才触发」那根。
+     92 是 88 再留 4px 余量，防止字体渲染差异。 */
+  max-height: calc(85vh - 92px);
   overflow: auto;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
+}
+
+/* 编辑态多一条「未保存」提示条（约 40px），正文同步让出这段高度 */
+.unsaved-hint + .preview-content-container {
+  max-height: calc(85vh - 132px);
 }
 
 /* 全屏预览：撑满视口。采用纵向 flex 布局，顶部固定一条退出条，
@@ -1510,6 +1520,11 @@ onUnmounted(() => {
 
   .preview-content-container {
     max-height: 66vh;
+  }
+
+  /* 小屏同样要给「未保存」提示条让位，否则提示条出现时又会顶出卡片滚动条 */
+  .unsaved-hint + .preview-content-container {
+    max-height: calc(66vh - 40px);
   }
 
   .preview-content {
