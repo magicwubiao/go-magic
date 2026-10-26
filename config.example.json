@@ -69,6 +69,13 @@
     "default_style": "digital-art",
     "output_dir": "./generated_images"
   },
+  "tools": {
+    "comment_enabled_disabled": "Toolset switches (tools page in the web UI). Values are group ids: file, web, browser, terminal, coding, media, desktop, memory, task, kanban, delegation, skills, interaction, utility, smart_home, mcp — or a single tool name, or \"all\". disabled hides the group from the model; an enabled entry can exempt one group/tool. enabled is NOT a whitelist: items not listed stay enabled.",
+    "enabled": [],
+    "disabled": [],
+    "comment_strict_command_list": "true = execute_command only accepts the well-known toolchain list (npx/gofmt/dlv etc. get rejected). The list is a hint, not a security boundary.",
+    "strict_command_list": false
+  },
   "bot_mode": {
     "enabled": false,
     "comment_inject_bot_protocol": "Add the bot-to-bot messaging protocol section to every bot's system prompt. Omit for the default (true).",

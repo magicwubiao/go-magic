@@ -210,6 +210,8 @@ func (h *gatewayAgentHandler) applyConfig(cfg *config.Config) {
 	h.registry = tool.NewRegistry()
 	h.registry.SetStrictCommandList(cfg.Tools.StrictCommandList)
 	h.registry.RegisterAll(workDir)
+	// 工具集开关对网关 agent 同样生效（config tools.enabled/disabled）。
+	h.registry.SetToolsetFilter(cfg.Tools.Enabled, cfg.Tools.Disabled)
 
 	// Register skill invoke tool
 	if skillMgr, err := skills.NewManager(); err == nil {

@@ -125,149 +125,23 @@ func getAllRegisteredTools(registry *Registry) []Tool {
 	return tools
 }
 
-// InitializeDefaultToolsets registers all default toolsets
+// InitializeDefaultToolsets 注册所有默认工具集。
+//
+// 单工具分组直接从 ToolCategories（tool_categories.go，唯一事实来源）生成，
+// 不再手抄工具名 —— 旧版手抄清单与实际注册名漂移过三次（skill_invoke、
+// text_to_speech 都是不存在的名字）。组合预设（magic-cli/safe/...）引用分组 id。
 func InitializeDefaultToolsets() {
-	// Core web tools
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "web",
-		Description: "Web research and content extraction tools",
-		Tools:       []string{"web_search", "web_fetch"},
-		Includes:    []string{},
-	})
-
-	// File manipulation tools
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "file",
-		Description: "File manipulation tools: read, write, edit, search",
-		Tools:       []string{"read_file", "write_file", "file_edit", "list_files", "search_in_files", "directory_tree"},
-		Includes:    []string{},
-	})
-
-	// Terminal execution (local, docker, ssh backends)
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "terminal",
-		Description: "Terminal/command execution with multiple backends (local, docker, ssh)",
-		Tools:       []string{"execute_command", "terminal", "process"},
-		Includes:    []string{},
-	})
-
-	// Browser automation
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "browser",
-		Description: "Browser automation for web interaction (navigate, click, type, scroll, snapshot, vision)",
-		Tools: []string{
-			"browser_navigate", "browser_snapshot", "browser_click",
-			"browser_type", "browser_scroll", "browser_back",
-			"browser_forward", "browser_refresh", "browser_wait",
-			"browser_get_info", "browser_clear_cache", "browser_get_cookies",
-			"browser_get_images", "browser_console",
-			"browser_press", "browser_vision", "browser_dialog",
-			"web_fetch", "web_select", "web_search",
-		},
-		Includes: []string{},
-	})
-
-	// Vision and image
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "vision",
-		Description: "Image analysis and generation tools",
-		Tools:       []string{"image_gen", "image_edit", "video_analyze", "vision_analyze"},
-		Includes:    []string{},
-	})
-
-	// 语音。工具名是 tts/asr（不是 text_to_speech —— 清单里写错名字时
-	// toolset 过滤会静默漏掉整个语音能力，模型永远看不到）。
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "tts",
-		Description: "Text-to-speech and speech-to-text tools",
-		Tools:       []string{"tts", "asr", "tts_available_voices", "asr_available_providers"},
-		Includes:    []string{},
-	})
-
-	// Planning and memory
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "todo",
-		Description: "Task planning and tracking",
-		Tools:       []string{"todo"},
-		Includes:    []string{},
-	})
-
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "memory",
-		Description: "Persistent memory across sessions",
-		Tools:       []string{"memory_store", "memory_recall"},
-		Includes:    []string{},
-	})
-
-	// Session search
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "session_search",
-		Description: "Search and recall past conversations",
-		Tools:       []string{"session_search"},
-		Includes:    []string{},
-	})
-
-	// Clarification
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "clarify",
-		Description: "Ask clarifying questions",
-		Tools:       []string{"clarify"},
-		Includes:    []string{},
-	})
-
-	// Cron jobs
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "cronjob",
-		Description: "Cronjob management for scheduled tasks",
-		Tools:       []string{"cronjob"},
-		Includes:    []string{},
-	})
-
-	// Skills
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "skills",
-		Description: "Skill management tools",
-		Tools:       []string{"skill_invoke", "skill_list", "skill_info"},
-		Includes:    []string{},
-	})
-
-	// MCP toolsets (dynamically added per server)
-	// These are added when MCP servers connect
-
-	// Utility tools
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "utility",
-		Description: "Utility tools: JSON, YAML, string manipulation",
-		Tools:       []string{"json", "yaml", "string", "hash", "uuid", "random", "time", "math", "csv", "env", "system_info"},
-		Includes:    []string{},
-	})
-
-	// Kanban tools
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "kanban",
-		Description: "Kanban task management",
-		Tools:       []string{"kanban_show", "kanban_complete", "kanban_block", "kanban_unblock", "kanban_list", "kanban_heartbeat", "kanban_comment", "kanban_create", "kanban_link"},
-		Includes:    []string{},
-	})
-
-	// Coding-enhanced tools
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "coding",
-		Description: "Coding assistance tools: lint, error analysis, project analysis",
-		Tools:       []string{"lint", "analyze_error", "project_analyze", "batch_file_ops", "diff_patch", "gitignore", "lsp_diagnostics"},
-		Includes:    []string{},
-	})
-
-	// Delegation tools
-	RegisterToolset(&ToolsetDefinition{
-		Name:        "delegation",
-		Description: "Sub-agent delegation tools",
-		Tools:       []string{"delegate_task", "poll_task", "list_tasks", "cancel_task"},
-		Includes:    []string{},
-	})
+	for _, cat := range ToolCategories() {
+		RegisterToolset(&ToolsetDefinition{
+			Name:        cat.ID,
+			Description: cat.Description,
+			Tools:       cat.Tools,
+			Includes:    []string{},
+		})
+	}
 
 	// =============================================================================
-	// Full platform toolsets
+	// 组合预设（引用上面的分组 id，不列具体工具）
 	// =============================================================================
 
 	// Full interactive CLI toolset
@@ -276,21 +150,19 @@ func InitializeDefaultToolsets() {
 		Description: "Full interactive CLI toolset - all default tools",
 		Tools:       []string{},
 		Includes: []string{
-			"web", "file", "terminal", "browser", "vision", "tts",
-			"todo", "memory", "session_search", "clarify", "cronjob",
-			"skills", "utility", "kanban",
+			"file", "web", "browser", "terminal", "coding", "media", "desktop",
+			"memory", "task", "kanban", "skills", "interaction", "utility",
 		},
 	})
 
-	// Safe: No terminal access
+	// Safe: No terminal / desktop / code execution access
 	RegisterToolset(&ToolsetDefinition{
 		Name:        "safe",
-		Description: "Safe toolkit without terminal access",
+		Description: "Safe toolkit without terminal, code execution or desktop control",
 		Tools:       []string{},
 		Includes: []string{
-			"web", "file", "browser", "vision", "tts",
-			"todo", "memory", "session_search", "clarify",
-			"skills", "utility",
+			"file", "web", "browser", "media",
+			"memory", "task", "skills", "interaction", "utility",
 		},
 	})
 
@@ -300,7 +172,7 @@ func InitializeDefaultToolsets() {
 		Description: "Research and analysis toolkit",
 		Tools:       []string{},
 		Includes: []string{
-			"web", "browser", "session_search", "memory",
+			"web", "browser", "memory",
 		},
 	})
 
@@ -310,7 +182,7 @@ func InitializeDefaultToolsets() {
 		Description: "Software development toolkit",
 		Tools:       []string{},
 		Includes: []string{
-			"file", "terminal", "todo", "session_search",
+			"file", "terminal", "coding", "web", "task", "memory", "skills",
 		},
 	})
 

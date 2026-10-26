@@ -53,6 +53,13 @@ type Registry struct {
 	// strictCommandList 是 execute_command 的严格清单模式开关，由
 	// SetStrictCommandList 在 RegisterAll 之前设置（见 pkg/config.ToolsConfig）。
 	strictCommandList bool
+
+	// 工具集过滤（config tools.enabled/disabled，见 SetToolsetFilter）。
+	// 只影响暴露给模型的清单（ListWithSchemas / ListAvailable）；
+	// 管理端 listing（List / ListAllWithSchemas）与 Execute 不受影响，
+	// 这样后台任务仍能调被隐藏的工具，前端也仍能看到完整清单。
+	filterEnabled  []string
+	filterDisabled []string
 }
 
 // Logger 工具日志接口
@@ -467,9 +474,62 @@ func (r *Registry) List() []string {
 	return names
 }
 
+// SetToolsetFilter 设置暴露清单的工具集过滤，来源是 config 的
+// tools.enabled / tools.disabled（元素为分类 id，见 ToolCategories；
+// 也接受单个工具名和 "all"）。传空切片 = 不过滤，全部暴露。
+//
+// 语义：disabled 命中（"all"、分类 id 或工具名）→ 隐藏；enabled 命中可
+// 覆盖 disabled 单条。enabled 不是白名单 —— 只在某项被 disabled 命中时
+// 才参与判定，否则填了 enabled 会把没填的项全部隐藏（旧 UI 逻辑的坑）。
+//
+// 过滤只作用于 ListWithSchemas / ListAvailable（模型可见清单）。
+// 注意调用时机：注册完成后、构建 agent 之前设置；配置热更新后需重新调用。
+func (r *Registry) SetToolsetFilter(enabled, disabled []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.filterEnabled = append([]string(nil), enabled...)
+	r.filterDisabled = append([]string(nil), disabled...)
+}
+
+// toolsetAllowed 判断单个工具是否应出现在暴露清单。调用方必须已持 r.mu 读锁。
+func (r *Registry) toolsetAllowed(name string) bool {
+	if len(r.filterEnabled) == 0 && len(r.filterDisabled) == 0 {
+		return true
+	}
+	cat := CategoryOfTool(name)
+	if cat == "" {
+		cat = OtherCategoryID
+	}
+	return ToolsetFilterAllows(cat, name, r.filterEnabled, r.filterDisabled)
+}
+
+// ToolsetFilterAllows 按统一的语义判断某个工具/分类是否暴露。
+// catID 为 OtherCategoryID 或 ToolCategories 里的 id；toolName 用于
+// 单工具粒度的开关。server 端展示开关状态时也用它，保证"看到的状态"
+// 与"实际过滤"一致。
+func ToolsetFilterAllows(catID, toolName string, enabled, disabled []string) bool {
+	allowed := true
+	for _, d := range disabled {
+		if d == "all" || d == catID || (toolName != "" && d == toolName) {
+			allowed = false
+			break
+		}
+	}
+	if !allowed {
+		for _, e := range enabled {
+			if e == "all" || e == catID || (toolName != "" && e == toolName) {
+				return true
+			}
+		}
+	}
+	return allowed
+}
+
 // ListWithSchemas 返回所有可用工具及其 Schema。
-// 不可用的工具（实现了 AvailabilityChecker 且 Available() 为 false）会被过滤，
-// 避免向 LLM 暴露必然失败的工具（hermes check_fn 对齐）。
+// 两层过滤：
+//  1. 不可用的工具（实现了 AvailabilityChecker 且 Available() 为 false），
+//     避免向 LLM 暴露必然失败的工具（hermes check_fn 对齐）；
+//  2. SetToolsetFilter 设置的 tools.enabled/disabled 开关。
 func (r *Registry) ListWithSchemas() []map[string]interface{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -478,6 +538,9 @@ func (r *Registry) ListWithSchemas() []map[string]interface{} {
 	toolSchema := &ToolSchema{}
 	for _, t := range r.tools {
 		if !IsToolAvailable(t) {
+			continue
+		}
+		if !r.toolsetAllowed(t.Name()) {
 			continue
 		}
 		schemas = append(schemas, toolSchema.ToOpenAISchema(t))
@@ -499,15 +562,20 @@ func (r *Registry) ListAllWithSchemas() []map[string]interface{} {
 }
 
 // ListAvailable 返回当前可用的工具实例（按名称排序），供构建 LLM 工具清单使用。
+// 过滤规则与 ListWithSchemas 一致（可用性 + tools.enabled/disabled 开关）。
 func (r *Registry) ListAvailable() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	tools := make([]Tool, 0, len(r.tools))
 	for _, t := range r.tools {
-		if IsToolAvailable(t) {
-			tools = append(tools, t)
+		if !IsToolAvailable(t) {
+			continue
 		}
+		if !r.toolsetAllowed(t.Name()) {
+			continue
+		}
+		tools = append(tools, t)
 	}
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
 	return tools

@@ -554,6 +554,11 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 			s.acquireServerMu("")
 			s.setCfg(newCfg)
 			s.provider = createProvider(newCfg)
+			// 原始编辑器可以直接改 tools.enabled/disabled：同步重建暴露过滤，
+			// 否则要等重启（下一次 setCfg 之外的路径不会带上它）。
+			if s.toolReg != nil {
+				s.toolReg.SetToolsetFilter(newCfg.Tools.Enabled, newCfg.Tools.Disabled)
+			}
 			// Fresh provider starts with a nil ConvertCfg, which means "no
 			// vision at all" until the next agent is built. Install the
 			// derived policy right away.
@@ -890,6 +895,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 					s.approvalMgr.SetApprovalTimeout(ac.ApprovalTimeout)
 				}
 			}
+		}
+
+		// Hot-reload toolset filter if the tools section changed
+		// （tools.enabled/disabled 控制暴露给模型的工具清单）
+		if _, ok := expanded["tools"]; ok && s.toolReg != nil {
+			s.toolReg.SetToolsetFilter(cfg.Tools.Enabled, cfg.Tools.Disabled)
 		}
 
 		// Hot-reload privacy/PII config: clear agent cache so new sessions pick up the new redactor

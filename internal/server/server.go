@@ -321,6 +321,9 @@ func NewServer(dbPath string) *Server {
 	// 命令」信号，未列出的命令交给审批层判断。
 	registry.SetStrictCommandList(cfg.Tools.StrictCommandList)
 	registry.RegisterAll(workDir)
+	// 工具集开关（config tools.enabled/disabled）真实生效：此前 UI 开关只写
+	// 配置、没有任何消费方，模型永远拿到全量清单。
+	registry.SetToolsetFilter(cfg.Tools.Enabled, cfg.Tools.Disabled)
 
 	// Create skills manager with config
 	skillCfg := skills.ManagerConfig{
@@ -2045,100 +2048,49 @@ func (s *Server) buildToolsets() []map[string]interface{} {
 		return []map[string]interface{}{}
 	}
 
-	// Known category prefixes and their human-readable names
-	categoryMap := map[string]string{
-		"web_":      "Web",
-		"browser_":  "Browser",
-		"execute_":  "Code Execution",
-		"read_":     "File",
-		"write_":    "File",
-		"file_":     "File",
-		"list_":     "File",
-		"search_":   "File",
-		"memory_":   "Memory",
-		"delegate_": "Delegation",
-		"poll_":     "Delegation",
-		"kanban_":   "Kanban",
-		"code_":     "Code Execution",
-		"skill_":    "Skills",
-		"mcp_":      "MCP",
-	}
-
-	// Group tools by category
-	categoryTools := map[string][]string{}
-	categoryDescriptions := map[string]string{}
+	// 按 internal/tool 的规范分类归类（ToolCategories，唯一事实来源）。
+	// 此前用"前缀猜测"归类，search_history 被归进 File、execute_command
+	// 被归进 Code Execution，剩下约 30 个工具全挤在 Other。
+	grouped := map[string][]string{}
 	ungrouped := []string{}
-
 	for _, name := range allTools {
-		categorized := false
-		for prefix, catName := range categoryMap {
-			if strings.HasPrefix(name, prefix) {
-				categoryTools[catName] = append(categoryTools[catName], name)
-				if _, ok := categoryDescriptions[catName]; !ok {
-					categoryDescriptions[catName] = fmt.Sprintf("%s tools", catName)
-				}
-				categorized = true
-				break
-			}
-		}
-		if !categorized {
+		if cat := tool.CategoryOfTool(name); cat != "" {
+			grouped[cat] = append(grouped[cat], name)
+		} else {
 			ungrouped = append(ungrouped, name)
 		}
 	}
 
-	// Build toolset list
-	toolsets := make([]map[string]interface{}, 0, len(categoryTools))
-
 	// 一次快照：下面 isEnabled 闭包会被多次调用，逐次裸读 s.cfg 会与 setCfg 竞态。
 	cfgSnap := s.cfgSnapshot()
-
-	// Check if all tools are enabled by default
-	allEnabled := false
-	if cfgSnap != nil && cfgSnap.Tools.Enabled != nil {
-		for _, e := range cfgSnap.Tools.Enabled {
-			if e == "all" {
-				allEnabled = true
-				break
-			}
-		}
+	var enabled, disabled []string
+	if cfgSnap != nil {
+		enabled = cfgSnap.Tools.Enabled
+		disabled = cfgSnap.Tools.Disabled
 	}
 
-	// Helper to check if toolset is enabled
+	// 与 Registry 实际的暴露过滤（SetToolsetFilter）共用同一套判定语义，
+	// 保证页面上显示的开关状态和模型实际拿到的工具清单一致。
 	isEnabled := func(id string) bool {
-		if cfgSnap == nil || cfgSnap.Tools.Disabled == nil || cfgSnap.Tools.Enabled == nil {
-			return true // Default to enabled if no config
-		}
-		// Check disabled list first
-		for _, d := range cfgSnap.Tools.Disabled {
-			if d == id || d == "all" {
-				return false
-			}
-		}
-		// Check enabled list
-		for _, e := range cfgSnap.Tools.Enabled {
-			if e == id || e == "all" {
-				return true
-			}
-		}
-		// Default: all enabled if not specified
-		return allEnabled || len(cfgSnap.Tools.Enabled) == 0
+		return tool.ToolsetFilterAllows(id, "", enabled, disabled)
 	}
 
-	// Add categorized toolsets in a fixed order (based on categoryMap order)
-	categoryOrder := []string{"File", "Web", "Browser", "Code Execution", "Memory", "Delegation", "Kanban", "Skills", "MCP"}
-	for _, catName := range categoryOrder {
-		if tools, ok := categoryTools[catName]; ok {
-			id := strings.ToLower(strings.ReplaceAll(catName, " ", "_"))
-			toolsets = append(toolsets, map[string]interface{}{
-				"id":          id,
-				"name":        catName,
-				"label":       catName,
-				"description": categoryDescriptions[catName],
-				"enabled":     isEnabled(id),
-				"configured":  true,
-				"tools":       tools, // Return tool names as []string for frontend compatibility
-			})
+	// 按规范分类的固定顺序输出
+	toolsets := make([]map[string]interface{}, 0, len(grouped)+1)
+	for _, cat := range tool.ToolCategories() {
+		tools, ok := grouped[cat.ID]
+		if !ok {
+			continue
 		}
+		toolsets = append(toolsets, map[string]interface{}{
+			"id":          cat.ID,
+			"name":        cat.Label,
+			"label":       cat.Label,
+			"description": cat.Description,
+			"enabled":     isEnabled(cat.ID),
+			"configured":  true,
+			"tools":       tools, // Return tool names as []string for frontend compatibility
+		})
 	}
 
 	// Add ungrouped tools as "Other" toolset (always last)

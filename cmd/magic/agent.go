@@ -118,6 +118,8 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 	// 「只允许已知工具链」的部署可在 config.json 设 tools.strict_command_list=true
 	registry.SetStrictCommandList(cfg.Tools.StrictCommandList)
 	registry.RegisterAll(cfg.WorkingDir)
+	// 工具集开关（config tools.enabled/disabled）：过滤的是暴露给模型的清单。
+	registry.SetToolsetFilter(cfg.Tools.Enabled, cfg.Tools.Disabled)
 
 	// Register skill invoke tool
 	if skillMgr, err := skills.NewManager(); err == nil {

@@ -339,6 +339,7 @@ func runCronTest(cmd *cobra.Command, args []string) {
 	registry := tool.NewRegistry()
 	registry.SetStrictCommandList(cfg.Tools.StrictCommandList)
 	registry.RegisterAll(cfg.WorkingDir)
+	registry.SetToolsetFilter(cfg.Tools.Enabled, cfg.Tools.Disabled)
 
 	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 cron 任务里
 	// 的 agent 也能调用这些工具；本次执行结束返回时断开所有 MCP server 连接。

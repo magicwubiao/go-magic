@@ -164,6 +164,9 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 			}
 			s.cfg.Tools.Disabled = newDisabled
 			_ = s.persistConfig(true)
+			// 立即生效：重建暴露过滤。此前开关只写配置、没有消费方，
+			// 模型永远拿到全量清单，要重启也不生效。
+			s.toolReg.SetToolsetFilter(s.cfg.Tools.Enabled, s.cfg.Tools.Disabled)
 		}
 		s.unlockCfgForWrite()
 		s.releaseServerMu()
@@ -195,6 +198,8 @@ func (s *Server) handleToolsetByID(w http.ResponseWriter, r *http.Request) {
 			}
 			s.cfg.Tools.Enabled = newEnabled
 			_ = s.persistConfig(true)
+			// 立即生效：重建暴露过滤（同 enable 分支）。
+			s.toolReg.SetToolsetFilter(s.cfg.Tools.Enabled, s.cfg.Tools.Disabled)
 		}
 		s.unlockCfgForWrite()
 		s.releaseServerMu()
