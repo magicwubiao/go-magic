@@ -93,6 +93,13 @@ func (t *ASRTool) Available() bool { return voiceAPIKeyConfigured() }
 // 时该工具只能返回图片元数据，属于占位工具，不应暴露给 LLM。
 func (t *VisionAnalyzeTool) Available() bool { return visionBackendConfigured() }
 
+// ComputerUseTool：需要平台驱动齐备。Windows 恒可用；macOS 依赖 cliclick；
+// Linux 需要 xdotool + 任一截图工具，且不能是 Wayland 会话。
+// driver 内部用 sync.Once 缓存探测结果，这里的调用不会每次读盘/扫 PATH。
+func (t *ComputerUseTool) Available() bool {
+	return t.driver != nil && t.driver.Available() == nil
+}
+
 // 视觉后端探测（与 voice 一致：结果缓存，避免每次 ListWithSchemas 都读盘）
 var (
 	visionCfgOnce sync.Once
@@ -142,4 +149,5 @@ var (
 	_ AvailabilityChecker = (*TTSTool)(nil)
 	_ AvailabilityChecker = (*ASRTool)(nil)
 	_ AvailabilityChecker = (*VisionAnalyzeTool)(nil)
+	_ AvailabilityChecker = (*ComputerUseTool)(nil)
 )

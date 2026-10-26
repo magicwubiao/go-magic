@@ -188,6 +188,12 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		command = fmt.Sprintf("execute_code %s (%d bytes)", lang, len(code))
 		toolDesc = "code execution"
 		approvalCtx = buildExecuteCodeContext(lang, code)
+	case "computer_use":
+		// 桌面控制：能点任意位置、向任意窗口打字（发消息、点支付、确认弹窗）。
+		// 这是整个工具集里权限最高的一项，必须逐次确认。
+		command = describeComputerUseCall(call.ToolArgs)
+		toolDesc = "desktop control"
+		approvalCtx = buildComputerUseContext(call.ToolArgs)
 	default:
 		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
 	}
@@ -272,7 +278,21 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	// 的内容类工具强制改为询问用户，避免任意代码/文件写入被静默执行。
 	// 白名单/受信 pattern/只读命令 的放行 reason 不同，不受影响。
 	if result.Approved {
-		if isContentTool(call.ToolName) && result.Reason == lowRiskAutoApproveReason {
+		// computer_use 的合成命令只含"动作 + 坐标"，assessRisk 看不到它真正
+		// 要做什么，只会判低风险并静默放行。桌面控制的爆炸半径远大于任何
+		// 单条命令（可以点掉确认框、往聊天窗口打字），所以只要不是用户显式
+		// 授予过（会话跳过 / 白名单 / 已学习 pattern），就必须先问。
+		// 注意：会话级"全部允许"在 isSessionSkipped 那一步就已经返回了，
+		// 不会落到这里，因此不至于每次点击都弹窗。
+		if call.ToolName == "computer_use" && result.Reason == lowRiskAutoApproveReason {
+			result.Approved = false
+			result.AskUser = true
+			result.RiskLevel = approval.RiskHigh
+			result.Reason = "Desktop control requires confirmation — this can click and type into any application"
+			if req.Reason == "" {
+				req.Reason = result.Reason
+			}
+		} else if isContentTool(call.ToolName) && result.Reason == lowRiskAutoApproveReason {
 			// C2：内容工具"范围放行"。write_file/file_edit 的目标路径位于会话
 			// 工作目录内时，自动放行并写入审计历史；工作目录外仍要求用户确认。
 			// execute_code 无路径可判定范围，保持强制确认。
@@ -613,6 +633,73 @@ func buildWriteFileContext(path, content string) string {
 	}
 	preview := truncateCommand(content, 600)
 	return fmt.Sprintf("path: %s\n--- content preview ---\n%s", path, preview)
+}
+
+// describeComputerUseCall 构造 computer_use 的审批摘要。
+//
+// 审批层只拿到这段字符串，而 computer_use 的危险恰好藏在参数里：点哪里、
+// 往哪个输入框打字。这里把动作和关键参数都摊开，用户在卡片上才能判断
+// （尤其是 type —— 可能是在给陌生人发消息或往对话框里粘贴密钥）。
+func describeComputerUseCall(args map[string]interface{}) string {
+	action := strings.ToLower(strings.TrimSpace(strArg(args, "action")))
+	intArg := func(key string) int {
+		switch v := args[key].(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		}
+		return 0
+	}
+
+	switch action {
+	case "screenshot":
+		return "computer_use screenshot"
+	case "click", "move", "scroll":
+		detail := ""
+		if action == "click" {
+			if btn := strArg(args, "button"); btn != "" && btn != "left" {
+				detail = " " + btn
+			}
+			if n := intArg("count"); n > 1 {
+				detail += fmt.Sprintf(" x%d", n)
+			}
+		}
+		if action == "scroll" {
+			detail = fmt.Sprintf(" by %d", intArg("scroll_y"))
+		}
+		return fmt.Sprintf("computer_use %s (%d,%d)%s", action, intArg("x"), intArg("y"), detail)
+	case "drag":
+		return fmt.Sprintf("computer_use drag (%d,%d)->(%d,%d)",
+			intArg("x"), intArg("y"), intArg("to_x"), intArg("to_y"))
+	case "type":
+		return fmt.Sprintf("computer_use type %q", truncateCommand(strArg(args, "text"), 120))
+	case "key":
+		return "computer_use key " + strArg(args, "key")
+	}
+	return "computer_use " + action
+}
+
+// buildComputerUseContext 给审批卡片补充说明：为什么这一步值得警惕。
+func buildComputerUseContext(args map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString("This tool drives the real mouse and keyboard of this machine.\n")
+	b.WriteString("It can click any button and type into any window — including sending\n")
+	b.WriteString("messages, confirming dialogs, or pasting secrets. Approve only if this\n")
+	b.WriteString("matches what you actually asked for.")
+	if text := strArg(args, "text"); text != "" {
+		fmt.Fprintf(&b, "\n\n--- text to type ---\n%s", truncateCommand(text, 600))
+	}
+	if key := strArg(args, "key"); key != "" {
+		fmt.Fprintf(&b, "\n\n--- key ---\n%s", key)
+	}
+	return b.String()
+}
+
+// strArg 安全取字符串参数。
+func strArg(args map[string]interface{}, key string) string {
+	s, _ := args[key].(string)
+	return s
 }
 
 // buildFileEditContext 构造 file_edit 的审批上下文：尝试展示 old/new 字段。

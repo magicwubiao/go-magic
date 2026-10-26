@@ -249,6 +249,14 @@ func (r *Registry) RegisterAll(workDir string) {
 	// Vision analysis (hermes-agent vision toolset)
 	r.Register(NewVisionAnalyzeTool())
 
+	// Vision
+	r.Register(NewVisionAnalyzeTool())
+
+	// Desktop GUI control (computer use). 注册在这里而不是 RegisterOptionalTools：
+	// 后者没有任何调用方（见 registry.go 末尾的说明），注册进去等于死代码。
+	// 平台依赖是否齐备由 ComputerUseTool.Available() 在暴露工具清单时过滤。
+	r.Register(NewComputerUseTool(""))
+
 	// Legacy web tools - lightweight goquery-based
 	r.Register(NewWebFetchTool())
 	r.Register(NewWebSelectTool())
@@ -295,6 +303,9 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("vision_analyze", 120*time.Second)
 	r.SetTimeout("terminal", 120*time.Second)
 	r.SetTimeout("process", 30*time.Second)
+	// computer_use 单次动作 = 注入输入 + 抓一张全屏截图；4K 多屏在慢机器上可能
+	// 超过默认 60s，macOS 首次抓屏还要等屏幕录制授权，所以给足 120s。
+	r.SetTimeout("computer_use", 120*time.Second)
 	// clarify 在 Web chat 会挂起等待用户答复（卡片交互），给足等待窗口；
 	// 内部 bridge 另有同长的答复时限，工具超时只是最后兜底。
 	r.SetTimeout("clarify", 300*time.Second)
@@ -318,9 +329,6 @@ func (r *Registry) RegisterOptionalTools() {
 
 	// X/Twitter search
 	r.Register(NewXSearchTool("", ""))
-
-	// Computer use (GUI control via mouse/keyboard)
-	r.Register(NewComputerUseTool(""))
 
 	// Send message - cross-platform messaging (requires gateway)
 	// Call SetGateway on the tool after gateway is initialized
