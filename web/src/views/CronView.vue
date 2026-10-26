@@ -78,13 +78,75 @@
         <n-form-item :label="t('cron.jobName')" required>
           <n-input v-model:value="form.name" :placeholder="t('cron.jobName')" />
         </n-form-item>
-        <n-form-item :label="t('cron.cronExpression')" required>
+        <n-form-item :label="t('cron.scheduleInputMethod')">
+          <n-radio-group v-model:value="scheduleMode" size="small">
+            <n-radio-button value="builder">{{ t('cron.modeBuilder') }}</n-radio-button>
+            <n-radio-button value="expr">{{ t('cron.modeExpr') }}</n-radio-button>
+            <n-radio-button value="nl">{{ t('cron.modeNL') }}</n-radio-button>
+          </n-radio-group>
+        </n-form-item>
+
+        <!-- 可视化构造器：选频率和参数，自动生成表达式 -->
+        <template v-if="scheduleMode === 'builder'">
+          <n-form-item :label="t('cron.builderFrequency')">
+            <n-select v-model:value="builder.type" :options="freqOptions" />
+          </n-form-item>
+          <n-form-item v-if="builderNeedsTime" :label="t('cron.builderTime')">
+            <n-space align="center" :size="8">
+              <n-input-number v-model:value="builder.hour" :min="0" :max="23" style="width: 90px" />
+              <n-text strong>:</n-text>
+              <n-input-number v-model:value="builder.minute" :min="0" :max="59" style="width: 90px" />
+            </n-space>
+          </n-form-item>
+          <n-form-item v-if="builder.type === 'weekly'" :label="t('cron.builderWeekday')">
+            <n-select v-model:value="builder.weekdays" multiple :options="weekdayOptions" style="min-width: 220px;" />
+          </n-form-item>
+          <n-form-item v-if="builder.type === 'monthly'" :label="t('cron.builderMonthDay')">
+            <n-input-number v-model:value="builder.monthDay" :min="1" :max="31" style="width: 120px" />
+          </n-form-item>
+          <n-form-item v-if="builder.type === 'interval'" :label="t('cron.builderInterval')">
+            <n-space align="center" :size="8">
+              <n-text depth="3">{{ t('cron.builderEvery') }}</n-text>
+              <n-input-number v-model:value="builder.interval" :min="1" :max="builder.intervalUnit === 'minute' ? 59 : 23" style="width: 90px" />
+              <n-select v-model:value="builder.intervalUnit" :options="intervalUnitOptions" style="width: 100px" />
+            </n-space>
+          </n-form-item>
+          <n-form-item :label="t('cron.cronExpression')">
+            <n-input :value="form.schedule" readonly />
+            <template #feedback>
+              <n-text depth="3" style="font-size: 12px;">{{ form.schedule }}</n-text>
+            </template>
+          </n-form-item>
+        </template>
+
+        <!-- 手写表达式 -->
+        <n-form-item v-else-if="scheduleMode === 'expr'" :label="t('cron.cronExpression')" required>
           <n-input v-model:value="form.schedule" :placeholder="t('cron.cronExpressionPlaceholder')" />
-          <template #feedback>
-            <n-text v-if="form.schedule" :type="scheduleHint.type" style="font-size: 12px;">
-              {{ scheduleHint.text }}
-            </n-text>
-          </template>
+        </n-form-item>
+
+        <!-- 自然语言解析 -->
+        <template v-else>
+          <n-form-item :label="t('cron.nlInputLabel')">
+            <n-input v-model:value="nlText" type="textarea" :rows="2" :placeholder="t('cron.nlInputPlaceholder')" />
+          </n-form-item>
+          <n-form-item :show-feedback="false">
+            <n-button size="small" type="primary" :loading="nlLoading" :disabled="!nlText.trim()" @click="parseNatural">
+              {{ t('cron.nlParse') }}
+            </n-button>
+          </n-form-item>
+          <n-form-item :label="t('cron.cronExpression')" required>
+            <n-input v-model:value="form.schedule" :placeholder="t('cron.cronExpressionPlaceholder')" />
+          </n-form-item>
+        </template>
+
+        <n-form-item v-if="scheduleMode === 'expr'" :label="t('cron.quickPresets')">
+          <n-space>
+            <n-button size="tiny" @click="setSchedule('0 8 * * *')">{{ t('cron.daily8am') }}</n-button>
+            <n-button size="tiny" @click="setSchedule('0 8 * * 1-5')">{{ t('cron.weekday8am') }}</n-button>
+            <n-button size="tiny" @click="setSchedule('0 */2 * * *')">{{ t('cron.every2hours') }}</n-button>
+            <n-button size="tiny" @click="setSchedule('0 0 * * *')">{{ t('cron.dailyMidnight') }}</n-button>
+            <n-button size="tiny" @click="setSchedule('0 0 1 * *')">{{ t('cron.monthly1st') }}</n-button>
+          </n-space>
         </n-form-item>
         <n-form-item :label="t('cron.executionMode')">
           <n-radio-group v-model:value="form.no_agent">
@@ -109,15 +171,6 @@
           <template #feedback>
             <n-text depth="3" style="font-size: 12px;">{{ t('cron.workingDirHint') }}</n-text>
           </template>
-        </n-form-item>
-        <n-form-item :label="t('cron.commonExpressions')">
-          <n-space>
-            <n-button size="tiny" @click="setSchedule('0 8 * * *')">{{ t('cron.daily8am') }}</n-button>
-            <n-button size="tiny" @click="setSchedule('0 8 * * 1-5')">{{ t('cron.weekday8am') }}</n-button>
-            <n-button size="tiny" @click="setSchedule('0 */2 * * *')">{{ t('cron.every2hours') }}</n-button>
-            <n-button size="tiny" @click="setSchedule('0 0 * * *')">{{ t('cron.dailyMidnight') }}</n-button>
-            <n-button size="tiny" @click="setSchedule('0 0 1 * *')">{{ t('cron.monthly1st') }}</n-button>
-          </n-space>
         </n-form-item>
       </n-form>
       <template #footer>
@@ -213,19 +266,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { RefreshOutline, FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
-import { useMessage } from 'naive-ui'
-import { NButton, NCard, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputGroup, NModal, NRadio, NRadioGroup, NSpace, NSpin, NTag, NText, NTimeline, NTimelineItem } from 'naive-ui'
+import { useMessage, useDialog } from 'naive-ui'
+import { NButton, NCard, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputGroup, NInputNumber, NModal, NRadio, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NTag, NText, NTimeline, NTimelineItem } from 'naive-ui'
 import { useCronStore } from '@/stores/cron'
 import { useConfigStore } from '@/stores/config'
 import type { CronJob } from '@/api/cron'
+import { getCronNextRuns, parseCronNatural } from '@/api/cron'
 import { getLocale } from '@/locales'
 import * as sessionsApi from '@/api/sessions'
 
 const { t } = useI18n()
 const message = useMessage()
+const dialog = useDialog()
 const cronStore = useCronStore()
 const configStore = useConfigStore()
 const showModal = ref(false)
@@ -242,25 +297,149 @@ const form = reactive({
   no_agent: false,
 })
 
-const scheduleHint = computed(() => {
-  const s = form.schedule.trim()
-  if (!s) return { text: '', type: 'default' as const }
-  const parts = s.split(/\s+/)
-  if (parts.length < 5) return { text: t('cron.scheduleHint5fields'), type: 'error' as const }
-  if (parts.length > 6) return { text: t('cron.scheduleHint6fields'), type: 'error' as const }
+// ===== 调度输入三模式：可视化构造器 / 手写表达式 / 自然语言 =====
+type ScheduleMode = 'builder' | 'expr' | 'nl'
+const scheduleMode = ref<ScheduleMode>('builder')
+const nlText = ref('')
+const nlLoading = ref(false)
 
-  // Common patterns
-  if (s === '0 8 * * *') return { text: t('cron.scheduleHintDaily8'), type: 'success' as const }
-  if (s === '0 9 * * 1-5') return { text: t('cron.scheduleHintWeekday9'), type: 'success' as const }
-  if (s === '0 */2 * * *') return { text: t('cron.scheduleHint2hours'), type: 'success' as const }
-  if (s === '0 * * * *') return { text: t('cron.scheduleHintHourly'), type: 'success' as const }
-  if (s === '* * * * *') return { text: t('cron.scheduleHintMinutely'), type: 'success' as const }
-  if (s === '0 0 * * *') return { text: t('cron.scheduleHintMidnight'), type: 'success' as const }
-  if (s === '0 0 1 * *') return { text: t('cron.scheduleHintMonthly1st'), type: 'success' as const }
-  if (s === '0 0 * * 1') return { text: t('cron.scheduleHintMonday'), type: 'success' as const }
-
-  return { text: t('cron.scheduleValid'), type: 'success' as const }
+const builder = reactive({
+  type: 'daily',              // daily | weekdays | weekly | monthly | interval
+  hour: 9,
+  minute: 0,
+  weekdays: [1] as number[],  // 0=周日 1=周一 ... 6=周六
+  monthDay: 1,
+  interval: 30,
+  intervalUnit: 'minute',     // minute | hour
 })
+
+const freqOptions = computed(() => [
+  { label: t('cron.freqDaily'), value: 'daily' },
+  { label: t('cron.freqWeekdays'), value: 'weekdays' },
+  { label: t('cron.freqWeekly'), value: 'weekly' },
+  { label: t('cron.freqMonthly'), value: 'monthly' },
+  { label: t('cron.freqInterval'), value: 'interval' },
+])
+
+const intervalUnitOptions = computed(() => [
+  { label: t('cron.intervalMinute'), value: 'minute' },
+  { label: t('cron.intervalHour'), value: 'hour' },
+])
+
+const weekdayOptions = computed(() => [
+  { label: t('cron.weekdayMon'), value: 1 },
+  { label: t('cron.weekdayTue'), value: 2 },
+  { label: t('cron.weekdayWed'), value: 3 },
+  { label: t('cron.weekdayThu'), value: 4 },
+  { label: t('cron.weekdayFri'), value: 5 },
+  { label: t('cron.weekdaySat'), value: 6 },
+  { label: t('cron.weekdaySun'), value: 0 },
+])
+
+// daily/weekdays/weekly/monthly 需要选时刻
+const builderNeedsTime = computed(() => builder.type !== 'interval')
+
+// 构造器 → cron 表达式（5 字段）
+const builderExpr = computed(() => {
+  const m = Math.max(0, Math.min(59, builder.minute))
+  const h = Math.max(0, Math.min(23, builder.hour))
+  switch (builder.type) {
+    case 'daily':
+      return `${m} ${h} * * *`
+    case 'weekdays':
+      return `${m} ${h} * * 1-5`
+    case 'weekly': {
+      const dows = [...new Set(builder.weekdays)].sort((a, b) => a - b)
+      return `${m} ${h} * * ${dows.length ? dows.join(',') : '*'}`
+    }
+    case 'monthly':
+      return `${m} ${h} ${Math.max(1, Math.min(31, builder.monthDay))} * *`
+    case 'interval': {
+      const n = Math.max(1, builder.interval)
+      return builder.intervalUnit === 'hour'
+        ? `0 */${n} * * *`
+        : (n <= 1 ? '* * * * *' : `*/${n} * * * *`)
+    }
+    default:
+      return ''
+  }
+})
+
+// 构造器参数变化同步回 form.schedule（仅 builder 模式）
+watch(builderExpr, (expr) => {
+  if (scheduleMode.value === 'builder' && expr) {
+    form.schedule = expr
+  }
+})
+// 切到 builder 模式时也立即同步一次
+watch(scheduleMode, (mode) => {
+  if (mode === 'builder' && builderExpr.value) {
+    form.schedule = builderExpr.value
+  }
+})
+
+// 尝试把已有表达式反解析成构造器参数；解析不了返回 false（回退表达式模式）
+function parseScheduleToBuilder(schedule: string): boolean {
+  const parts = schedule.trim().split(/\s+/)
+  if (parts.length !== 5) return false
+  const [min, hour, dom, mon, dow] = parts
+
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
+    const n = parseInt(min.slice(2), 10)
+    if (!Number.isFinite(n) || n < 1 || n > 59) return false
+    builder.type = 'interval'; builder.interval = n; builder.intervalUnit = 'minute'
+    return true
+  }
+  if (min === '0' && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*') {
+    const n = parseInt(hour.slice(2), 10)
+    if (!Number.isFinite(n) || n < 1 || n > 23) return false
+    builder.type = 'interval'; builder.interval = n; builder.intervalUnit = 'hour'
+    return true
+  }
+  const m = parseInt(min, 10), h = parseInt(hour, 10)
+  if (!Number.isFinite(m) || !Number.isFinite(h) || m > 59 || h > 23 || mon !== '*') return false
+
+  if (dom === '*' && dow === '*') {
+    builder.type = 'daily'; builder.minute = m; builder.hour = h
+    return true
+  }
+  if (dom === '*' && dow === '1-5') {
+    builder.type = 'weekdays'; builder.minute = m; builder.hour = h
+    return true
+  }
+  if (dom === '*' && /^\d+(,\d+)*$/.test(dow)) {
+    const dows = dow.split(',').map(Number)
+    if (dows.some(d => d > 7)) return false
+    builder.type = 'weekly'; builder.minute = m; builder.hour = h
+    builder.weekdays = dows.map(d => (d === 7 ? 0 : d))
+    return true
+  }
+  if (dow === '*' && /^\d+$/.test(dom)) {
+    const d = parseInt(dom, 10)
+    if (d < 1 || d > 31) return false
+    builder.type = 'monthly'; builder.minute = m; builder.hour = h; builder.monthDay = d
+    return true
+  }
+  return false
+}
+
+// ===== 自然语言解析 =====
+async function parseNatural() {
+  const text = nlText.value.trim()
+  if (!text) return
+  nlLoading.value = true
+  try {
+    const res = await parseCronNatural(text, getLocale())
+    form.schedule = res.schedule
+    if (res.name && !form.name.trim()) form.name = res.name
+    if (res.prompt && !form.no_agent && !form.prompt.trim()) form.prompt = res.prompt
+    message.success(t('cron.nlParsed'))
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  } finally {
+    nlLoading.value = false
+  }
+}
 
 function stateType(state: string) {
   const map: Record<string, string> = { active: 'success', inactive: 'default', running: 'warning' }
@@ -410,6 +589,13 @@ function openCreateModal() {
   form.script = ''
   form.working_dir = ''
   form.no_agent = false
+  nlText.value = ''
+  // 新建默认进入构造器模式（每天 09:00），降低手写表达式的门槛
+  builder.type = 'daily'
+  builder.hour = 9
+  builder.minute = 0
+  scheduleMode.value = 'builder'
+  form.schedule = builderExpr.value
   showModal.value = true
 }
 
@@ -421,6 +607,10 @@ function openEditModal(job: CronJob) {
   form.script = job.script || ''
   form.working_dir = job.working_dir || ''
   form.no_agent = job.no_agent
+  nlText.value = ''
+  // 已有表达式能反解析就进构造器，否则回退表达式模式
+  scheduleMode.value = parseScheduleToBuilder(job.schedule) ? 'builder' : 'expr'
+  if (scheduleMode.value === 'builder') form.schedule = builderExpr.value
   showModal.value = true
 }
 
@@ -437,6 +627,16 @@ async function handleSave() {
   if (!form.schedule.trim()) {
     message.warning(t('cron.enterSchedule'))
     return
+  }
+  // 保存前用后端真实校验兜底（前端字段数检查挡不住 99 99 * * * 这类值）
+  try {
+    const check = await getCronNextRuns(form.schedule.trim(), 1, getLocale())
+    if (!check.valid) {
+      message.error(t('cron.scheduleInvalid', { error: check.error || 'invalid' }))
+      return
+    }
+  } catch {
+    // 预览接口失败不阻塞保存，后端创建时仍会校验
   }
 
   saving.value = true
@@ -469,14 +669,60 @@ async function handleSave() {
   }
 }
 
-async function handleDelete(id: string) {
-  await cronStore.deleteJob(id)
-  message.success(t('cron.deleted'))
+function handleDelete(id: string) {
+  const job = cronStore.jobs.find(j => j.id === id)
+  // 删除不可恢复（任务定义连同执行历史一起删），必须二次确认
+  dialog.warning({
+    title: t('cron.deleteConfirmTitle'),
+    content: t('cron.deleteConfirmContent', { name: job?.name || id }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      const ok = await cronStore.deleteJob(id)
+      if (ok) message.success(t('cron.deleted'))
+    },
+  })
 }
 
+// ===== 立即执行的状态跟踪 =====
+// trigger 接口只返回"已触发"，结果要等 agent 跑完。轮询任务状态，
+// running 结束后把成功/失败反馈给用户，避免"点了没反应"。
+let statusPollTimer: number | null = null
+
+function startStatusPolling() {
+  if (statusPollTimer) return
+  let polls = 0
+  statusPollTimer = window.setInterval(async () => {
+    polls++
+    await cronStore.loadJobs(true)
+    const running = cronStore.jobs.some(j => j.state === 'running')
+    if (!running || polls >= 60) {
+      stopStatusPolling()
+      const failed = cronStore.jobs.filter(j => j.last_status === 'failed' && j.last_error)
+      if (failed.length) {
+        message.error(t('cron.jobFailedNotify', { name: failed[0].name, error: (failed[0].last_error || '').slice(0, 160) }))
+      } else if (!running) {
+        message.success(t('cron.jobFinished'))
+      }
+    }
+  }, 2000)
+}
+
+function stopStatusPolling() {
+  if (statusPollTimer) {
+    window.clearInterval(statusPollTimer)
+    statusPollTimer = null
+  }
+}
+
+onUnmounted(stopStatusPolling)
+
 async function handleTrigger(id: string) {
-  await cronStore.triggerJob(id)
-  message.success(t('cron.jobTriggered'))
+  const ok = await cronStore.triggerJob(id)
+  if (!ok) return
+  message.info(t('cron.jobTriggered'))
+  // 稍等片刻让状态落库为 running，再开始轮询
+  window.setTimeout(() => startStatusPolling(), 500)
 }
 
 async function handlePause(id: string) {

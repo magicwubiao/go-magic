@@ -339,9 +339,14 @@ func NewServer(dbPath string) *Server {
 	cronMgr, err := cron.NewManager()
 	if err != nil {
 		// Cron manager unavailable
-	} else if prov != nil && registry != nil {
-		// Set LLM provider and tools for cron agent mode
-		cronMgr.SetAgentDeps(prov, registry, workDir)
+	} else {
+		// cronjob 工具复用 Manager 的存储与调度器，杜绝双实现写坏
+		// cron_jobs.json（工具此前按 map 写、Manager 按数组读）。
+		registry.SetCronJobManager(cronMgr)
+		if prov != nil && registry != nil {
+			// Set LLM provider and tools for cron agent mode
+			cronMgr.SetAgentDeps(prov, registry, workDir)
+		}
 	}
 
 	// Initialize Kanban Manager

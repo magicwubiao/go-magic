@@ -121,6 +121,21 @@ func (r *Registry) SetStrictCommandList(strict bool) {
 	r.strictCommandList = strict
 }
 
+// SetCronJobManager 把 cron.Manager 注入已注册的 cronjob 工具。注册表先于
+// cron manager 创建，所以采用事后注入而不是构造参数。找不到工具时静默跳过
+// （TUI 等场景可能未注册该工具）。
+func (r *Registry) SetCronJobManager(mgr CronJobManager) {
+	r.mu.RLock()
+	t, err := r.Get("cronjob")
+	r.mu.RUnlock()
+	if err != nil {
+		return
+	}
+	if cj, ok := t.(*CronJobTool); ok {
+		cj.SetManager(mgr)
+	}
+}
+
 // RegisterAll 注册所有内置工具
 func (r *Registry) RegisterAll(workDir string) {
 	// File tools

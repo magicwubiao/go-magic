@@ -488,7 +488,7 @@ func (m *Manager) addLog(entry ExecutionLog) {
 		log.Warnf("[Cron] Failed to marshal logs: %v", err)
 		return
 	}
-	if err := os.WriteFile(m.logsFile, data, 0644); err != nil {
+	if err := writeFileAtomic(m.logsFile, data, 0644); err != nil {
 		log.Warnf("[Cron] Failed to save logs: %v", err)
 	}
 }
@@ -512,6 +512,33 @@ func (m *Manager) loadJobs() error {
 	return nil
 }
 
+// writeFileAtomic 原子写文件：先写同目录临时文件再 rename，避免进程中途
+// 退出（或磁盘满）留下半截 JSON，导致下次启动所有任务/日志一起丢。
+// 与 goals 模块的约定一致：持久化一律 temp+rename。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// 出错时清理临时文件；rename 成功后它已不存在，Remove 报错可忽略。
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 func (m *Manager) saveJobs() error {
 	// Note: caller should not hold jobsMu.Lock() when calling this
 	m.jobsMu.RLock()
@@ -526,7 +553,7 @@ func (m *Manager) saveJobs() error {
 		return err
 	}
 
-	return os.WriteFile(m.jobsFile, data, 0644)
+	return writeFileAtomic(m.jobsFile, data, 0644)
 }
 
 func (m *Manager) loadLogs() error {
@@ -547,7 +574,7 @@ func (m *Manager) saveLogs() error {
 		return err
 	}
 
-	return os.WriteFile(m.logsFile, data, 0644)
+	return writeFileAtomic(m.logsFile, data, 0644)
 }
 
 // cronRunDirName returns the per-run directory name for a job execution:
@@ -795,9 +822,26 @@ func ValidateSchedule(schedule string) error {
 
 // GetNextRun calculates the next run time for a schedule expression
 func GetNextRun(schedule string) (*time.Time, error) {
+	times, err := GetNextRuns(schedule, 1)
+	if err != nil {
+		return nil, err
+	}
+	return &times[0], nil
+}
+
+// GetNextRuns calculates the next n run times for a schedule expression.
+// Used by the "upcoming executions" preview so users can verify an expression
+// actually fires when they expect before saving the job.
+func GetNextRuns(schedule string, n int) ([]time.Time, error) {
+	if n <= 0 {
+		n = 1
+	}
+	if n > 50 {
+		n = 50
+	}
+
 	parts := strings.Fields(schedule)
 	var parser robfigcron.Parser
-
 	if len(parts) == 6 {
 		parser = robfigcron.NewParser(robfigcron.Second | robfigcron.Minute | robfigcron.Hour | robfigcron.Dom | robfigcron.Month | robfigcron.Dow)
 	} else {
@@ -809,8 +853,13 @@ func GetNextRun(schedule string) (*time.Time, error) {
 		return nil, err
 	}
 
-	next := sched.Next(time.Now())
-	return &next, nil
+	result := make([]time.Time, 0, n)
+	next := time.Now()
+	for i := 0; i < n; i++ {
+		next = sched.Next(next)
+		result = append(result, next)
+	}
+	return result, nil
 }
 
 // migrateLegacyFiles migrates cron files from legacy location (~/.magic/) to new location (~/.magic/cron/)

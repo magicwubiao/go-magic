@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as cronApi from '@/api/cron'
 import type { CronJob, ExecutionLog } from '@/api/cron'
+import { getLocale } from '@/locales'
 
 export interface CronError {
   message: string
@@ -14,18 +15,22 @@ export const useCronStore = defineStore('cron', () => {
   const loading = ref(false)
   const error = ref<CronError | null>(null)
 
-  async function loadJobs(): Promise<void> {
-    loading.value = true
-    error.value = null
+  // silent=true 用于执行状态轮询：不显示 loading、不打断界面
+  async function loadJobs(silent = false): Promise<void> {
+    if (!silent) loading.value = true
+    if (!silent) error.value = null
     try {
-      const data = await cronApi.getCronJobs()
+      // schedule_display 跟随界面语言（后端按 locale 参数翻译描述）
+      const data = await cronApi.getCronJobs(getLocale())
       jobs.value = data ?? []
     } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Unknown error'
-      error.value = { message: 'Failed to load jobs: ' + errMsg }
-      jobs.value = []
+      if (!silent) {
+        const errMsg = e instanceof Error ? e.message : 'Unknown error'
+        error.value = { message: 'Failed to load jobs: ' + errMsg }
+      }
+      if (!silent) jobs.value = []
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
