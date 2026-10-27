@@ -78,6 +78,7 @@ var (
 	mcpAddCommand   string
 	mcpAddArgs      []string
 	mcpAddEnv       []string
+	mcpAddHeaders   []string
 	mcpAddTransport string
 	mcpAddURL       string
 )
@@ -95,8 +96,9 @@ func init() {
 	mcpAddCmd.Flags().StringVar(&mcpAddCommand, "command", "", "stdio: command to run (e.g. npx)")
 	mcpAddCmd.Flags().StringArrayVar(&mcpAddArgs, "args", nil, "stdio: arguments (repeatable, or one quoted string)")
 	mcpAddCmd.Flags().StringArrayVar(&mcpAddEnv, "env", nil, "stdio: environment variable, KEY=value (repeatable)")
-	mcpAddCmd.Flags().StringVar(&mcpAddTransport, "transport", "", "transport: stdio or sse (default: inferred from --command/--url)")
-	mcpAddCmd.Flags().StringVar(&mcpAddURL, "url", "", "sse: server URL")
+	mcpAddCmd.Flags().StringArrayVar(&mcpAddHeaders, "header", nil, "http/sse: request header, KEY=value (repeatable), e.g. --header \"Authorization=Bearer …\"")
+	mcpAddCmd.Flags().StringVar(&mcpAddTransport, "transport", "", "transport: stdio, sse or http (default: inferred from --command/--url)")
+	mcpAddCmd.Flags().StringVar(&mcpAddURL, "url", "", "http/sse: server URL")
 }
 
 func runMCPList(cmd *cobra.Command, args []string) {
@@ -274,6 +276,7 @@ func collectMCPAddServers(args []string) ([]mcp.NamedServerConfig, error) {
 		"command":   mcpAddCommand,
 		"args":      flagArgs,
 		"env":       mcpAddEnv,
+		"headers":   parseHeaderFlags(mcpAddHeaders),
 		"url":       mcpAddURL,
 	}
 	body, err := json.Marshal(payload)
@@ -366,10 +369,36 @@ func runMCPAdd(cmd *cobra.Command, args []string) {
 }
 
 func connectMCPServerWithConfig(mgr *mcp.Manager, name string, cfg mcp.ServerConfig) error {
-	if cfg.Transport == mcp.TransportSSE {
+	switch cfg.Transport {
+	case mcp.TransportSSE, mcp.TransportHTTP:
 		return mgr.ConnectSSE(name, cfg)
+	default:
+		return mgr.ConnectStdio(name, cfg)
 	}
-	return mgr.ConnectStdio(name, cfg)
+}
+
+// parseHeaderFlags 把 --header KEY=value 收集成 map。
+//
+// 值里允许出现 '='（Bearer token 的 payload 常见 base64 padding），所以按
+// 第一个 '=' 切分，而不是 SplitN 成两段后再拼。空 key 直接丢弃——静默写入
+// 一个同名空头只会让服务端返回更难懂的 400。
+func parseHeaderFlags(flags []string) map[string]string {
+	if len(flags) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(flags))
+	for _, h := range flags {
+		key, value, ok := strings.Cut(h, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // bridgeConfiguredMCPTools 把 config 中配置的独立 MCP server 连接起来，并将其

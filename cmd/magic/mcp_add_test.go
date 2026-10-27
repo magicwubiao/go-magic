@@ -68,8 +68,8 @@ func TestCollectMCPAddServersFromJSON(t *testing.T) {
 	if got[0].Name != "fs" || got[0].Config.Transport != mcp.TransportStdio {
 		t.Errorf("fs = %+v", got[0])
 	}
-	// http 传输归一为 sse
-	if got[1].Name != "web" || got[1].Config.Transport != mcp.TransportSSE {
+	// http / streamable-http 归一为 "http"（与 sse 共用实现，但配置值保持区分）
+	if got[1].Name != "web" || got[1].Config.Transport != mcp.TransportHTTP {
 		t.Errorf("web = %+v", got[1])
 	}
 

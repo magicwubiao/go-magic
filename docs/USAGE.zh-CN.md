@@ -1093,7 +1093,7 @@ docker compose exec magic printenv BROWSER_HEADLESS   # 为空 = 走默认 true
 
 ### 15.1 MCP（Model Context Protocol）
 
-连接外部 MCP 服务器，把它们的工具挂进 Agent（工具名前缀 `mcp_*`）。支持 stdio 与 SSE 两种传输。
+连接外部 MCP 服务器，把它们的工具挂进 Agent（工具名前缀 `mcp_*`）。支持 `stdio`、`http`（Streamable HTTP）与 `sse` 三种传输；http 与 sse 共用同一份客户端实现，配置值会原样保留，不会互相改写。
 
 ```bash
 magic mcp add <server-name> --command npx --args "-y @modelcontextprotocol/server-filesystem /data"
@@ -1112,10 +1112,49 @@ magic mcp disconnect <server-name>     # 断开并从配置中删除
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
       "transport": "stdio"
+    },
+    // 云端连接器：认证靠请求头，不是 URL 参数
+    "github": {
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ghp_xxx" },
+      "require_approval": true
     }
   }
 }
 ```
+
+远程连接器的请求头也可以走 CLI：
+
+```bash
+magic mcp add github --transport http --url https://api.githubcopilot.com/mcp/ \
+  --header "Authorization=Bearer ghp_xxx"
+```
+
+每个连接器还支持这些可选字段：
+
+| 字段 | 作用 |
+| --- | --- |
+| `headers` | 远程传输的自定义请求头（`Authorization` / `X-API-Key` 等）。API 返回值一律掩码为 `***`，表单回传掩码时保留磁盘真值。 |
+| `disabled_tools` | 屏蔽该 server 下的指定工具：不注册进工具表，模型完全看不到。 |
+| `enabled` | `false` = 启动时不自动连接（配置保留，可在页面手动连）。缺省视为 `true`。 |
+| `profiles` | 只在列出的分身里生效；留空 = 所有分身。 |
+| `require_approval` | 每次工具调用都要人工确认。用于没写 tool annotations 的 server。 |
+
+**审批**：MCP 工具按 `annotations` 判定——`destructiveHint` 或有副作用的 `openWorldHint` 会走人工确认（与 `bash` 同一条审批链路），`readOnlyHint` 直接放行。没写 annotations 的 server 默认放行，用 `require_approval: true` 兜底。
+
+**状态与排错**：连接器列表会区分 `connected` / `unauthorized`（凭据问题）/ `error` / `configured` 四种状态，失败原因带分类（`auth` / `network` / `server` / `protocol` / `not_found`）和一句"该怎么办"的建议。后台每 3 分钟自动 ping 一次已连接 server。
+
+相关的 HTTP 接口：
+
+```
+GET  /api/mcp/catalog                      内置连接器目录（?q= 搜索、?category= 过滤）
+POST /api/mcp/servers/{name}/test          试连（不改变启用状态）
+GET  /api/mcp/servers/{name}/stats         各工具调用次数
+PUT  /api/mcp/servers/{name}/tools/{tool}  单独启用/屏蔽工具 {"enabled": false}
+```
+
+Web 页「连接器 → 从目录添加」里内置了一批常见 server（GitHub、Slack、Notion、Postgres、Playwright…），选中后会预填命令与需要的凭据名，填完保存即可。
 
 #### 用 JSON 添加（可直接粘贴别家的配置）
 

@@ -74,6 +74,13 @@ type ToolCallHookRequest struct {
 	ToolArgs map[string]interface{}
 	Result   interface{}
 	Error    error
+
+	// RequiresApproval / ApprovalSummary 由 agent 在调用 hook 前从工具实例上
+	// 取（工具可选实现 ApprovalAware 接口）。MCP 连接器的工具靠它把
+	// destructiveHint 这类注解带进审批链路——hook 拿不到工具实例，只能靠
+	// 调用方预先把结论传进来。
+	RequiresApproval bool
+	ApprovalSummary  string
 }
 
 // ToolResultHookResponse contains the result of tool execution

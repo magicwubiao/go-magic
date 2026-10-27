@@ -3,9 +3,11 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,16 @@ import (
 
 // defaultApprovalTimeout is the default CLI confirmation timeout.
 const defaultApprovalTimeout = 30 * time.Second
+
+// approvalAware 由"自己知道要不要人工确认"的工具实现。
+//
+// 目前只有 MCP 连接器的工具（mcp.MCPTool）实现：它按 tool annotations 或
+// server 级 require_approval 给出结论。用接口而不是开关表，是为了让新增
+// 工具自己声明策略，不必在每个调用点维护白名单。
+type approvalAware interface {
+	RequiresApproval() bool
+	ApprovalSummary() string
+}
 
 // userAction represents the user's decision during interactive CLI confirmation.
 type userAction int
@@ -195,7 +207,18 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		toolDesc = "desktop control"
 		approvalCtx = buildComputerUseContext(call.ToolArgs)
 	default:
-		return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
+		// 连接器工具（mcp_*）：由工具自己声明是否需要确认。以前的 default
+		// 分支直接放行，意味着一个暴露 delete_file 的 MCP server 可以被模型
+		// 直接调用，而同样的操作走 bash 一定弹窗——这是明确的越权缺口。
+		if !call.RequiresApproval {
+			return call, hooks.HookDecision{Action: hooks.HookActionContinue}, nil
+		}
+		command = call.ApprovalSummary
+		if command == "" {
+			command = call.ToolName
+		}
+		toolDesc = "connector tool call"
+		approvalCtx = buildConnectorCallContext(call)
 	}
 
 	if command == "" {
@@ -289,6 +312,18 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 			result.AskUser = true
 			result.RiskLevel = approval.RiskHigh
 			result.Reason = "Desktop control requires confirmation — this can click and type into any application"
+			if req.Reason == "" {
+				req.Reason = result.Reason
+			}
+		} else if call.RequiresApproval && result.Reason == lowRiskAutoApproveReason {
+			// 连接器工具的合成命令（"MCP github → delete_repo"）不含参数里
+			// 的破坏性语义，assessRisk 只会判低风险并静默放行。工具自己已经
+			// 声明要确认了（destructiveHint / require_approval），这里不能
+			// 被自动放行推翻。
+			result.Approved = false
+			result.AskUser = true
+			result.RiskLevel = approval.RiskHigh
+			result.Reason = fmt.Sprintf("%s requires confirmation — this connector tool can change external state", command)
 			if req.Reason == "" {
 				req.Reason = result.Reason
 			}
@@ -700,6 +735,49 @@ func buildComputerUseContext(args map[string]interface{}) string {
 func strArg(args map[string]interface{}, key string) string {
 	s, _ := args[key].(string)
 	return s
+}
+
+// buildConnectorCallContext 构造 MCP 连接器工具的审批上下文。
+//
+// 审批卡片必须能看到"这个工具带什么参数"才能判断：同样是 send_message，
+// 发给自己和发到客户群是两件事。参数按 key 排序输出，保证同一个调用每次
+// 展示一致（map 遍历顺序随机会让卡片抖动）。
+func buildConnectorCallContext(call *hooks.ToolCallHookRequest) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Connector tool: %s\n", call.ToolName)
+	if call.ApprovalSummary != "" && call.ApprovalSummary != call.ToolName {
+		fmt.Fprintf(&b, "Action: %s\n", call.ApprovalSummary)
+	}
+	b.WriteString("This call reaches an external system and may change data there.\n")
+	b.WriteString("Approve only if this matches what you actually asked for.")
+
+	if len(call.ToolArgs) == 0 {
+		return b.String()
+	}
+
+	keys := make([]string, 0, len(call.ToolArgs))
+	for k := range call.ToolArgs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	b.WriteString("\n\n--- arguments ---")
+	for _, k := range keys {
+		v := call.ToolArgs[k]
+		var rendered string
+		if s, ok := v.(string); ok {
+			rendered = truncateCommand(s, 400)
+		} else {
+			raw, err := json.Marshal(v)
+			if err != nil {
+				rendered = fmt.Sprintf("%v", v)
+			} else {
+				rendered = truncateCommand(string(raw), 400)
+			}
+		}
+		fmt.Fprintf(&b, "\n%s: %s", k, rendered)
+	}
+	return b.String()
 }
 
 // buildFileEditContext 构造 file_edit 的审批上下文：尝试展示 old/new 字段。

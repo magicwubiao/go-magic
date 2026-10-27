@@ -43,6 +43,11 @@ func SyncToRegistry(mgr *mcp.Manager, reg *tool.Registry) int {
 			continue
 		}
 		for _, t := range tools {
+			// 用户屏蔽的工具不进注册表：模型连 schema 都看不到，
+			// 这样上百个工具的 server 也能只暴露常用的那几个。
+			if mgr.IsToolDisabled(serverName, t.Name) {
+				continue
+			}
 			reg.Register(mcp.NewMCPTool(serverName, t, mgr))
 			count++
 		}
@@ -64,10 +69,15 @@ func SyncServerToRegistry(mgr *mcp.Manager, reg *tool.Registry, serverName strin
 	if err != nil {
 		return 0
 	}
+	count := 0
 	for _, t := range tools {
+		if mgr.IsToolDisabled(serverName, t.Name) {
+			continue
+		}
 		reg.Register(mcp.NewMCPTool(serverName, t, mgr))
+		count++
 	}
-	return len(tools)
+	return count
 }
 
 // RemoveServerTools removes every registered mcp_<server>_* tool from the

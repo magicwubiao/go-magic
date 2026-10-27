@@ -152,9 +152,15 @@ type ToolAnnotations struct {
 // Supported transport names, used as ServerConfig.Transport values. External
 // JSON configs spell these differently (type: "http", "streamable-http", …) —
 // see NormalizeTransport in import.go for the mapping.
+//
+// TransportHTTP 与 TransportSSE 走同一份实现（SSETransport 本身就是
+// Streamable HTTP 语义：一次 POST 一个请求，响应按 Content-Type 分流），
+// 保留两个名字是为了让配置忠实反映用户写的端点类型，而不是在落盘时把
+// "http" 改写成 "sse" 造成来回漂移。
 const (
 	TransportStdio = "stdio"
 	TransportSSE   = "sse"
+	TransportHTTP  = "http"
 )
 
 // ServerConfig represents MCP server configuration
@@ -162,8 +168,54 @@ type ServerConfig struct {
 	Command   string   `json:"command"`
 	Args      []string `json:"args"`
 	Env       []string `json:"env,omitempty"`
-	Transport string   `json:"transport"`     // "stdio" or "sse"
-	URL       string   `json:"url,omitempty"` // for SSE transport
+	Transport string   `json:"transport"`     // "stdio" / "sse" / "http"
+	URL       string   `json:"url,omitempty"` // for remote transports
+
+	// Headers 是远程连接器的自定义请求头，用来放认证凭据
+	// （Authorization: Bearer …、X-API-Key 等）。值在 API 层按 *** 掩码，
+	// 与 Env 同一套约定。
+	Headers map[string]string `json:"headers,omitempty"`
+
+	// DisabledTools 屏蔽该 server 下的指定工具：不注册进工具注册表，模型
+	// 完全看不到。用于给工具爆炸的 server（上百个工具）瘦身。
+	DisabledTools []string `json:"disabled_tools,omitempty"`
+
+	// Enabled 控制启动时是否自动连接。nil = true（老配置没有这个字段，
+	// 语义必须是"照旧连接"，否则升级后所有连接器都会静默离线）。
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Profiles 限定该连接器只在指定分身里生效；空 = 所有分身。切换分身
+	// 需要重启本来就是既有约定，因此这里只需在启动连接时过滤。
+	Profiles []string `json:"profiles,omitempty"`
+
+	// RequireApproval 强制该 server 的每次工具调用都走人工确认。
+	// 给没写 tool annotations 的 server 兜底——annotations 是可选字段，
+	// 不写就无从判断危险程度，只能由用户显式声明。
+	RequireApproval bool `json:"require_approval,omitempty"`
+}
+
+// AutoConnect 报告该连接器是否应在启动时自动连接。
+func (c ServerConfig) AutoConnect() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// AppliesToProfile 报告该连接器是否在给定分身里生效。
+func (c ServerConfig) AppliesToProfile(profile string) bool {
+	if len(c.Profiles) == 0 {
+		return true
+	}
+	for _, p := range c.Profiles {
+		if strings.EqualFold(strings.TrimSpace(p), strings.TrimSpace(profile)) {
+			return true
+		}
+	}
+	return false
+}
+
+// Transport interface for MCP transport layers
+type Transport interface {
+	Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error)
+	Close() error
 }
 
 // Client represents an MCP client
@@ -175,6 +227,7 @@ type Client struct {
 	mu              sync.RWMutex
 	connected       bool
 	lastError       string
+	lastErrorKind   ErrorKind
 	lastHealthCheck time.Time
 	timeout         time.Duration
 	reconnect       bool
@@ -184,31 +237,56 @@ type Client struct {
 	manager *Manager
 	// negotiatedVersion 记录握手最终谈成的协议版本，供诊断与状态展示。
 	negotiatedVersion string
-}
-
-// Transport interface for MCP transport layers
-type Transport interface {
-	Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error)
-	Close() error
+	// serverName / serverVersion 来自 initialize 的 serverInfo，列表页直接
+	// 展示，方便用户确认"连的到底是哪个 server"。
+	serverName    string
+	serverVersion string
 }
 
 // Manager manages multiple MCP server connections
 type Manager struct {
 	mu             sync.RWMutex
 	clients        map[string]*Client
-	failures       map[string]string // last connect failure per configured server
+	failures       map[string]failureRecord // last connect failure per configured server
 	reconnectDelay time.Duration
 	// reconnecting 记录正在跑自动重连 goroutine 的 server，防止同一个
 	// server 被多次失败事件重复拉起重连循环。
 	reconnecting map[string]bool
+	// disabled 是"按 server 屏蔽的工具"白名单表，来源是 config 的
+	// disabled_tools。工具的可见性在注册表侧生效，这里只负责判定。
+	disabled map[string]map[string]bool
+	// stats 记录每个工具被调用的次数与失败次数（server + "/" + tool 为键），
+	// 用于连接器页展示"到底有没有在用"。
+	stats map[string]*ToolStat
+	// healthStop 关闭时停止后台健康巡检。
+	healthStop chan struct{}
+	healthOnce sync.Once
+}
+
+// failureRecord 是一条连接失败记录：错误文本 + 分类。
+// 分类让 UI 能区分"去补凭据"（auth）和"去查网络"（network）。
+type failureRecord struct {
+	Message string    `json:"message"`
+	Kind    ErrorKind `json:"kind"`
+	At      time.Time `json:"at"`
+}
+
+// ToolStat 是单个 MCP 工具的调用统计。
+type ToolStat struct {
+	Calls      int64     `json:"calls"`
+	Failures   int64     `json:"failures"`
+	LastCallAt time.Time `json:"last_call_at"`
+	LastError  string    `json:"last_error,omitempty"`
 }
 
 // NewManager creates a new MCP manager
 func NewManager() *Manager {
 	return &Manager{
 		clients:        make(map[string]*Client),
-		failures:       make(map[string]string),
+		failures:       make(map[string]failureRecord),
 		reconnecting:   make(map[string]bool),
+		disabled:       make(map[string]map[string]bool),
+		stats:          make(map[string]*ToolStat),
 		reconnectDelay: DefaultReconnectDelay,
 	}
 }
@@ -238,6 +316,29 @@ func (m *Manager) LastFailure(name string) string {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.failures[name].Message
+}
+
+// LastFailureInfo 返回失败记录（文本 + 分类 + 时间）；没有记录时返回零值。
+func (m *Manager) LastFailureInfo(name string) failureRecord {
+	m.mu.RLock()
+	client, exists := m.clients[name]
+	m.mu.RUnlock()
+	if exists {
+		client.mu.RLock()
+		connected, lastErr, kind := client.connected, client.lastError, client.lastErrorKind
+		client.mu.RUnlock()
+		if connected || lastErr == "" {
+			return failureRecord{}
+		}
+		if kind == "" {
+			kind = inferKindFromMessage(lastErr)
+		}
+		return failureRecord{Message: lastErr, Kind: kind}
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.failures[name]
 }
 
@@ -247,7 +348,7 @@ func (m *Manager) recordFailure(name string, err error) {
 		return
 	}
 	m.mu.Lock()
-	m.failures[name] = err.Error()
+	m.failures[name] = failureRecord{Message: err.Error(), Kind: KindOf(err), At: time.Now()}
 	m.mu.Unlock()
 }
 
@@ -262,7 +363,7 @@ func (m *Manager) clearFailure(name string) {
 // recordFailureLocked is recordFailure for callers already holding m.mu.
 func (m *Manager) recordFailureLocked(name string, err error) {
 	if err != nil {
-		m.failures[name] = err.Error()
+		m.failures[name] = failureRecord{Message: err.Error(), Kind: KindOf(err), At: time.Now()}
 	}
 }
 
@@ -327,9 +428,11 @@ func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error)
 	var kind string
 
 	switch config.Transport {
-	case "sse":
-		kind = "SSE"
-		transport, err = NewSSETransport(config.URL)
+	case TransportHTTP, TransportSSE:
+		kind = "HTTP"
+		// sse 与 http 共用同一实现：客户端的动作都是"POST 一个 JSON-RPC，
+		// 按响应 Content-Type 分流"，两者的差异全在服务端。
+		transport, err = NewSSETransportWithOptions(config.URL, config.Headers, defaultSSEConnectTimeout)
 	default:
 		kind = "stdio"
 		transport, err = NewStdioTransport(config.Command, config.Args, config.Env)
@@ -355,6 +458,11 @@ func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error)
 
 	if err := client.initialize(); err != nil {
 		transport.Close()
+		// 无法归类时按协议问题处理：initialize 阶段失败，最可能的原因就是
+		// 对端不说 MCP / 版本不兼容 / Accept 协商被拒。
+		if KindOf(err) == ErrKindUnknown {
+			err = WrapKind(ErrKindProtocol, err)
+		}
 		return nil, fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
@@ -367,9 +475,15 @@ func (m *Manager) ConnectStdio(name string, config ServerConfig) error {
 	return m.connect(name, config)
 }
 
-// ConnectSSE connects to an MCP server using SSE transport
+// ConnectSSE connects to an MCP server using a remote transport (SSE or
+// Streamable HTTP — both are served by SSETransport).
+//
+// 不要无条件把 Transport 改写成 "sse"：调用方可能配置的是 "http"，改写后
+// 重连时读到的就是另一份语义，配置与运行时状态会不一致。
 func (m *Manager) ConnectSSE(name string, config ServerConfig) error {
-	config.Transport = "sse"
+	if config.Transport == "" {
+		config.Transport = TransportSSE
+	}
 	return m.connect(name, config)
 }
 
@@ -575,6 +689,13 @@ func (c *Client) validateInitResult(resp *JSONRPCResponse) {
 		log.Warnf("[MCP] Failed to parse initialize result: %v", err)
 		return
 	}
+	// 记下对端自报的名字/版本，连接器列表直接展示，避免用户分不清
+	// "我连的是 github 还是 github-enterprise"。这一项与协议版本无关，
+	// 要在版本判断之前取，否则极简 payload 的 server 拿不到名字。
+	if initResult.ServerInfo.Name != "" {
+		c.serverName = initResult.ServerInfo.Name
+		c.serverVersion = initResult.ServerInfo.Version
+	}
 	if initResult.ProtocolVersion == "" {
 		return
 	}
@@ -643,8 +764,16 @@ func (c *Client) discoverTools(ctx context.Context) error {
 	}
 }
 
-// callTool calls a tool on the MCP server (2025-03-26 compatible)
+// callTool calls a tool on the MCP server (2025-03-26 compatible) and records
+// usage statistics for the connectors page.
 func (c *Client) callTool(ctx context.Context, toolName string, arguments map[string]interface{}) (interface{}, error) {
+	res, err := c.doCallTool(ctx, toolName, arguments)
+	c.recordCall(toolName, err)
+	return res, err
+}
+
+// doCallTool 是 callTool 的实现体。
+func (c *Client) doCallTool(ctx context.Context, toolName string, arguments map[string]interface{}) (interface{}, error) {
 	encoded, err := jsonMarshal(map[string]interface{}{
 		"name":      toolName,
 		"arguments": arguments,
@@ -667,7 +796,7 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 	}
 
 	if resp.Error != nil {
-		return nil, fmt.Errorf("tool call error: %s", resp.Error.Message)
+		return nil, WrapKind(ErrKindTool, fmt.Errorf("tool call error: %s", resp.Error.Message))
 	}
 
 	var result struct {
@@ -699,9 +828,9 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 	// Server explicitly signaled an error via the 2025-03-26 isError field
 	if result.IsError {
 		if len(result.Content) > 0 && result.Content[0].Text != "" {
-			return nil, fmt.Errorf("tool error: %s", result.Content[0].Text)
+			return nil, WrapKind(ErrKindTool, fmt.Errorf("tool error: %s", result.Content[0].Text))
 		}
-		return nil, fmt.Errorf("tool call returned isError=true")
+		return nil, WrapKind(ErrKindTool, fmt.Errorf("tool call returned isError=true"))
 	}
 
 	// Concatenate all text-type contents; non-text (images, resources) are
@@ -822,6 +951,56 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (int
 	return t.manager.CallTool(ctx, t.serverName, t.tool.Name, args)
 }
 
+// RequiresApproval 实现 tool.ApprovalAware：报告这次调用是否需要人工确认。
+//
+// 判定依据是 MCP 的 tool annotations（2025-03-26 引入，可选字段）：
+//   - 显式 destructiveHint → 必须确认（能删数据、能发消息）；
+//   - openWorldHint 且不是只读 → 会触达外部世界，确认；
+//   - readOnlyHint → 不确认（纯查询）；
+//   - 没写 annotations → 无从判断，默认不拦，由 server 级
+//     require_approval 兜底。
+//
+// 这条链路以前完全缺失：annotations 解析出来了，但没有任何消费方，于是
+// 一个暴露 delete_file 的 MCP server 可以被模型直接调用，而同样的操作走
+// bash 却要弹窗。
+func (t *MCPTool) RequiresApproval() bool {
+	if t.manager != nil && t.manager.ServerRequiresApproval(t.serverName) {
+		return true
+	}
+	a := t.tool.Annotations
+	if a == nil {
+		return false
+	}
+	if a.DestructiveHint {
+		return true
+	}
+	if a.ReadOnlyHint {
+		return false
+	}
+	return a.OpenWorldHint
+}
+
+// ApprovalSummary 给审批卡片一句人类可读的动作描述。
+func (t *MCPTool) ApprovalSummary() string {
+	return fmt.Sprintf("MCP %s → %s", t.serverName, t.tool.Name)
+}
+
+// IsReadOnly 报告工具是否被标注为只读（供 UI 展示"安全/可写"标记）。
+func (t *MCPTool) IsReadOnly() bool {
+	return t.tool.Annotations != nil && t.tool.Annotations.ReadOnlyHint
+}
+
+// ServerRequiresApproval 报告某个 server 是否被配置为"每次调用都确认"。
+func (m *Manager) ServerRequiresApproval(name string) bool {
+	m.mu.RLock()
+	client, ok := m.clients[name]
+	m.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return client.config.RequireApproval
+}
+
 // isConnected reports whether a server is currently connected.
 func (m *Manager) isConnected(name string) bool {
 	m.mu.RLock()
@@ -839,12 +1018,21 @@ func (c *Client) markDisconnected(err error) {
 	c.connected = false
 	if err != nil {
 		c.lastError = err.Error()
+		c.lastErrorKind = KindOf(err)
 	}
 	c.mu.Unlock()
 
 	if c.manager != nil {
 		c.manager.scheduleReconnect(c.name)
 	}
+}
+
+// recordCall 累计一次工具调用的统计（调用数 / 失败数 / 最近一次错误）。
+func (c *Client) recordCall(toolName string, err error) {
+	if c.manager == nil {
+		return
+	}
+	c.manager.recordToolStat(c.name, toolName, err)
 }
 
 // scheduleReconnect 在后台尝试自动重连一个断开的 server：
@@ -902,6 +1090,7 @@ func (c *Client) markConnected() {
 	c.mu.Lock()
 	c.connected = true
 	c.lastError = ""
+	c.lastErrorKind = ""
 	c.mu.Unlock()
 }
 
@@ -935,7 +1124,7 @@ func (m *Manager) ConnectConfigured(servers map[string]ServerConfig) error {
 
 			var err error
 			switch cfg.Transport {
-			case "sse":
+			case TransportHTTP, TransportSSE:
 				err = m.ConnectSSE(name, cfg)
 			default:
 				err = m.ConnectStdio(name, cfg)
@@ -967,6 +1156,164 @@ func (m *Manager) DisconnectAll() {
 	for _, name := range m.ListServers() {
 		_ = m.Disconnect(name)
 	}
+}
+
+// --- 工具可见性（per-server disabled_tools）---
+
+// SetDisabledTools 用配置刷新"按 server 屏蔽的工具"表。整表替换，因此
+// 传入空 map 等价于"全部放行"。
+//
+// 屏蔽发生在注册表侧（mcpbridge 不注册被屏蔽的工具），这里只保留判定
+// 依据；管理器本身不改变 tools/list 的结果，因为"发现"和"暴露给模型"
+// 是两件事——后者才决定 prompt 的体积。
+func (m *Manager) SetDisabledTools(byServer map[string][]string) {
+	next := make(map[string]map[string]bool, len(byServer))
+	for server, tools := range byServer {
+		if len(tools) == 0 {
+			continue
+		}
+		set := make(map[string]bool, len(tools))
+		for _, t := range tools {
+			if t = strings.TrimSpace(t); t != "" {
+				set[t] = true
+			}
+		}
+		if len(set) > 0 {
+			next[server] = set
+		}
+	}
+	m.mu.Lock()
+	m.disabled = next
+	m.mu.Unlock()
+}
+
+// IsToolDisabled 报告某 server 下的某个工具是否被用户屏蔽。
+func (m *Manager) IsToolDisabled(server, tool string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	set, ok := m.disabled[server]
+	if !ok {
+		return false
+	}
+	return set[tool]
+}
+
+// --- 调用统计 ---
+
+// recordToolStat 累计一次工具调用。
+func (m *Manager) recordToolStat(server, tool string, err error) {
+	key := server + "/" + tool
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stats == nil {
+		m.stats = make(map[string]*ToolStat)
+	}
+	st, ok := m.stats[key]
+	if !ok {
+		st = &ToolStat{}
+		m.stats[key] = st
+	}
+	st.Calls++
+	st.LastCallAt = time.Now()
+	if err != nil {
+		st.Failures++
+		st.LastError = err.Error()
+	} else {
+		st.LastError = ""
+	}
+}
+
+// ToolStats 返回某个 server 下全部工具的调用统计（工具名 → 统计）。
+func (m *Manager) ToolStats(server string) map[string]ToolStat {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	prefix := server + "/"
+	out := make(map[string]ToolStat)
+	for key, st := range m.stats {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		out[strings.TrimPrefix(key, prefix)] = *st
+	}
+	return out
+}
+
+// --- 后台健康巡检 ---
+
+// DefaultHealthInterval 是后台巡检的默认间隔。
+//
+// 取 3 分钟的理由：MCP server 多为本地子进程或常驻服务，掉线后用户在几分钟
+// 内就会用到它；间隔再长，连接器页会长期显示"已连接"而实际早死了。ping 本身
+// 很便宜（一个 JSON-RPC 往返，5s 超时）。
+const DefaultHealthInterval = 3 * time.Minute
+
+// StartHealthMonitor 启动后台健康巡检（幂等：重复调用只有第一次生效）。
+//
+// 之前只有手动点"健康检查"才会 ping，空闲的 server 掉线后状态会一直陈旧，
+// 用户在列表里看到绿灯、模型调用时才踩雷。
+func (m *Manager) StartHealthMonitor(interval time.Duration) {
+	if interval <= 0 {
+		interval = DefaultHealthInterval
+	}
+	m.healthOnce.Do(func() {
+		stop := make(chan struct{})
+		m.mu.Lock()
+		m.healthStop = stop
+		m.mu.Unlock()
+		go m.healthLoop(interval, stop)
+	})
+}
+
+// StopHealthMonitor 停止后台巡检（未启动时安全）。
+func (m *Manager) StopHealthMonitor() {
+	m.mu.Lock()
+	stop := m.healthStop
+	m.healthStop = nil
+	m.mu.Unlock()
+	if stop != nil {
+		select {
+		case <-stop:
+			// already closed
+		default:
+			close(stop)
+		}
+	}
+}
+
+func (m *Manager) healthLoop(interval time.Duration, stop <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			m.checkAllHealth()
+		}
+	}
+}
+
+// checkAllHealth 并发（最多 4 路）ping 所有已连接的 server。
+// 失败的由 HealthCheck 自己 markDisconnected，从而进入自动重连流程。
+func (m *Manager) checkAllHealth() {
+	names := m.ListServers()
+	if len(names) == 0 {
+		return
+	}
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, name := range names {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if err := m.HealthCheck(name); err != nil {
+				log.Warnf("[MCP] health check failed for %q: %v", name, err)
+			}
+		}(name)
+	}
+	wg.Wait()
 }
 
 // HealthCheck checks the health of a connected MCP server
@@ -1066,8 +1413,8 @@ func (m *Manager) RefreshTools(name string) error {
 func (m *Manager) GetServerInfo(name string) (map[string]interface{}, error) {
 	m.mu.RLock()
 	client, exists := m.clients[name]
+	m.mu.RUnlock()
 	if !exists {
-		m.mu.RUnlock()
 		return nil, fmt.Errorf("MCP server '%s' not found", name)
 	}
 	// Snapshot every client field under the client lock: reading `connected`
@@ -1077,17 +1424,38 @@ func (m *Manager) GetServerInfo(name string) (map[string]interface{}, error) {
 	lastCheck := client.lastHealthCheck
 	connected := client.connected
 	lastError := client.lastError
+	lastErrorKind := client.lastErrorKind
 	transport := client.config.Transport
+	serverName := client.serverName
+	serverVersion := client.serverVersion
+	protocol := client.negotiatedVersion
 	client.mu.RUnlock()
-	m.mu.RUnlock()
+
+	state := StateConnected
+	switch {
+	case connected:
+		state = StateConnected
+	case lastErrorKind == ErrKindAuth:
+		state = StateUnauthorized
+	case lastError != "":
+		state = StateError
+	default:
+		state = StateDisconnected
+	}
 
 	return map[string]interface{}{
 		"name":              name,
 		"connected":         connected,
+		"state":             state,
 		"tool_count":        toolCount,
 		"transport":         transport,
 		"last_health_check": lastCheck,
 		"last_error":        lastError,
+		"error_kind":        string(lastErrorKind),
+		"error_hint":        ErrorKindHint(lastErrorKind),
+		"server_name":       serverName,
+		"server_version":    serverVersion,
+		"protocol":          protocol,
 	}, nil
 }
 

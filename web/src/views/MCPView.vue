@@ -6,6 +6,12 @@
         <span class="mcp-page-subtitle">{{ t('mcp.subtitle') }}</span>
       </div>
       <n-space>
+        <n-button @click="openCatalogModal">
+          <template #icon>
+            <component :is="GridOutline" />
+          </template>
+          {{ t('mcp.catalogButton') }}
+        </n-button>
         <n-button type="primary" @click="openAddModal">
           <template #icon>
             <component :is="AddOutline" />
@@ -83,6 +89,17 @@
                 <n-text strong>{{ row.name }}</n-text>
                 <n-tag v-if="row.configured === false" size="tiny" :bordered="false">
                   {{ t('mcp.notConfigured') }}
+                </n-tag>
+                <n-tag
+                  v-else-if="row.state === 'unauthorized'"
+                  size="tiny"
+                  type="warning"
+                  :bordered="false"
+                >
+                  {{ t('mcp.stateUnauthorized') }}
+                </n-tag>
+                <n-tag v-else-if="row.enabled === false" size="tiny" :bordered="false">
+                  {{ t('mcp.stateDisabled') }}
                 </n-tag>
               </div>
               <div v-if="!row.connected && row.last_error" class="mcp-row-error" :title="row.last_error">
@@ -244,15 +261,33 @@
               />
             </n-form-item>
 
-            <n-form-item :label="t('mcp.url')" v-if="formData.transport === 'sse'" required>
+            <n-form-item :label="t('mcp.url')" v-if="isRemote" required>
               <n-input
                 key="mcp-url-input"
                 v-model:value="formData.url"
-                placeholder="http://localhost:8080/mcp"
+                placeholder="https://example.com/mcp"
               />
             </n-form-item>
 
-            <n-form-item :label="t('mcp.env')">
+            <!--
+              请求头是远程连接器唯一的认证入口：云端 MCP 基本都要求
+              Authorization 或 X-API-Key。放在 URL 下面，因为它是"URL 的凭据"。
+              值的回填是 *** 掩码，保存时后端按 key 还原成磁盘真值。
+            -->
+            <n-form-item v-if="isRemote" :label="t('mcp.headers')">
+              <n-input
+                key="mcp-headers-input"
+                v-model:value="formData.headersStr"
+                type="textarea"
+                :rows="2"
+                :placeholder="t('mcp.headersPlaceholder')"
+              />
+              <template #feedback>
+                <n-text depth="3" style="font-size: 12px;">{{ t('mcp.headersHint') }}</n-text>
+              </template>
+            </n-form-item>
+
+            <n-form-item :label="t('mcp.env')" v-if="!isRemote">
               <n-input
                 key="mcp-env-input"
                 v-model:value="formData.envStr"
@@ -260,6 +295,25 @@
                 :rows="2"
                 placeholder="KEY=value&#10;ANOTHER_KEY=value"
               />
+            </n-form-item>
+
+            <n-form-item :label="t('mcp.behavior')">
+              <n-space vertical size="small" style="width: 100%;">
+                <n-space align="center" size="small">
+                  <n-switch v-model:value="formData.autoConnect" size="small" />
+                  <n-text style="font-size: 13px;">{{ t('mcp.autoConnect') }}</n-text>
+                </n-space>
+                <n-space align="center" size="small">
+                  <n-switch v-model:value="formData.requireApproval" size="small" />
+                  <n-text style="font-size: 13px;">{{ t('mcp.requireApproval') }}</n-text>
+                </n-space>
+                <n-input
+                  v-model:value="formData.profilesStr"
+                  size="small"
+                  :placeholder="t('mcp.profilesPlaceholder')"
+                />
+                <n-text depth="3" style="font-size: 12px;">{{ t('mcp.profilesHint') }}</n-text>
+              </n-space>
             </n-form-item>
           </div>
         </n-space>
@@ -274,13 +328,73 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!--
+      从目录添加：内置一批常见 MCP server 的命令/参数/需要的凭据，
+      用户只需挑一个、填自己的 token。终结点仍是 POST /api/mcp/servers，
+      与手工填写完全同一条路径，目录不引入新的运行时概念。
+    -->
+    <n-modal
+      v-model:show="showCatalogModal"
+      :title="t('mcp.catalogTitle')"
+      preset="card"
+      class="modal-responsive"
+      style="width: 720px; max-width: 96vw; max-height: 85vh;"
+    >
+      <n-input
+        v-model:value="catalogQuery"
+        clearable
+        :placeholder="t('mcp.catalogSearch')"
+        style="margin-bottom: 12px;"
+        @update:value="onCatalogQueryChange"
+      >
+        <template #prefix>
+          <component :is="SearchOutline" />
+        </template>
+      </n-input>
+
+      <n-space v-if="catalogCategories.length" size="small" style="margin-bottom: 12px;">
+        <n-tag
+          v-for="c in catalogCategories"
+          :key="c.id"
+          size="small"
+          checkable
+          :checked="catalogCategory === c.id"
+          @update:checked="(v: boolean) => toggleCatalogCategory(c.id, v)"
+        >
+          {{ c.label }}
+        </n-tag>
+      </n-space>
+
+      <n-spin v-if="catalogLoading" />
+      <n-scrollbar v-else style="max-height: 52vh;">
+        <div class="mcp-catalog-list">
+          <div v-for="item in catalogItems" :key="item.id" class="mcp-catalog-item">
+            <div class="mcp-catalog-main">
+              <div class="mcp-catalog-name">{{ item.name }}</div>
+              <div class="mcp-catalog-desc">{{ item.description }}</div>
+              <n-space size="small" style="margin-top: 6px;">
+                <n-tag size="tiny" :bordered="false">{{ item.transport }}</n-tag>
+                <n-tag v-for="tag in (item.tags || []).slice(0, 3)" :key="tag" size="tiny" :bordered="false">
+                  {{ tag }}
+                </n-tag>
+              </n-space>
+            </div>
+            <n-button size="small" type="primary" secondary @click="installFromCatalog(item)">
+              {{ t('mcp.catalogInstall') }}
+            </n-button>
+          </div>
+          <n-empty v-if="!catalogItems.length" :description="t('mcp.catalogEmpty')" style="margin: 24px 0;" />
+        </div>
+      </n-scrollbar>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch, h } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NScrollbar, NSelect, NSpace, NSpin, NSwitch, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   AddOutline,
@@ -288,11 +402,12 @@ import {
   SearchOutline,
   EllipsisHorizontalOutline,
   CopyOutline,
+  GridOutline,
   LayersOutline,
 } from '@vicons/ionicons5'
 import { useMCPStore } from '@/stores/mcp'
-import { mcpErrorMessage, serverConfigToJSON } from '@/api/mcp'
-import type { MCPConfig, MCPServer } from '@/api/mcp'
+import { getMCPCatalog, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, testMCPServer } from '@/api/mcp'
+import type { CatalogCategory, CatalogConnector, MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -301,6 +416,8 @@ const mcpStore = useMCPStore()
 const showAddModal = ref(false)
 const isEditing = ref(false)
 const serverTools = ref<Record<string, any[]>>({})
+/** 每个连接器下各工具的调用次数（展开时拉一次，用于判断"到底在不在用"） */
+const toolStats = ref<Record<string, Record<string, MCPToolStat>>>({})
 const toolsLoading = ref<Record<string, boolean>>({})
 const batchBusy = ref(false)
 // 受控展开：点击行（非按钮区）展开该服务器的工具清单。
@@ -334,12 +451,24 @@ const formData = reactive({
   argsStr: '',
   url: '',
   envStr: '',
+  /** 请求头，一行一个 KEY=value。远程连接器的认证全靠它。 */
+  headersStr: '',
+  /** 限定生效的分身，逗号分隔；空 = 所有分身 */
+  profilesStr: '',
+  /** 每次调用都要人工确认（给没写 annotations 的 server 兜底） */
+  requireApproval: false,
+  /** 启动时自动连接 */
+  autoConnect: true,
 })
 
 const transportOptions = [
   { label: 'STDIO', value: 'stdio' },
+  { label: 'HTTP', value: 'http' },
   { label: 'SSE', value: 'sse' },
 ]
+
+/** 远程传输（URL + headers 这两块只对它们有意义）。 */
+const isRemote = computed(() => formData.transport === 'sse' || formData.transport === 'http')
 
 /**
  * 本地预检粘贴的 JSON —— 只为在提交前给出即时反馈（列出识别到的服务器名）。
@@ -398,9 +527,28 @@ function renderExpandedRow(row: MCPServer) {
   const children: any[] = []
 
   if (!row.connected && row.last_error) {
-    children.push(h(NAlert, { type: 'error', showIcon: true, style: 'margin-bottom: 12px;' }, {
-      header: () => t('mcp.connectFailed'),
-      default: () => h('div', { class: 'error-detail' }, row.last_error),
+    children.push(h(NAlert, {
+      type: row.state === 'unauthorized' ? 'warning' : 'error',
+      showIcon: true,
+      style: 'margin-bottom: 12px;',
+    }, {
+      header: () => (row.state === 'unauthorized' ? t('mcp.authFailed') : t('mcp.connectFailed')),
+      default: () => h('div', null, [
+        h('div', { class: 'error-detail' }, row.last_error),
+        // error_hint 是后端按 error_kind 给的动作建议：补凭据 / 查网络 / 改 URL。
+        row.error_hint
+          ? h(NText, { depth: 3, style: 'font-size: 12px; display: block; margin-top: 6px;' }, { default: () => row.error_hint })
+          : null,
+      ].filter(Boolean)),
+    }))
+  }
+
+  if (row.connected && (row.server_name || row.protocol)) {
+    children.push(h(NText, { depth: 3, style: 'font-size: 12px; display: block; margin-bottom: 8px;' }, {
+      default: () => [
+        row.server_name ? `${row.server_name}${row.server_version ? ' v' + row.server_version : ''}` : '',
+        row.protocol ? ` · MCP ${row.protocol}` : '',
+      ].join(''),
     }))
   }
 
@@ -419,6 +567,9 @@ function renderExpandedRow(row: MCPServer) {
     ],
   })
 
+  // 被屏蔽的工具不进注册表，模型完全看不到；这里逐个开关。
+  const disabledSet = new Set(row.disabled_tools || [])
+
   let toolBody: any
   if (loading) {
     toolBody = h(NSpin, { size: 'small' })
@@ -426,18 +577,44 @@ function renderExpandedRow(row: MCPServer) {
     toolBody = h(NCollapse, null, {
       default: () => tools.map((tool: any) =>
         h(NCollapseItem, { key: tool.name, name: tool.name }, {
-          header: () => h(NText, { code: true }, { default: () => tool.name }),
+          header: () => h(NSpace, { size: 6, align: 'center' }, {
+            default: () => [
+              h(NText, { code: true }, { default: () => tool.name }),
+              disabledSet.has(tool.name)
+                ? h(NTag, { size: 'tiny', type: 'warning', bordered: false }, { default: () => t('mcp.toolHidden') })
+                : null,
+            ].filter(Boolean),
+          }),
           'header-extra': () =>
-            h(NButton, {
-              text: true, size: 'tiny',
-              onClick: (e: Event) => { e.stopPropagation(); handleCopyToolName(row.name, tool.name) },
-            }, { icon: () => h(NIcon, null, { default: () => h(CopyOutline) }) }),
+            h(NSpace, { size: 8, align: 'center' }, {
+              default: () => [
+                h(NSwitch, {
+                  size: 'small',
+                  value: !disabledSet.has(tool.name),
+                  'onUpdate:value': (v: boolean) => handleToggleTool(row, tool.name, v),
+                  onClick: (e: Event) => e.stopPropagation(),
+                }),
+                h(NButton, {
+                  text: true, size: 'tiny',
+                  onClick: (e: Event) => { e.stopPropagation(); handleCopyToolName(row.name, tool.name) },
+                }, { icon: () => h(NIcon, null, { default: () => h(CopyOutline) }) }),
+              ],
+            }),
           default: () =>
             h(NSpace, { vertical: true, size: 8 }, {
               default: () => [
                 tool.description
                   ? h(NText, { depth: 2, style: 'font-size: 13px;' }, { default: () => tool.description })
                   : h(NText, { depth: 3, style: 'font-size: 12px;' }, { default: () => t('mcp.noDescription') }),
+                (() => {
+                  const st = toolStats.value[row.name]?.[tool.name]
+                  if (!st || !st.calls) return null
+                  return h(NText, { depth: 3, style: 'font-size: 12px;' }, {
+                    default: () => (st.failures
+                      ? t('mcp.toolUsageFailed', { calls: st.calls, failures: st.failures })
+                      : t('mcp.toolUsage', { calls: st.calls })),
+                  })
+                })(),
                 hasSchema(tool)
                   ? h('div', null, [
                       h(NText, { depth: 3, style: 'font-size: 12px; display: block; margin-bottom: 4px;' }, { default: () => t('mcp.parameters') }),
@@ -526,6 +703,13 @@ function rowMenuOptions(row: MCPServer) {
       disabled: !!busy[row.name],
     })
   }
+  if (row.configured) {
+    options.push({
+      label: t('mcp.testConnection'),
+      key: 'test',
+      disabled: !!busy[row.name],
+    })
+  }
   options.push({ label: t('mcp.copyConfig'), key: 'copy' })
   options.push({ type: 'divider', key: 'd1' })
   options.push({ label: t('common.delete'), key: 'delete' })
@@ -539,6 +723,9 @@ async function handleRowMenu(key: string, row: MCPServer) {
       return
     case 'health':
       await handleHealthCheck(row.name)
+      return
+    case 'test':
+      await handleTest(row)
       return
     case 'copy':
       handleCopyConfig(row)
@@ -666,6 +853,12 @@ async function loadToolsIfNeeded(name: string) {
   toolsLoading.value[name] = true
   try {
     serverTools.value[name] = await mcpStore.loadServerTools(name)
+    // 统计是附加信息，失败不影响工具清单展示。
+    try {
+      toolStats.value[name] = await getMCPToolStats(name)
+    } catch {
+      toolStats.value[name] = {}
+    }
   } finally {
     toolsLoading.value[name] = false
   }
@@ -731,6 +924,120 @@ async function handleDisconnect(name: string) {
   }
 }
 
+// --- 内置连接器目录 ---
+
+const showCatalogModal = ref(false)
+const catalogItems = ref<CatalogConnector[]>([])
+const catalogCategories = ref<CatalogCategory[]>([])
+const catalogQuery = ref('')
+const catalogCategory = ref('')
+const catalogLoading = ref(false)
+let catalogTimer: ReturnType<typeof setTimeout> | null = null
+
+async function loadCatalog() {
+  catalogLoading.value = true
+  try {
+    const res = await getMCPCatalog(catalogQuery.value.trim() || undefined, catalogCategory.value || undefined)
+    catalogItems.value = res.connectors || []
+    catalogCategories.value = res.categories || []
+  } catch (e: any) {
+    message.error(mcpErrorMessage(e) || t('mcp.catalogFailed'))
+    catalogItems.value = []
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+function openCatalogModal() {
+  showCatalogModal.value = true
+  if (!catalogItems.value.length) void loadCatalog()
+}
+
+/** 搜索防抖：目录是本地接口，但逐字请求仍会让列表闪烁。 */
+function onCatalogQueryChange() {
+  if (catalogTimer) clearTimeout(catalogTimer)
+  catalogTimer = setTimeout(() => { void loadCatalog() }, 250)
+}
+
+function toggleCatalogCategory(id: string, checked: boolean) {
+  catalogCategory.value = checked ? id : ''
+  void loadCatalog()
+}
+
+/**
+ * 选中目录条目 → 预填表单（而不是直接安装）。
+ *
+ * 直接安装会跳过一个必然要做的步骤：填凭据。目录里没有凭据，也不该有。
+ * 预填后把光标交给用户，填完再保存，失败原因能当场看到。
+ */
+function installFromCatalog(item: CatalogConnector) {
+  showCatalogModal.value = false
+  isEditing.value = false
+  inputMode.value = 'form'
+  jsonText.value = ''
+  resetForm()
+
+  formData.name = item.default_name || item.id
+  formData.transport = item.transport || 'stdio'
+  formData.command = item.command || ''
+  formData.argsStr = (item.args || []).join(' ')
+  formData.url = item.url || ''
+
+  const envLines: string[] = []
+  const headerLines: string[] = []
+  for (const req of item.requires || []) {
+    if (req.where === 'header') headerLines.push(`${req.key}=`)
+    else envLines.push(`${req.key}=`)
+  }
+  formData.envStr = envLines.join('\n')
+  formData.headersStr = headerLines.join('\n')
+  showAddModal.value = true
+
+  if ((item.requires || []).length) {
+    message.info(t('mcp.catalogFillRequired', { name: item.name }), { duration: 6000 })
+  }
+}
+
+// --- 试连与工具开关 ---
+
+/**
+ * 试连：把"保存 → 后台连接 → 刷新列表才发现失败"缩成一次点击。
+ * 失败时同时给出分类建议（补凭据 / 查网络 / 改 URL），这是后端 error_kind
+ * 存在的意义。
+ */
+async function handleTest(row: MCPServer) {
+  if (busy[row.name]) return
+  busy[row.name] = true
+  try {
+    const res = await testMCPServer(row.name)
+    if (res.ok) {
+      message.success(t('mcp.testOK', { name: row.name, count: res.tool_count ?? 0, ms: res.elapsed_ms ?? 0 }))
+    } else {
+      const hint = res.error_hint ? ` — ${res.error_hint}` : ''
+      message.error(`${res.error || t('mcp.testFailed', { name: row.name })}${hint}`, { duration: 10000 })
+    }
+    await mcpStore.loadServers()
+  } catch (e: any) {
+    message.error(mcpErrorMessage(e) || t('mcp.testFailed', { name: row.name }))
+  } finally {
+    busy[row.name] = false
+  }
+}
+
+/** 单独启用/屏蔽某个工具：屏蔽的工具不会进模型看到的工具表。 */
+async function handleToggleTool(row: MCPServer, toolName: string, enabled: boolean) {
+  try {
+    await setMCPToolEnabled(row.name, toolName, enabled)
+    message.success(enabled
+      ? t('mcp.toolEnabled', { tool: toolName })
+      : t('mcp.toolDisabled', { tool: toolName }))
+    await mcpStore.loadServers()
+  } catch (e: any) {
+    message.error(mcpErrorMessage(e) || t('mcp.toolToggleFailed'))
+    await mcpStore.loadServers()
+  }
+}
+
 async function handleDelete(name: string) {
   try {
     await mcpStore.removeServer(name)
@@ -789,11 +1096,53 @@ function onModalPaste(e: ClipboardEvent) {
   message.info(t('mcp.jsonPasted'), { duration: 3000 })
 }
 
+/** 把 {K: V} 渲染成 "K=V" 的文本块（表单里用换行分隔）。 */
+function kvToLines(map?: Record<string, string>): string {
+  return Object.entries(map || {}).map(([k, v]) => `${k}=${v}`).join('\n')
+}
+
+/**
+ * 把 "K=V" 文本块解析成对象。
+ *
+ * 按第一个 '=' 切分，值里可以再出现 '='（JWT / base64 的 padding 很常见）。
+ * 空行与没有 '=' 的行直接跳过——宁可少一个头，也不要发出一个 key 为空、
+ * 服务端只会回 400 的请求。
+ */
+function linesToKV(text: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const idx = line.indexOf('=')
+    if (idx <= 0) continue
+    const key = line.slice(0, idx).trim()
+    const value = line.slice(idx + 1).trim()
+    if (!key) continue
+    out[key] = value
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function resetForm() {
+  Object.assign(formData, {
+    name: '',
+    transport: 'stdio',
+    command: '',
+    argsStr: '',
+    url: '',
+    envStr: '',
+    headersStr: '',
+    profilesStr: '',
+    requireApproval: false,
+    autoConnect: true,
+  })
+}
+
 function openAddModal() {
   isEditing.value = false
   inputMode.value = 'form'
   jsonText.value = ''
-  Object.assign(formData, { name: '', transport: 'stdio', command: '', argsStr: '', url: '', envStr: '' })
+  resetForm()
   showAddModal.value = true
 }
 
@@ -806,8 +1155,12 @@ function openEditModal(row: MCPServer) {
     command: row.command || '',
     argsStr: (row.args || []).join(' '),
     url: row.url || '',
-    // env 的值是 *** 掩码，原样回传时由后端还原成磁盘上的真值
-    envStr: Object.entries(row.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+    // env / headers 的值是 *** 掩码，原样回传时由后端还原成磁盘上的真值
+    envStr: kvToLines(row.env),
+    headersStr: kvToLines(row.headers),
+    profilesStr: (row.profiles || []).join(', '),
+    requireApproval: !!row.require_approval,
+    autoConnect: row.enabled !== false,
   })
   showAddModal.value = true
 }
@@ -843,17 +1196,26 @@ async function doSave() {
     return
   }
 
-  if (formData.transport === 'sse' && !formData.url) {
+  if (isRemote.value && !formData.url) {
     message.error(t('mcp.urlRequired'))
     return
   }
 
+  const profiles = formData.profilesStr
+    .split(',')
+    .map(p => p.trim())
+    .filter(Boolean)
+
   const config: MCPConfig = {
-    command: formData.command,
-    args: formData.argsStr.split(/\s+/).filter(Boolean),
+    command: formData.transport === 'stdio' ? formData.command : '',
+    args: formData.transport === 'stdio' ? formData.argsStr.split(/\s+/).filter(Boolean) : [],
     transport: formData.transport,
-    url: formData.url,
-    env: formData.envStr.split('\n').filter(Boolean),
+    url: isRemote.value ? formData.url : '',
+    env: formData.transport === 'stdio' ? formData.envStr.split('\n').filter(Boolean) : undefined,
+    headers: isRemote.value ? linesToKV(formData.headersStr) : undefined,
+    enabled: formData.autoConnect,
+    profiles: profiles.length ? profiles : undefined,
+    require_approval: formData.requireApproval || undefined,
   }
 
   try {
@@ -1093,5 +1455,45 @@ onMounted(async () => {
   .expanded-row {
     padding: 12px 8px;
   }
+}
+</style>
+
+<!--
+  目录弹窗的样式必须写在全局块里：n-modal 会 teleport 到 body，
+  scoped 选择器带的 data-v-xxx 在弹窗内容上不存在，写了也不生效。
+-->
+<style>
+.mcp-catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.mcp-catalog-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--n-border-color, rgba(128, 128, 128, 0.2));
+  border-radius: 8px;
+}
+
+.mcp-catalog-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-catalog-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+
+.mcp-catalog-desc {
+  font-size: 12px;
+  opacity: 0.75;
+  line-height: 1.5;
 }
 </style>

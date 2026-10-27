@@ -3,6 +3,7 @@ package server
 import (
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/mcpbridge"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
@@ -33,7 +34,36 @@ func (s *Server) initStandaloneMCP() {
 		return
 	}
 
-	if err := mcpbridge.ConnectAndSync(s.mcpMgr, s.toolReg, cfg.MCP.Servers); err != nil {
+	// 先把"屏蔽了哪些工具"灌进 Manager：桥接在注册工具时会逐条查询，
+	// 顺序反了会让首次注册忽略屏蔽列表，直到下一次 sync 才生效。
+	s.refreshMCPToolVisibility()
+
+	// 连接器的作用范围过滤：
+	//   - enabled=false：用户明确关了自动连接（配置保留，可在页面手动连）；
+	//   - profiles 非空且不含当前分身：这个连接器属于别的身份。
+	// 两者都在这里筛掉，而不是连接后再断开——后者会白拉起 npx 子进程。
+	active := s.activeProfile()
+	servers := make(map[string]mcp.ServerConfig, len(cfg.MCP.Servers))
+	var skipped []string
+	for name, sc := range cfg.MCP.Servers {
+		if !sc.AutoConnect() {
+			skipped = append(skipped, name+"(disabled)")
+			continue
+		}
+		if !sc.AppliesToProfile(active) {
+			skipped = append(skipped, name+"(profile:"+active+")")
+			continue
+		}
+		servers[name] = sc
+	}
+	if len(skipped) > 0 {
+		log.Infof("[MCP] skipped connectors at startup: %v", skipped)
+	}
+	if len(servers) == 0 {
+		return
+	}
+
+	if err := mcpbridge.ConnectAndSync(s.mcpMgr, s.toolReg, servers); err != nil {
 		log.Warnf("[MCP] standalone MCP servers partially failed: %v", err)
 	}
 	log.Infof("[MCP] standalone MCP servers connected: %d, total tools in registry: %d",

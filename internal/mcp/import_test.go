@@ -69,7 +69,7 @@ func TestParseServersJSONVariants(t *testing.T) {
 		{
 			name: "单个服务器自带 name",
 			json: `{"name": "web", "url": "http://localhost:8080/mcp", "type": "http"}`,
-			want: []NamedServerConfig{{Name: "web", Config: ServerConfig{URL: "http://localhost:8080/mcp", Transport: TransportSSE}}},
+			want: []NamedServerConfig{{Name: "web", Config: ServerConfig{URL: "http://localhost:8080/mcp", Transport: TransportHTTP}}},
 		},
 		{
 			name: "数组形态",
@@ -90,9 +90,9 @@ func TestParseServersJSONVariants(t *testing.T) {
 			}}},
 		},
 		{
-			name: "baseUrl 别名 + streamable-http 归一为 sse",
+			name: "baseUrl 别名 + streamable-http 归一为 http",
 			json: `{"remote": {"baseUrl": "https://example.com/mcp", "type": "streamable-http"}}`,
-			want: []NamedServerConfig{{Name: "remote", Config: ServerConfig{URL: "https://example.com/mcp", Transport: TransportSSE}}},
+			want: []NamedServerConfig{{Name: "remote", Config: ServerConfig{URL: "https://example.com/mcp", Transport: TransportHTTP}}},
 		},
 		{
 			name: "disabled 条目被跳过",
@@ -206,10 +206,10 @@ func TestNormalizeTransport(t *testing.T) {
 		"stdio":           TransportStdio,
 		"STDIO":           TransportStdio,
 		"sse":             TransportSSE,
-		"http":            TransportSSE,
-		"streamable-http": TransportSSE,
-		"streamable_http": TransportSSE,
-		"streamableHTTP":  TransportSSE,
+		"http":            TransportHTTP,
+		"streamable-http": TransportHTTP,
+		"streamable_http": TransportHTTP,
+		"streamableHTTP":  TransportHTTP,
 		"  sse  ":         TransportSSE,
 	}
 	for in, want := range cases {

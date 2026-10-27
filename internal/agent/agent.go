@@ -3752,6 +3752,21 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 		ToolName: toolName,
 		ToolArgs: toolArgs,
 	}
+	// 把工具自报的"这次调用要不要人工确认"带进 hook。
+	// MCP 连接器的工具按 tool annotations（destructiveHint / openWorldHint）
+	// 或 server 级 require_approval 决定，见 mcp.(*MCPTool).RequiresApproval。
+	// 用可选接口而不是给 ToolRegistry 加方法：注册表接口只有 Execute，
+	// 加方法会让所有测试桩实现集体失效。
+	if lookup, ok := a.registry.(interface {
+		Get(string) (tool.Tool, error)
+	}); ok {
+		if t, getErr := lookup.Get(toolName); getErr == nil {
+			if aw, ok := t.(approvalAware); ok && aw.RequiresApproval() {
+				callReq.RequiresApproval = true
+				callReq.ApprovalSummary = aw.ApprovalSummary()
+			}
+		}
+	}
 	callReq, decision, err := a.hooks.BeforeTool(ctx, callReq)
 	if err != nil {
 		return ToolCallResult{

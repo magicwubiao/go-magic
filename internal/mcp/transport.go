@@ -299,8 +299,12 @@ func (t *StdioTransport) Close() error {
 	return nil
 }
 
-// SSETransport implements MCP transport over Server-Sent Events
-// (Streamable HTTP: POST-per-request, response may be JSON or an SSE stream).
+// SSETransport 是远程 MCP 的 HTTP 传输。
+//
+// 它实现的是 Streamable HTTP 的语义（每个请求一次 POST，响应可能是普通
+// JSON，也可能是一条 SSE 流），同时兼容早期的 SSE 端点——两者的差别只在
+// 服务端怎么回，客户端行为一致。类型名沿用 SSE 是历史原因（见
+// NormalizeTransport 的说明）。
 type SSETransport struct {
 	url        string
 	client     *http.Client
@@ -313,6 +317,9 @@ type SSETransport struct {
 	// Streamable HTTP 的有状态 server 要求后续请求原样回传，丢掉它会导致
 	// 第二个请求起 404/400（"Missing session ID"）。
 	sessionID string
+	// headers 是用户为该连接器配置的额外请求头（Authorization / X-API-Key
+	// 等）。按值拷贝，构造后不再改写，因此无锁读取是安全的。
+	headers map[string]string
 }
 
 // defaultSSEConnectTimeout 是 SSE/Streamable-HTTP 传输单次 HTTP 请求的超时。
@@ -331,8 +338,25 @@ func NewSSETransport(url string) (*SSETransport, error) {
 // NewSSETransportWithTimeout 用指定超时构造 SSE 传输（<=0 时取默认值）。
 // 供需要调整握手预算的调用方使用。
 func NewSSETransportWithTimeout(url string, timeout time.Duration) (*SSETransport, error) {
+	return NewSSETransportWithOptions(url, nil, timeout)
+}
+
+// NewSSETransportWithOptions 构造可带自定义请求头的远程传输。
+//
+// headers 目前承载的是认证：绝大多数云端 MCP server 只认 Authorization
+// 或 X-API-Key。以前没有这个入口，用户只能把 token 拼进 URL query，既
+// 会泄漏到日志，也没法通过 CORS/网关校验。这里做一次拷贝，防止调用方
+// 之后修改 map 造成并发读写。
+func NewSSETransportWithOptions(url string, headers map[string]string, timeout time.Duration) (*SSETransport, error) {
 	if timeout <= 0 {
 		timeout = defaultSSEConnectTimeout
+	}
+	var copied map[string]string
+	if len(headers) > 0 {
+		copied = make(map[string]string, len(headers))
+		for k, v := range headers {
+			copied[strings.TrimSpace(k)] = v
+		}
 	}
 	return &SSETransport{
 		url:        url,
@@ -341,6 +365,7 @@ func NewSSETransportWithTimeout(url string, timeout time.Duration) (*SSETranspor
 		reconnect:  true,
 		maxRetries: 3,
 		retryDelay: time.Second,
+		headers:    copied,
 	}, nil
 }
 
@@ -447,26 +472,36 @@ func classifyHTTPError(err error) error {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
 
+	// 所有分支都是"够不着对端"，统一归 network。分类在 wrap 时打标签，
+	// 单条消息保持原样（既有测试与 UI 文案都依赖这些字符串）。
+	wrap := func(msg string) error { return WrapKind(ErrKindNetwork, fmt.Errorf("%s: %w", msg, err)) }
+
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) || strings.Contains(lower, "timeout"):
-		return fmt.Errorf("connection timed out: %w", err)
+		return wrap("connection timed out")
 	case strings.Contains(lower, "no such host") || strings.Contains(lower, "getaddrinfo") ||
 		strings.Contains(lower, "lookup ") || strings.Contains(lower, "dns"):
-		return fmt.Errorf("DNS lookup failed (check the URL host or your network): %w", err)
+		return wrap("DNS lookup failed (check the URL host or your network)")
 	case strings.Contains(lower, "connection refused"):
-		return fmt.Errorf("connection refused (is the server running and reachable?): %w", err)
+		return wrap("connection refused (is the server running and reachable?)")
 	case strings.Contains(lower, "no route to host") || strings.Contains(lower, "network is unreachable"):
-		return fmt.Errorf("host unreachable (check network/VPN): %w", err)
+		return wrap("host unreachable (check network/VPN)")
 	case strings.Contains(lower, "certificate") || strings.Contains(lower, "tls"):
-		return fmt.Errorf("TLS/certificate error: %w", err)
+		return wrap("TLS/certificate error")
 	default:
-		return fmt.Errorf("HTTP request failed: %w", err)
+		return wrap("HTTP request failed")
 	}
 }
 
 // httpStatusError builds a descriptive error for a non-200 response, folding in
-// the server's own explanation when it sent one.
+// the server's own explanation when it sent one. 返回值带错误分类（401/403 →
+// auth、5xx → server、406/400 → protocol、404/405 → not_found），供 UI 决定
+// 给出"去补凭据"还是"去改 URL"。
 func httpStatusError(status int, contentType, body string) error {
+	return WrapKind(ClassifyStatus(status), httpStatusErrorPlain(status, contentType, body))
+}
+
+func httpStatusErrorPlain(status int, contentType, body string) error {
 	body = strings.TrimSpace(body)
 	if body != "" {
 		if isJSONContentType(contentType) || strings.HasPrefix(body, "{") {
@@ -524,6 +559,14 @@ func (t *SSETransport) doRequest(ctx context.Context, req *JSONRPCRequest) (*JSO
 	// older SSE-only endpoints.
 	httpReq.Header.Set("MCP-Protocol-Version", ProtocolVersion)
 
+	// 用户配置的请求头放最后：认证头（Authorization / X-API-Key）是这里
+	// 唯一的用途，必须能覆盖上面的默认值。
+	for k, v := range t.headers {
+		if k != "" {
+			httpReq.Header.Set(k, v)
+		}
+	}
+
 	// 有状态 server：回传它派发的会话 id。
 	t.mu.Lock()
 	if t.sessionID != "" {
@@ -544,6 +587,14 @@ func (t *SSETransport) doRequest(ctx context.Context, req *JSONRPCRequest) (*JSO
 			t.sessionID = sid
 		}
 		t.mu.Unlock()
+	}
+
+	// 202 Accepted / 204 No Content 是通知类请求（notifications/initialized
+	// 等）的正常回执：服务端接受了消息，但没有响应体。以前这里按"非 200"
+	// 处理，直接把一次成功的握手通知变成错误——对采用标准语义的服务端，
+	// 连接会因此在握手阶段就失败。
+	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent {
+		return &JSONRPCResponse{JSONRPC: JSONRPCVersion}, nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -666,16 +717,39 @@ func (t *SSETransport) parseSSEResponse(body io.Reader) (*JSONRPCResponse, error
 	return parseJSONRPCBody(strings.NewReader(responseData))
 }
 
-// Close closes the SSE transport
+// Close closes the SSE transport.
+//
+// 对有状态的 Streamable HTTP server，规范约定客户端用 DELETE + Mcp-Session-Id
+// 主动结束会话；不这么做，服务端会一直挂着一个没人用的会话（进程内资源、
+// 上游连接），反复重连会累积。失败不影响关闭——那只是"尽力清理"。
 func (t *SSETransport) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
 	t.reconnect = false
+	session := t.sessionID
+	t.mu.Unlock()
+
+	if session != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, t.url, nil)
+		if err == nil {
+			req.Header.Set("Mcp-Session-Id", session)
+			for k, v := range t.headers {
+				if k != "" {
+					req.Header.Set(k, v)
+				}
+			}
+			if resp, doErr := t.client.Do(req); doErr == nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+				resp.Body.Close()
+			}
+		}
+	}
 	return nil
 }
 

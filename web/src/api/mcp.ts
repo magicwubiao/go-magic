@@ -14,7 +14,25 @@ export interface MCPServer {
   args?: string[]
   /** 只返回 key，值一律是 *** */
   env?: Record<string, string>
+  /** 自定义请求头，值一律是 ***（认证头放这里） */
+  headers?: Record<string, string>
   url?: string
+  /** connected / unauthorized / error / disconnected / configured */
+  state?: string
+  /** 失败分类：auth / network / server / protocol / not_found / tool */
+  error_kind?: string
+  /** 针对 error_kind 的一句话建议 */
+  error_hint?: string
+  server_name?: string
+  server_version?: string
+  protocol?: string
+  /** 启动时是否自动连接 */
+  enabled?: boolean
+  /** 限定生效的分身；空 = 所有分身 */
+  profiles?: string[]
+  /** 被屏蔽的工具（不注册给模型） */
+  disabled_tools?: string[]
+  require_approval?: boolean
 }
 
 export interface MCPTool {
@@ -27,8 +45,14 @@ export interface MCPConfig {
   command: string
   args: string[]
   env?: string[]
+  /** 自定义请求头（Authorization 等），值为 *** 时后端还原成磁盘真值 */
+  headers?: Record<string, string>
   transport: string
   url?: string
+  enabled?: boolean
+  profiles?: string[]
+  disabled_tools?: string[]
+  require_approval?: boolean
 }
 
 /** POST /api/mcp/servers 的结果（JSON 导入可能一次加多个） */
@@ -42,6 +66,83 @@ export interface MCPImportResult {
 
 export async function getMCPServers(): Promise<MCPServer[]> {
   return request('/mcp/servers')
+}
+
+/** 试连结果：ok=false 时带错误分类与建议（HTTP 仍是 200） */
+export interface MCPTestResult {
+  name: string
+  ok: boolean
+  tool_count?: number
+  elapsed_ms?: number
+  error?: string
+  error_kind?: string
+  error_hint?: string
+}
+
+/** 试连一个已保存的连接器（不会改变它的启用状态） */
+export async function testMCPServer(name: string): Promise<MCPTestResult> {
+  return request(`/mcp/servers/${name}/test`, { method: 'POST' })
+}
+
+/** 单个工具的调用统计 */
+export interface MCPToolStat {
+  calls: number
+  failures: number
+  last_call_at?: string
+  last_error?: string
+}
+
+/** 某个连接器下各工具的调用统计（进程内累计，重启归零） */
+export async function getMCPToolStats(name: string): Promise<Record<string, MCPToolStat>> {
+  return request(`/mcp/servers/${name}/stats`)
+}
+
+/** 单独启用/屏蔽某个工具 */
+export async function setMCPToolEnabled(name: string, tool: string, enabled: boolean): Promise<void> {
+  return request(`/mcp/servers/${name}/tools/${encodeURIComponent(tool)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+/** 内置连接器目录中的一项 */
+export interface CatalogConnector {
+  id: string
+  name: string
+  description: string
+  category: string
+  transport: string
+  command?: string
+  args?: string[]
+  url?: string
+  requires?: {
+    key: string
+    label: string
+    where: 'env' | 'header'
+    secret: boolean
+    required: boolean
+    placeholder?: string
+    help_url?: string
+  }[]
+  docs_url?: string
+  tags?: string[]
+  default_name: string
+}
+
+export interface CatalogCategory {
+  id: string
+  label: string
+}
+
+export async function getMCPCatalog(q?: string, category?: string): Promise<{
+  connectors: CatalogConnector[]
+  categories: CatalogCategory[]
+}> {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  if (category) params.set('category', category)
+  const qs = params.toString()
+  return request(`/mcp/catalog${qs ? `?${qs}` : ''}`)
 }
 
 export async function getMCPServer(name: string): Promise<MCPServer> {
@@ -156,8 +257,8 @@ export async function reconnectAllMCPServers(names: string[]): Promise<{ name: s
  */
 export function serverConfigToJSON(server: MCPServer): string {
   const entry: Record<string, any> = {}
-  if (server.transport === 'sse') {
-    entry.type = 'sse'
+  if (server.transport === 'sse' || server.transport === 'http') {
+    entry.type = server.transport
     entry.url = server.url || ''
   } else {
     entry.command = server.command || ''
@@ -165,5 +266,10 @@ export function serverConfigToJSON(server: MCPServer): string {
     entry.type = 'stdio'
   }
   if (server.env && Object.keys(server.env).length) entry.env = server.env
+  if (server.headers && Object.keys(server.headers).length) entry.headers = server.headers
+  if (server.disabled_tools?.length) entry.disabled_tools = server.disabled_tools
+  if (server.profiles?.length) entry.profiles = server.profiles
+  if (server.require_approval) entry.require_approval = true
+  if (server.enabled === false) entry.enabled = false
   return JSON.stringify({ mcpServers: { [server.name]: entry } }, null, 2)
 }

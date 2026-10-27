@@ -1,14 +1,17 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
+	"github.com/magicwubiao/go-magic/pkg/connectors"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
@@ -25,6 +28,9 @@ import (
 //	POST   /api/mcp/servers/{name}/reconnect     重连
 //	POST   /api/mcp/servers/{name}/health        健康检查
 //	GET|POST /api/mcp/servers/{name}/tools[/refresh]
+//	PUT    /api/mcp/servers/{name}/tools/{tool}   单独启用/屏蔽工具
+//	POST   /api/mcp/servers/{name}/test          试连（不改启用状态）
+//	GET    /api/mcp/catalog                      内置连接器目录
 //
 // 两条重要约定：
 //
@@ -53,7 +59,25 @@ type mcpServerView struct {
 	Command         string            `json:"command,omitempty"`
 	Args            []string          `json:"args,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
 	URL             string            `json:"url,omitempty"`
+
+	// State 是给 UI 用的状态机：connected / unauthorized / error /
+	// disconnected / configured。相比 connected 布尔，它能让界面说出
+	// "凭据有问题"而不是笼统的"连接失败"。
+	State      string `json:"state"`
+	ErrorKind  string `json:"error_kind,omitempty"`
+	ErrorHint  string `json:"error_hint,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	ServerVer  string `json:"server_version,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+
+	// Enabled 表示启动时是否自动连接；nil 在 JSON 里序列化为 true 的等价物
+	// （视图层总是给出明确布尔值）。
+	Enabled         bool     `json:"enabled"`
+	Profiles        []string `json:"profiles,omitempty"`
+	DisabledTools   []string `json:"disabled_tools,omitempty"`
+	RequireApproval bool     `json:"require_approval,omitempty"`
 }
 
 func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +149,32 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			}
 			jsonResponse(w, []map[string]interface{}{result})
 			return
+		case "test":
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			s.handleMCPTest(w, name)
+			return
+		case "stats":
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			// 调用统计：让用户看出"这个连接器到底在不在用"。
+			// 进程内累计，不落盘——重启后归零是可接受的，它不是审计数据。
+			jsonResponse(w, s.mcpMgr.ToolStats(name))
+			return
 		case "tools":
+			if r.Method == http.MethodPut && len(parts) >= 3 && parts[2] != "refresh" {
+				// 工具名可能含空格/特殊字符（MCP 允许），路径段是转义过的。
+				toolName, err := url.PathUnescape(parts[2])
+				if err != nil {
+					toolName = parts[2]
+				}
+				s.handleMCPToolToggle(w, r, name, toolName)
+				return
+			}
 			if r.Method == http.MethodPost && len(parts) >= 3 && parts[2] == "refresh" {
 				if err := s.mcpMgr.RefreshTools(name); err != nil {
 					jsonError(w, http.StatusInternalServerError, err.Error())
@@ -308,6 +357,7 @@ func (s *Server) applyMCPServers(w http.ResponseWriter, servers []mcp.NamedServe
 		cfg := item.Config
 		// 掩码还原：表单回填过的 *** 不能被当成真值写回去。
 		cfg.Env = mergeMaskedServerEnv(stored[item.Name].Env, cfg.Env)
+		cfg.Headers = mergeMaskedServerHeaders(stored[item.Name].Headers, cfg.Headers)
 		upsert[item.Name] = cfg
 	}
 
@@ -319,6 +369,8 @@ func (s *Server) applyMCPServers(w http.ResponseWriter, servers []mcp.NamedServe
 	}
 
 	// 后台连接：每个 server 一个 goroutine，互不阻塞。
+	// 先刷新工具可见性：连接完成后的 registry 同步要按最新的 disabled_tools 过滤。
+	s.refreshMCPToolVisibility()
 	added := make([]string, 0, len(servers))
 	for _, item := range servers {
 		added = append(added, item.Name)
@@ -470,13 +522,19 @@ func (s *Server) listMCPServers() []mcpServerView {
 	for _, name := range ordered {
 		cfg, isConfigured := configured[name]
 		view := mcpServerView{
-			Name:       name,
-			Configured: isConfigured,
-			Transport:  cfg.Transport,
-			Command:    cfg.Command,
-			Args:       cfg.Args,
-			Env:        maskServerEnv(cfg.Env),
-			URL:        cfg.URL,
+			Name:            name,
+			Configured:      isConfigured,
+			Transport:       cfg.Transport,
+			Command:         cfg.Command,
+			Args:            cfg.Args,
+			Env:             maskServerEnv(cfg.Env),
+			Headers:         maskServerHeaders(cfg.Headers),
+			URL:             cfg.URL,
+			Enabled:         cfg.AutoConnect(),
+			Profiles:        cfg.Profiles,
+			DisabledTools:   cfg.DisabledTools,
+			RequireApproval: cfg.RequireApproval,
+			State:           mcp.StateConfigured,
 		}
 		if view.Transport == "" {
 			// 兜底：按字段推断，避免前端拿不到传输方式。
@@ -502,17 +560,62 @@ func (s *Server) listMCPServers() []mcpServerView {
 			if errMsg, ok := info["last_error"].(string); ok {
 				view.LastError = errMsg
 			}
+			if st, ok := info["state"].(string); ok && st != "" {
+				view.State = st
+			}
+			if kind, ok := info["error_kind"].(string); ok {
+				view.ErrorKind = kind
+			}
+			if hint, ok := info["error_hint"].(string); ok {
+				view.ErrorHint = hint
+			}
+			if sn, ok := info["server_name"].(string); ok {
+				view.ServerName = sn
+			}
+			if sv, ok := info["server_version"].(string); ok {
+				view.ServerVer = sv
+			}
+			if pv, ok := info["protocol"].(string); ok {
+				view.Protocol = pv
+			}
 		}
 
 		// 未连接的服务器没有 live client，失败原因记录在 Manager 的 failures 表里
 		// （连接尝试失败时写入）。这样列表就能直接说清"为什么连不上"。
 		if !view.Connected && view.LastError == "" && s.mcpMgr != nil {
-			view.LastError = s.mcpMgr.LastFailure(name)
+			if rec := s.mcpMgr.LastFailureInfo(name); rec.Message != "" {
+				view.LastError = rec.Message
+				if view.ErrorKind == "" {
+					view.ErrorKind = string(rec.Kind)
+				}
+				if view.ErrorHint == "" {
+					view.ErrorHint = mcp.ErrorKindHint(rec.Kind)
+				}
+				view.State = stateFromKind(rec.Kind)
+			}
+		}
+
+		// 已配置但从未尝试连接（或被手动断开）：状态是 configured/disconnected，
+		// 不该显示成"错误"。
+		if view.State == "" {
+			view.State = mcp.StateConfigured
 		}
 
 		out = append(out, view)
 	}
 	return out
+}
+
+// stateFromKind 把错误分类映射成连接器状态。
+func stateFromKind(kind mcp.ErrorKind) string {
+	switch kind {
+	case mcp.ErrKindAuth:
+		return mcp.StateUnauthorized
+	case "":
+		return mcp.StateConfigured
+	default:
+		return mcp.StateError
+	}
 }
 
 // maskServerEnv 只暴露 key，值一律替换成 ***（与 bot env 同一套约定）。
@@ -556,8 +659,196 @@ func mergeMaskedServerEnv(stored, incoming []string) []string {
 	return out
 }
 
-func readMCPBody(r *http.Request) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxMCPImportBody+1))
+// maskServerHeaders 与 maskServerEnv 同一套约定：只回显 key，值一律 ***。
+// 认证头里放的是 token，列表接口会被任何已登录的浏览器读到。
+func maskServerHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	masked := make(map[string]string, len(headers))
+	for k := range headers {
+		masked[k] = maskedEnvValue
+	}
+	return masked
+}
+
+// mergeMaskedServerHeaders 把回传的 *** 还原成磁盘上的原值。
+//
+// 与 env 不同，headers 是 map：这里按 key 逐个判断，回传里没有的 key 视为
+// 已删除（用户点了那个 × ）。空 map / nil 表示清空全部自定义头。
+func mergeMaskedServerHeaders(stored, incoming map[string]string) map[string]string {
+	if len(incoming) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(incoming))
+	for k, v := range incoming {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		if v == maskedEnvValue {
+			if old, ok := stored[key]; ok {
+				v = old
+			}
+		}
+		out[key] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// handleMCPTest 试连一个已保存的连接器，不改变它的"启用"状态。
+//
+// 存在的理由：保存后是后台连接，失败原因要等列表刷新才出现；用户点"保存"
+// 时并不知道凭据对不对。这个接口把"握手 + 工具发现"跑一遍并当场给出结果
+// （工具数 / 耗时 / 错误分类），失败也算正常的业务结果——HTTP 始终 200，
+// 由 ok 字段表达结论。
+func (s *Server) handleMCPTest(w http.ResponseWriter, name string) {
+	if s.mcpMgr == nil {
+		jsonError(w, http.StatusInternalServerError, "MCP manager not initialized")
+		return
+	}
+	cfg, configured := s.mcpServerConfigs()[name]
+	if !configured {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("MCP server %q is not configured", name))
+		return
+	}
+
+	start := time.Now()
+	result := map[string]interface{}{"name": name}
+
+	// 已连接的：只用一次 ping 验证链路，不动现有连接与工具表。
+	if _, err := s.mcpMgr.GetServerInfo(name); err == nil {
+		err := s.mcpMgr.HealthCheck(name)
+		result["ok"] = err == nil
+		result["elapsed_ms"] = time.Since(start).Milliseconds()
+		if err != nil {
+			result["error"] = err.Error()
+			result["error_kind"] = string(mcp.KindOf(err))
+			result["error_hint"] = mcp.ErrorKindHint(mcp.KindOf(err))
+		} else {
+			tools, _ := s.mcpMgr.ListToolsByServer(name)
+			result["tool_count"] = len(tools)
+		}
+		jsonResponse(w, result)
+		return
+	}
+
+	// 未连接：临时连一次，拿到结果后立刻拆掉，避免"测一下"把连接器
+	// 意外点亮（用户以为只是试了试）。
+	err := s.connectMCPServer(name, cfg)
+	result["elapsed_ms"] = time.Since(start).Milliseconds()
+	if err != nil {
+		result["ok"] = false
+		result["error"] = err.Error()
+		result["error_kind"] = string(mcp.KindOf(err))
+		result["error_hint"] = mcp.ErrorKindHint(mcp.KindOf(err))
+		jsonResponse(w, result)
+		return
+	}
+	tools, _ := s.mcpMgr.ListToolsByServer(name)
+	_ = s.mcpMgr.Disconnect(name)
+	s.removeMCPServerTools(name)
+	result["ok"] = true
+	result["tool_count"] = len(tools)
+	jsonResponse(w, result)
+}
+
+// handleMCPToolToggle 单独启用/屏蔽某个工具（PUT {enabled:bool}）。
+//
+// 为什么需要它：一个 server 动辄上百个工具，全部进 prompt 会把上下文吃掉
+// 一大截。以前只能靠全局 tools.disabled 手写工具名，连接器页看不到入口。
+func (s *Server) handleMCPToolToggle(w http.ResponseWriter, r *http.Request, name, tool string) {
+	cfg, configured := s.mcpServerConfigs()[name]
+	if !configured {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("MCP server %q is not configured", name))
+		return
+	}
+	if strings.TrimSpace(tool) == "" {
+		jsonError(w, http.StatusBadRequest, "tool name is required")
+		return
+	}
+
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON body: %v", err))
+		return
+	}
+	if body.Enabled == nil {
+		jsonError(w, http.StatusBadRequest, `"enabled" is required`)
+		return
+	}
+
+	disabled := make([]string, 0, len(cfg.DisabledTools))
+	for _, t := range cfg.DisabledTools {
+		if t != tool {
+			disabled = append(disabled, t)
+		}
+	}
+	if !*body.Enabled {
+		disabled = append(disabled, tool)
+	}
+	cfg.DisabledTools = disabled
+
+	if err := s.persistMCPServers(map[string]mcp.ServerConfig{name: cfg}, nil); err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save config: %v", err))
+		return
+	}
+	s.refreshMCPToolVisibility()
+	s.syncMCPServerToRegistry(name)
+
+	jsonResponse(w, map[string]interface{}{
+		"success":        true,
+		"name":           name,
+		"tool":           tool,
+		"enabled":        *body.Enabled,
+		"disabled_tools": cfg.DisabledTools,
+	})
+}
+
+// refreshMCPToolVisibility 把 config 里的 disabled_tools 汇总进 Manager。
+//
+// Manager 只负责"某个工具是否该隐藏"的判定，注册表侧（mcpbridge）在每次
+// 同步时查询它，因此这里更新完必须让调用方跟着 sync 一次注册表。
+func (s *Server) refreshMCPToolVisibility() {
+	if s == nil || s.mcpMgr == nil {
+		return
+	}
+	all := s.mcpServerConfigs()
+	byServer := make(map[string][]string, len(all))
+	for name, cfg := range all {
+		if len(cfg.DisabledTools) > 0 {
+			byServer[name] = cfg.DisabledTools
+		}
+	}
+	s.mcpMgr.SetDisabledTools(byServer)
+}
+
+// handleMCPCatalog 返回内置连接器目录（可搜索）。
+//
+//	GET /api/mcp/catalog?q=github&category=dev
+//
+// 目录只是"模板"：点安装时前端把模板展开成一份 ServerConfig 提交到
+// POST /api/mcp/servers，认证字段（env/headers）由用户填。这样目录不必
+// 关心凭据，也不会把任何 token 固化在代码里。
+func (s *Server) handleMCPCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	jsonResponse(w, map[string]interface{}{
+		"connectors": connectors.Search(q, category),
+		"categories": connectors.Categories(),
+	})
+}
+
+func readMCPBody(r *http.Request) ([]byte, error) {	body, err := io.ReadAll(io.LimitReader(r.Body, maxMCPImportBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read request body: %w", err)
 	}

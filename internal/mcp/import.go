@@ -260,9 +260,10 @@ func normalizeServerConfig(name string, raw interface{}) (ServerConfig, bool, er
 	if disabled, _ := m["disabled"].(bool); disabled {
 		return ServerConfig{}, true, nil
 	}
-	if enabled, ok := m["enabled"].(bool); ok && !enabled {
-		return ServerConfig{}, true, nil
-	}
+	// 注意 enabled:false 与 disabled:true 的区别：
+	//   - disabled:true 是外部生态的"这条别加进来"，跳过；
+	//   - enabled:false 是本项目的"加进来但启动时别自动连"，保留配置。
+	// 两者都跳过的话，用户从 config.json 里复制一段粘贴回来会静默丢连接器。
 
 	var cfg ServerConfig
 
@@ -307,6 +308,31 @@ func normalizeServerConfig(name string, raw interface{}) (ServerConfig, bool, er
 		cfg.Env = env
 	}
 
+	// headers：远程连接器的认证头。外部生态里也写作 "headers"（Cursor /
+	// Claude Code 的 http 段一致），对象形态，值必须是标量。
+	if v, ok := m["headers"]; ok {
+		headers, err := normalizeEnv(v)
+		if err != nil {
+			return ServerConfig{}, false, fmt.Errorf("server %q: headers: %w", name, err)
+		}
+		cfg.Headers = EnvSliceToMap(headers)
+	}
+
+	// disabled_tools / profiles：本项目扩展字段，外部配置里通常没有。
+	if v, ok := m["disabled_tools"].([]interface{}); ok {
+		cfg.DisabledTools, _ = toStringSlice(v)
+	}
+	if v, ok := m["profiles"].([]interface{}); ok {
+		cfg.Profiles, _ = toStringSlice(v)
+	}
+	if v, ok := m["require_approval"].(bool); ok {
+		cfg.RequireApproval = v
+	}
+	if v, ok := m["enabled"].(bool); ok {
+		enabled := v
+		cfg.Enabled = &enabled
+	}
+
 	for _, key := range []string{"url", "baseUrl", "base_url", "serverUrl", "server_url", "endpoint"} {
 		if s, ok := m[key].(string); ok && strings.TrimSpace(s) != "" {
 			cfg.URL = strings.TrimSpace(s)
@@ -343,23 +369,22 @@ func normalizeServerConfig(name string, raw interface{}) (ServerConfig, bool, er
 		if cfg.Command == "" {
 			return ServerConfig{}, false, fmt.Errorf("server %q: stdio transport requires \"command\"", name)
 		}
-	case TransportSSE:
+	case TransportSSE, TransportHTTP:
 		if cfg.URL == "" {
-			return ServerConfig{}, false, fmt.Errorf("server %q: sse transport requires \"url\"", name)
+			return ServerConfig{}, false, fmt.Errorf("server %q: %s transport requires \"url\"", name, cfg.Transport)
 		}
 	}
 
 	return cfg, false, nil
 }
 
-// NormalizeTransport 把外部写法归一到本项目支持的两种传输方式。
+// NormalizeTransport 把外部写法归一到本项目支持的传输方式。
 //
-// 空字符串返回空（由调用方按字段推断）。http / streamable-http 一律映射到
-// sse：SSETransport 实现的是"POST JSON-RPC，然后按响应 Content-Type 分流"——
-// 既支持 text/event-stream 流式响应，也支持 application/json 单次响应，且
-// 请求头声明 Accept: application/json, text/event-stream（Streamable HTTP
-// 规范要求），所以它同时覆盖 SSE 与 Streamable HTTP 两种端点，没必要再引入
-// 第三种传输方式。
+// 空字符串返回空（由调用方按字段推断）。http / streamable-http 归一为
+// TransportHTTP，sse 归一为 TransportSSE ——两者在客户端共用同一份实现
+// （SSETransport 按响应 Content-Type 分流，既吃 application/json 也吃
+// text/event-stream，见 transport.go），但**配置值保持区分**：把用户写的
+// "http" 改写成 "sse" 会让 profile/配置 diff 每次保存都跳，也会误导排错。
 func NormalizeTransport(raw string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
@@ -369,9 +394,9 @@ func NormalizeTransport(raw string) (string, error) {
 	case TransportSSE:
 		return TransportSSE, nil
 	case "http", "https", "streamable-http", "streamable_http", "streamablehttp", "sse+http":
-		return TransportSSE, nil
+		return TransportHTTP, nil
 	default:
-		return "", fmt.Errorf("unsupported transport %q: use \"stdio\" or \"sse\" (http/streamable-http are treated as sse)", raw)
+		return "", fmt.Errorf("unsupported transport %q: use \"stdio\", \"sse\" or \"http\"", raw)
 	}
 }
 

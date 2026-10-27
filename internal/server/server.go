@@ -721,6 +721,10 @@ Your working directory is: %s
 	safeGo(func() {
 		defer close(s.mcpInitDone)
 		s.initStandaloneMCP()
+		// 连接建立后再开巡检：空表时启动没有意义，且会让 ticker 白转。
+		if s.mcpMgr != nil {
+			s.mcpMgr.StartHealthMonitor(mcp.DefaultHealthInterval)
+		}
 	})
 
 	// QR 扫码平台（WeCom AI Bot / WeChat iLink）确认登录后自动重启 gateway：
@@ -1634,6 +1638,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/mcp/servers", withCORS(requireAuth(s.handleMCPServers)))
 	mux.HandleFunc("/api/mcp/servers/", withCORS(requireAuth(s.handleMCPServerByID)))
 	mux.HandleFunc("/api/mcp/health", withCORS(requireAuth(s.handleMCPHealth)))
+	mux.HandleFunc("/api/mcp/catalog", withCORS(requireAuth(s.handleMCPCatalog)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
@@ -1942,6 +1947,7 @@ func (s *Server) Stop() {
 	}
 	// 关闭所有独立 MCP server 连接,释放 stdio/SSE 子进程与传输资源。
 	if s.mcpMgr != nil {
+		s.mcpMgr.StopHealthMonitor()
 		s.mcpMgr.DisconnectAll()
 	}
 	// 停止子代理管理器：取消在跑的子任务并回收 worker goroutine。
