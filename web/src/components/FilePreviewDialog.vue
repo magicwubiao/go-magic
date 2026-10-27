@@ -12,11 +12,32 @@
   >
 
     <div v-if="loading" class="preview-state">
+      <!-- 卡片标题栏是隐藏的，常规态的关闭按钮收在工具栏最右侧；
+           但 loading / error 两态在工具栏之前就返回了，必须自带来路，
+           否则「文件超过 2MB 无法预览」这类错误态只剩点遮罩能退出 -->
+      <n-button
+        class="preview-state-close"
+        size="small"
+        quaternary
+        :title="t('common.close')"
+        @click="closeFromToolbar"
+      >
+        <template #icon><n-icon :component="CloseOutline" /></template>
+      </n-button>
       <n-spin size="large" />
       <n-text depth="3" class="preview-state-text">Loading...</n-text>
     </div>
 
     <div v-else-if="error" class="preview-state">
+      <n-button
+        class="preview-state-close"
+        size="small"
+        quaternary
+        :title="t('common.close')"
+        @click="closeFromToolbar"
+      >
+        <template #icon><n-icon :component="CloseOutline" /></template>
+      </n-button>
       <n-text type="error">{{ error }}</n-text>
       <!-- 读取失败（含「超过 2MB 无法预览」）时，用户最需要的还是能拿到文件，
            所以错误态也保留下载出口 -->
@@ -1087,12 +1108,20 @@ onUnmounted(() => {
 
 <style scoped>
 .preview-state {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 40px 16px;
   text-align: center;
+}
+
+/* 无工具栏的状态（加载中 / 读取失败）自带的关闭入口，固定在卡片右上角 */
+.preview-state-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 
 .preview-state-text {
