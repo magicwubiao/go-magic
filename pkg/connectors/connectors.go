@@ -19,8 +19,9 @@ import (
 
 // Requirement 描述安装时必须由用户填写的一项配置。
 //
-// Where 只有两种取值：env（stdio 子进程的环境变量）与 header（远程连接的
-// HTTP 头）。这两条正好对应 ServerConfig 的两个凭据入口。
+// Where 只有三种取值：env（stdio 子进程的环境变量）、header（远程连接的
+// HTTP 头）与 arg（stdio 命令行参数，Args 里的 {{KEY}} 占位符会被替换）。
+// 这三条正好对应 ServerConfig 的三个凭据入口。
 type Requirement struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
@@ -34,6 +35,7 @@ type Requirement struct {
 const (
 	WhereEnv    = "env"
 	WhereHeader = "header"
+	WhereArg    = "arg"
 )
 
 // Connector 是目录中的一个条目。
@@ -63,6 +65,7 @@ type Category struct {
 // 大多数人来这里是为了开发工具或搜索，放在前面更省一次滚动。
 func Categories() []Category {
 	return []Category{
+		{ID: "office", Label: "Office & Collaboration"},
 		{ID: "dev", Label: "Development"},
 		{ID: "search", Label: "Search & Web"},
 		{ID: "data", Label: "Data & Databases"},
@@ -77,6 +80,143 @@ func Categories() []Category {
 // 命令以 npx 拉起为主（免安装、跨平台），这类条目对 Node 有依赖；需要
 // Python 的条目用 uvx。参数里的路径/仓库地址由用户在表单里补。
 var catalog = []Connector{
+	// --- Office & Collaboration（海内外办公协同） ---
+	// 全部条目按各家官方文档核实（2026-10）：飞书/钉钉/语雀为官方 MCP，
+	// Asana 为官方 remote，Microsoft 365 / Atlassian / Airtable 为社区事实标准。
+	{
+		ID:          "lark",
+		Name:        "Feishu / Lark",
+		Description: "Official Feishu/Lark OpenAPI: messages, docs, wiki, calendar, tasks and Bitable.",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		// App ID/Secret 以命令行参数传入（官方 README 用法），展开时由
+		// arg 类 Requirement 占位替换。
+		Args:        []string{"-y", "@larksuiteoapi/lark-mcp", "mcp", "-a", "{{LARK_APP_ID}}", "-s", "{{LARK_APP_SECRET}}"},
+		DefaultName: "lark",
+		Requires: []Requirement{
+			{Key: "LARK_APP_ID", Label: "App ID", Where: WhereArg, Required: true, HelpURL: "https://open.feishu.cn/app"},
+			{Key: "LARK_APP_SECRET", Label: "App Secret", Where: WhereArg, Secret: true, Required: true, HelpURL: "https://open.feishu.cn/app"},
+		},
+		DocsURL: "https://github.com/larksuite/lark-openapi-mcp",
+		Tags:    []string{"feishu", "lark", "docs", "calendar", "chat", "bitable"},
+	},
+	{
+		ID:          "dingtalk",
+		Name:        "DingTalk",
+		Description: "Official DingTalk OpenAPI: contacts, calendar, todos, group messages and work notices.",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "dingtalk-mcp@latest"},
+		DefaultName: "dingtalk",
+		Requires: []Requirement{
+			{Key: "DINGTALK_Client_ID", Label: "AppKey (Client ID)", Where: WhereEnv, Required: true, HelpURL: "https://open.dingtalk.com"},
+			{Key: "DINGTALK_Client_Secret", Label: "AppSecret (Client Secret)", Where: WhereEnv, Secret: true, Required: true, HelpURL: "https://open.dingtalk.com"},
+		},
+		DocsURL: "https://open.dingtalk.com/document/ai-dev/second-level-node-1",
+		Tags:    []string{"dingtalk", "calendar", "todo", "chat"},
+	},
+	{
+		ID:          "yuque",
+		Name:        "Yuque",
+		Description: "Official Yuque knowledge base: search, read and write docs, books and notes.",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "yuque-mcp"},
+		DefaultName: "yuque",
+		Requires: []Requirement{{
+			Key:      "YUQUE_PERSONAL_TOKEN",
+			Label:    "Personal access token",
+			Where:    WhereEnv,
+			Secret:   true,
+			Required: true,
+			HelpURL:  "https://www.yuque.com/settings/tokens",
+		}},
+		DocsURL: "https://github.com/yuque/yuque-mcp-server",
+		Tags:    []string{"yuque", "docs", "knowledge-base"},
+	},
+	{
+		ID:          "ms365",
+		Name:        "Microsoft 365",
+		Description: "Outlook mail, calendar, OneDrive, Excel and Teams via Microsoft Graph (device-code login on first use).",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "@softeria/ms-365-mcp-server"},
+		DefaultName: "ms365",
+		DocsURL:     "https://github.com/softeria/ms-365-mcp-server",
+		Tags:        []string{"outlook", "onedrive", "excel", "calendar", "teams"},
+	},
+	{
+		ID:          "asana",
+		Name:        "Asana",
+		Description: "Official Asana Work Graph: tasks, projects, goals and portfolios (browser OAuth on first use).",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "mcp-remote", "https://mcp.asana.com/sse"},
+		DefaultName: "asana",
+		DocsURL:     "https://developers.asana.com/docs/using-asanas-mcp-server",
+		Tags:        []string{"tasks", "project-management"},
+	},
+	{
+		ID:          "confluence",
+		Name:        "Confluence",
+		Description: "Search and read Confluence spaces and pages (Atlassian Cloud).",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "uvx",
+		Args:        []string{"mcp-atlassian", "--confluence-url={{CONFLUENCE_URL}}", "--confluence-username={{CONFLUENCE_USERNAME}}", "--confluence-api-token={{CONFLUENCE_API_TOKEN}}"},
+		DefaultName: "confluence",
+		Requires: []Requirement{
+			{Key: "CONFLUENCE_URL", Label: "Site URL", Where: WhereArg, Required: true, Placeholder: "https://your.atlassian.net/wiki"},
+			{Key: "CONFLUENCE_USERNAME", Label: "Account email", Where: WhereArg, Required: true},
+			{Key: "CONFLUENCE_API_TOKEN", Label: "API token", Where: WhereArg, Secret: true, Required: true, HelpURL: "https://id.atlassian.com/manage-profile/security/api-tokens"},
+		},
+		DocsURL: "https://github.com/sooperset/mcp-atlassian",
+		Tags:    []string{"confluence", "atlassian", "docs", "wiki"},
+	},
+	{
+		ID:          "jira",
+		Name:        "Jira",
+		Description: "Search and update Jira issues, comments and transitions (Atlassian Cloud).",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "uvx",
+		Args:        []string{"mcp-atlassian", "--jira-url={{JIRA_URL}}", "--jira-username={{JIRA_USERNAME}}", "--jira-api-token={{JIRA_API_TOKEN}}"},
+		DefaultName: "jira",
+		Requires: []Requirement{
+			{Key: "JIRA_URL", Label: "Site URL", Where: WhereArg, Required: true, Placeholder: "https://your.atlassian.net"},
+			{Key: "JIRA_USERNAME", Label: "Account email", Where: WhereArg, Required: true},
+			{Key: "JIRA_API_TOKEN", Label: "API token", Where: WhereArg, Secret: true, Required: true, HelpURL: "https://id.atlassian.com/manage-profile/security/api-tokens"},
+		},
+		DocsURL: "https://github.com/sooperset/mcp-atlassian",
+		Tags:    []string{"jira", "atlassian", "issues"},
+	},
+	{
+		ID:          "airtable",
+		Name:        "Airtable",
+		Description: "Schema-aware read and write for Airtable bases, tables and records.",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "airtable-mcp-server"},
+		DefaultName: "airtable",
+		Requires: []Requirement{{
+			Key:      "AIRTABLE_API_KEY",
+			Label:    "Personal access token",
+			Where:    WhereEnv,
+			Secret:   true,
+			Required: true,
+			Placeholder: "pat…",
+			HelpURL:  "https://airtable.com/create/tokens/new",
+		}},
+		DocsURL: "https://github.com/domdomegg/airtable-mcp-server",
+		Tags:    []string{"airtable", "database", "no-code"},
+	},
+
 	// --- Development ---
 	{
 		ID:          "github",

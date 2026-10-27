@@ -1059,7 +1059,12 @@ function installFromCatalog(item: CatalogConnector) {
   const headerLines: string[] = []
   for (const req of item.requires || []) {
     if (req.where === 'header') headerLines.push(`${req.key}=`)
-    else envLines.push(`${req.key}=`)
+    else if (req.where === 'arg') {
+      // arg 类凭据（如飞书的 App ID/Secret）走命令行参数：把 Args 里的
+      // {{KEY}} 占位符替换成醒目的 <label> 提示，用户在参数框里就地改。
+      const token = `{{${req.key}}}`
+      formData.argsStr = formData.argsStr.split(token).join(`<${req.label}>`)
+    } else envLines.push(`${req.key}=`)
   }
   formData.envStr = envLines.join('\n')
   formData.headersStr = headerLines.join('\n')

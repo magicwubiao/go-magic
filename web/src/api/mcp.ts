@@ -169,7 +169,8 @@ export interface CatalogConnector {
   requires?: {
     key: string
     label: string
-    where: 'env' | 'header'
+    /** env=子进程环境变量 / header=远程请求头 / arg=命令行参数占位符（Args 里的 {{KEY}}） */
+    where: 'env' | 'header' | 'arg'
     secret: boolean
     required: boolean
     placeholder?: string

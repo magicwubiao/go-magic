@@ -17,6 +17,20 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
+// newMCPManager 构造 CLI 用的 Manager，并注入与网关同一份 OAuth token 存储。
+//
+// 不注入的后果：UI 里已完成授权的 OAuth 连接器，CLI 侧一律报
+// "no token store is configured"——磁盘上明明有 token 却读不到。
+// CLI 不注册 onFlowStarted（不弹浏览器）；没授权过的 OAuth 连接器在 CLI
+// 里会得到 auth 类错误，提示去连接器页授权即可。
+func newMCPManager() *mcp.Manager {
+	mgr := mcp.NewManager()
+	if err := mgr.SetTokenStore(filepath.Join(config.GetMagicHome(), "mcp", "oauth_tokens.json")); err != nil {
+		fmt.Fprintf(os.Stderr, "[MCP] OAuth token store init failed (OAuth connectors unavailable): %v\n", err)
+	}
+	return mgr
+}
+
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Manage MCP (Model Context Protocol) servers",
@@ -108,7 +122,7 @@ func runMCPList(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	mgr := mcp.NewManager()
+	mgr := newMCPManager()
 
 	// Load configured servers
 	if cfg.MCP != nil && cfg.MCP.Servers != nil {
@@ -153,7 +167,7 @@ func runMCPConnect(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	mgr := mcp.NewManager()
+	mgr := newMCPManager()
 
 	// Try to connect
 	serverCfg := mcp.ServerConfig{
@@ -188,7 +202,7 @@ func runMCPConnect(cmd *cobra.Command, args []string) {
 func runMCPDisconnect(cmd *cobra.Command, args []string) {
 	serverName := args[0]
 
-	mgr := mcp.NewManager()
+	mgr := newMCPManager()
 
 	if err := mgr.Disconnect(serverName); err != nil {
 		fmt.Printf("Failed to disconnect: %v\n", err)
@@ -206,7 +220,7 @@ func runMCPDisconnect(cmd *cobra.Command, args []string) {
 }
 
 func runMCPHealth(cmd *cobra.Command, args []string) {
-	mgr := mcp.NewManager()
+	mgr := newMCPManager()
 
 	cfg, err := config.Load()
 	if err == nil && cfg.MCP != nil && cfg.MCP.Servers != nil {
@@ -342,7 +356,7 @@ func runMCPAdd(cmd *cobra.Command, args []string) {
 
 	// 落盘在前、连接在后：配置是用户真正要留下的东西，连接失败（npx 没装、
 	// URL 写错）不应该把它一起丢掉。
-	mgr := mcp.NewManager()
+	mgr := newMCPManager()
 	defer mgr.DisconnectAll()
 
 	failed := 0
@@ -409,7 +423,7 @@ func bridgeConfiguredMCPTools(reg *tool.Registry, cfg *config.Config) func() {
 	if reg == nil || cfg == nil || cfg.MCP == nil || len(cfg.MCP.Servers) == 0 {
 		return func() {}
 	}
-	mgr := mcp.NewManager()
+	mgr := newMCPManager()
 	if err := mcpbridge.ConnectAndSync(mgr, reg, cfg.MCP.Servers); err != nil {
 		fmt.Fprintf(os.Stderr, "[MCP] standalone MCP servers partially failed: %v\n", err)
 	}
