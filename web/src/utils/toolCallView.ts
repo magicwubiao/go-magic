@@ -228,6 +228,7 @@ const TOOL_EMOJIS: Record<string, string> = {
   clarify: '❓',
   image_gen: '🎨',
   image_edit: '🖼️',
+  video_generate: '🎬',
   tts: '🔊',
   asr: '🎤',
   send_message: '💬',

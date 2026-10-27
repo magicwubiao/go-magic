@@ -69,6 +69,20 @@
     "default_style": "digital-art",
     "output_dir": "./generated_images"
   },
+  "video_gen": {
+    "comment_api_key": "Video generation key for the video_generate tool. Empty = the tool stays out of the model's tool list. VIDEO_GEN_API_KEY overrides this value.",
+    "api_key": "",
+    "comment_provider": "dashscope (Alibaba Model Studio, wan series; default) or volcengine (Volcano Ark, Seedance series). Both are submit-task + poll async APIs; the tool polls internally and downloads the MP4 (video URLs expire after 24h).",
+    "provider": "dashscope",
+    "comment_base_url": "Override the API base (self-hosted or relay gateway). Empty = official endpoint per provider.",
+    "base_url": "",
+    "comment_model": "Model override. dashscope: wan2.2-t2v-plus (t2v) / wan2.2-i2v-plus (i2v, auto-swapped when a first-frame image is given). volcengine: e.g. doubao-seedance-1-0-pro-250528.",
+    "model": "",
+    "default_duration": 5,
+    "default_ratio": "16:9",
+    "default_resolution": "720p",
+    "output_dir": "./generated_videos"
+  },
   "tools": {
     "comment_enabled_disabled": "Toolset switches (tools page in the web UI). Values are group ids: file, web, browser, terminal, coding, media, desktop, memory, task, kanban, delegation, skills, interaction, utility, smart_home, mcp — or a single tool name, or \"all\". disabled hides the group from the model; an enabled entry can exempt one group/tool. enabled is NOT a whitelist: items not listed stay enabled.",
     "enabled": [],

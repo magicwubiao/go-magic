@@ -21,7 +21,7 @@ func TestRegisterMediaToolsPresent(t *testing.T) {
 	r.RegisterMediaTools()
 
 	want := []string{
-		"image_gen", "image_edit",
+		"image_gen", "image_edit", "video_generate",
 		"tts", "asr",
 		"tts_available_voices", "asr_available_providers",
 		"audio_play", "audio_download",
@@ -34,7 +34,7 @@ func TestRegisterMediaToolsPresent(t *testing.T) {
 	}
 
 	// 已删除的工具不能被注册回来（没有可用后端）
-	for _, name := range []string{"video_generate", "send_message"} {
+	for _, name := range []string{"send_message"} {
 		if r.HasTool(name) {
 			t.Errorf("removed tool %q is still registered", name)
 		}
@@ -98,6 +98,57 @@ func TestLoadImageGenConfigEnvOverrides(t *testing.T) {
 	}
 	// 未覆盖的字段保留默认值
 	if cfg.DefaultSize == "" || cfg.Timeout == 0 {
+		t.Error("defaults should survive partial env override")
+	}
+}
+
+func TestVideoGenerateHiddenWithoutKey(t *testing.T) {
+	t.Setenv("VIDEO_GEN_API_KEY", "")
+
+	r := NewRegistry()
+	r.RegisterMediaTools()
+
+	if namesOf(r.ListAvailable())["video_generate"] {
+		t.Error("video_generate must be hidden when no video API key is configured")
+	}
+	if !r.HasTool("video_generate") {
+		t.Error("video_generate should still be registered (just unavailable)")
+	}
+}
+
+func TestVideoGenerateVisibleWithKey(t *testing.T) {
+	t.Setenv("VIDEO_GEN_API_KEY", "sk-video-test")
+	t.Setenv("VIDEO_GEN_PROVIDER", "volcengine")
+
+	r := NewRegistry()
+	r.RegisterMediaTools()
+
+	if !namesOf(r.ListAvailable())["video_generate"] {
+		t.Error("video_generate should be available when VIDEO_GEN_API_KEY is set")
+	}
+}
+
+func TestLoadVideoGenConfigEnvOverrides(t *testing.T) {
+	t.Setenv("VIDEO_GEN_API_KEY", "sk-env")
+	t.Setenv("VIDEO_GEN_PROVIDER", "volcengine")
+	t.Setenv("VIDEO_GEN_MODEL", "doubao-seedance-1-0-pro-250528")
+	t.Setenv("VIDEO_GEN_OUTPUT_DIR", "/tmp/vids")
+
+	cfg := LoadVideoGenConfig()
+	if cfg.APIKey != "sk-env" {
+		t.Errorf("APIKey = %q, want sk-env", cfg.APIKey)
+	}
+	if cfg.Provider != ProviderVolcengine {
+		t.Errorf("Provider = %q, want volcengine", cfg.Provider)
+	}
+	if cfg.Model != "doubao-seedance-1-0-pro-250528" {
+		t.Errorf("Model = %q, want doubao-seedance-1-0-pro-250528", cfg.Model)
+	}
+	if cfg.OutputDirectory != "/tmp/vids" {
+		t.Errorf("OutputDirectory = %q, want /tmp/vids", cfg.OutputDirectory)
+	}
+	// 未覆盖的字段保留默认值
+	if cfg.DefaultDuration == 0 || cfg.DefaultRatio == "" || cfg.Timeout == 0 {
 		t.Error("defaults should survive partial env override")
 	}
 }

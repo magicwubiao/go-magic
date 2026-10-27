@@ -21,7 +21,9 @@ import (
 func (t *ImageGenerationTool) Available() bool { return t.config != nil && t.config.APIKey != "" }
 func (t *ImageEditTool) Available() bool       { return t.config != nil && t.config.APIKey != "" }
 
-// VideoGenerateTool 已移除（三个 provider 的调用均跑不通，见 media_tools.go 的说明）。
+// VideoGenerationTool：需要视频生成 API Key（config.json video_gen 段或 VIDEO_GEN_API_KEY）。
+// 旧版曾因三个 provider 全跑不通被删，现按官方文档重写（dashscope / volcengine）。
+func (t *VideoGenerationTool) Available() bool { return t.config != nil && t.config.APIKey != "" }
 
 // XSearchTool：需要 X API Bearer Token（X_BEARER_TOKEN / X_API_KEY）
 func (t *XSearchTool) Available() bool { return t.apiKey != "" || t.bearerToken != "" }
@@ -172,6 +174,7 @@ func visionBackendConfigured() bool {
 var (
 	_ AvailabilityChecker = (*ImageGenerationTool)(nil)
 	_ AvailabilityChecker = (*ImageEditTool)(nil)
+	_ AvailabilityChecker = (*VideoGenerationTool)(nil)
 	_ AvailabilityChecker = (*XSearchTool)(nil)
 	_ AvailabilityChecker = (*EmailTool)(nil)
 	_ AvailabilityChecker = (*SMSTool)(nil)

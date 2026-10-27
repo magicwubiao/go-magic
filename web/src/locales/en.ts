@@ -2094,6 +2094,7 @@ export default {
     image_generate: 'Generate image',
     generate_image: 'Generate image',
     image_edit: 'Edit image',
+    video_generate: 'Generate video',
     tts: 'Text to speech',
     asr: 'Speech to text',
     send_message: 'Send message',

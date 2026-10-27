@@ -119,6 +119,9 @@ type Config struct {
 	// ImageGen 图片生成配置段。nil（配置里没写）= 未配置，image_gen/image_edit
 	// 不会出现在工具清单里；IMAGE_GEN_API_KEY 等环境变量可覆盖。
 	ImageGen *ImageGenConfig `json:"image_gen,omitempty"`
+	// VideoGen 视频生成配置段（video_generate 工具，provider: dashscope/volcengine）。
+	// nil = 未配置，工具不暴露给模型；VIDEO_GEN_API_KEY 等环境变量可覆盖。
+	VideoGen *VideoGenConfig `json:"video_gen,omitempty"`
 	// Bot Mode: named agent profiles with persistent canonical chats
 	BotMode *BotModeConfig `json:"bot_mode,omitempty"`
 	// Privacy / PII 脱敏配置，统一存储于 config.json（团队约定：一个配置管所有）。
@@ -517,6 +520,28 @@ type ImageGenConfig struct {
 	DefaultSize     string `json:"default_size,omitempty"`
 	DefaultStyle    string `json:"default_style,omitempty"`
 	OutputDirectory string `json:"output_dir,omitempty"`
+}
+
+// VideoGenConfig 视频生成工具（video_generate）的配置。
+//
+// Provider 取值 dashscope（阿里云百炼，通义万相 wan 系列）或 volcengine
+// （火山方舟，Seedance 系列）。APIKey 为空 = 未配置，工具不会暴露给模型。
+type VideoGenConfig struct {
+	// APIKey 视频生成服务的 Key。为空 = 未配置，工具不会暴露给模型。
+	APIKey string `json:"api_key,omitempty"`
+	// Provider 取值 dashscope / volcengine，默认 dashscope。
+	Provider string `json:"provider,omitempty"`
+	// BaseURL 兼容自建/中转网关；为空时按 provider 取官方地址。
+	BaseURL string `json:"base_url,omitempty"`
+	// Model 模型名，如 wan2.2-t2v-plus / doubao-seedance-1-0-pro-250528。
+	Model string `json:"model,omitempty"`
+	// DefaultDuration 默认时长（秒，3-15）。
+	DefaultDuration int `json:"default_duration,omitempty"`
+	// DefaultRatio 默认画幅（16:9 / 9:16 / 1:1）。
+	DefaultRatio string `json:"default_ratio,omitempty"`
+	// DefaultResolution 默认分辨率档（480p / 720p / 1080p）。
+	DefaultResolution string `json:"default_resolution,omitempty"`
+	OutputDirectory   string `json:"output_dir,omitempty"`
 }
 
 // ApprovalConfig represents command approval system configuration
@@ -950,6 +975,16 @@ func (c *Config) Save() error {
 			}
 			if c.ImageGen.BaseURL == "" {
 				c.ImageGen.BaseURL = existingCfg.ImageGen.BaseURL
+			}
+		}
+
+		// 视频生成配置同样处理：api_key 不回传，磁盘上有就必须保留。
+		if c.VideoGen != nil && existingCfg.VideoGen != nil {
+			if c.VideoGen.APIKey == "" {
+				c.VideoGen.APIKey = existingCfg.VideoGen.APIKey
+			}
+			if c.VideoGen.BaseURL == "" {
+				c.VideoGen.BaseURL = existingCfg.VideoGen.BaseURL
 			}
 		}
 	}

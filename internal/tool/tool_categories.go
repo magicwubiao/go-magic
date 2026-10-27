@@ -79,7 +79,7 @@ var toolCategories = []ToolCategory{
 		Label:       "Media",
 		Description: "Image generation/editing, video analysis, TTS/ASR and local audio tools (require API keys where applicable)",
 		Tools: []string{
-			"image_gen", "image_edit", "vision_analyze", "video_analyze",
+			"image_gen", "image_edit", "video_generate", "vision_analyze", "video_analyze",
 			"tts", "asr", "tts_available_voices", "asr_available_providers",
 			"audio_play", "audio_download",
 		},
