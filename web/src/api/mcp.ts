@@ -33,6 +33,8 @@ export interface MCPServer {
   /** 被屏蔽的工具（不注册给模型） */
   disabled_tools?: string[]
   require_approval?: boolean
+  /** OAuth 状态视图（配置了 oauth 才有） */
+  oauth?: MCPOAuthView
 }
 
 export interface MCPTool {
@@ -53,6 +55,8 @@ export interface MCPConfig {
   profiles?: string[]
   disabled_tools?: string[]
   require_approval?: boolean
+  /** 启用 OAuth 2.1 授权（发现/注册/PKCE/自动刷新） */
+  oauth?: MCPOAuthConfig
 }
 
 /** POST /api/mcp/servers 的结果（JSON 导入可能一次加多个） */
@@ -66,6 +70,53 @@ export interface MCPImportResult {
 
 export async function getMCPServers(): Promise<MCPServer[]> {
   return request('/mcp/servers')
+}
+
+/** 连接器级 OAuth 配置（保存到 config.json） */
+export interface MCPOAuthConfig {
+  client_id?: string
+  client_secret?: string
+  scopes?: string[]
+  redirect_port?: number
+  resource?: string
+}
+
+/** OAuth 运行状态视图（API 返回，绝不含 token） */
+export interface MCPOAuthView {
+  enabled: boolean
+  client_id?: string
+  /** *** 掩码回显；原样回传时后端保留磁盘真值 */
+  client_secret?: string
+  scopes?: string[]
+  has_token: boolean
+  /** authorized / awaiting_authorization / failed / expired / none */
+  state: string
+  error?: string
+}
+
+/** oauth/start 的返回 */
+export interface MCPOAuthStartResult {
+  authorize_url?: string
+  already_authorized?: boolean
+  status: MCPOAuthView
+}
+
+/**
+ * 发起 OAuth 2.1 授权。返回 authorize_url 供浏览器打开；
+ * already_authorized=true 表示已有有效 token，无需再走流程。
+ */
+export async function startMCPOAuth(name: string): Promise<MCPOAuthStartResult> {
+  return request(`/mcp/servers/${name}/oauth/start`, { method: 'POST' })
+}
+
+/** 轮询 OAuth 授权状态 */
+export async function getMCPOAuthStatus(name: string): Promise<MCPOAuthView> {
+  return request(`/mcp/servers/${name}/oauth/status`)
+}
+
+/** 登出：删除 token 并终止进行中的授权流程 */
+export async function signOutMCPOAuth(name: string): Promise<void> {
+  await request(`/mcp/servers/${name}/oauth/signout`, { method: 'POST' })
 }
 
 /** 试连结果：ok=false 时带错误分类与建议（HTTP 仍是 200） */
@@ -270,6 +321,7 @@ export function serverConfigToJSON(server: MCPServer): string {
   if (server.disabled_tools?.length) entry.disabled_tools = server.disabled_tools
   if (server.profiles?.length) entry.profiles = server.profiles
   if (server.require_approval) entry.require_approval = true
+  if (server.oauth) entry.oauth = server.oauth
   if (server.enabled === false) entry.enabled = false
   return JSON.stringify({ mcpServers: { [server.name]: entry } }, null, 2)
 }

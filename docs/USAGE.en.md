@@ -1159,10 +1159,23 @@ Optional per-connector fields:
 | `enabled` | `false` = do not auto-connect on startup (config is kept). Defaults to `true`. |
 | `profiles` | Only active in the listed profiles; empty = all profiles. |
 | `require_approval` | Require confirmation for every tool call (for servers without tool annotations). |
+| `oauth` | Enable OAuth 2.1 authorization (see below). `true` or `{}` = fully automatic; or pass `client_id` / `client_secret` / `scopes`. |
 
 **Approval**: MCP tools are classified from `annotations` — `destructiveHint`, or a non-read-only `openWorldHint`, goes through the same confirmation flow as `bash`; `readOnlyHint` passes through. Servers without annotations pass through by default; use `require_approval: true` to opt in.
 
 **Status and diagnostics**: the connector list distinguishes `connected` / `unauthorized` (credentials) / `error` / `configured`, and failures carry a kind (`auth` / `network` / `server` / `protocol` / `not_found`) plus an actionable hint. Connected servers are pinged every 3 minutes in the background.
+
+**OAuth 2.1 authorization**: for cloud connectors where you would rather not paste tokens:
+
+```jsonc
+"github": {
+  "transport": "http",
+  "url": "https://api.githubcopilot.com/mcp/",
+  "oauth": true
+}
+```
+
+Everything is automatic: authorization-server discovery (RFC 8414/9728) → dynamic client registration when needed (RFC 7591) → authorization-code + PKCE (local 127.0.0.1 callback) → tokens stored in `<magicHome>/mcp/oauth_tokens.json` (0600, atomic writes). Requests then carry `Authorization: Bearer` automatically; expired tokens are refreshed silently via `refresh_token`, and a 401 triggers one refresh-and-retry. The Web UI shows "Sign in / Sign out" buttons in the connector details. For servers without dynamic registration, set `client_id` (and `client_secret`) inside `oauth`. Secrets are always masked as `***` in API responses.
 
 HTTP endpoints:
 
@@ -1171,6 +1184,9 @@ GET  /api/mcp/catalog                      built-in connector catalog (?q=, ?cat
 POST /api/mcp/servers/{name}/test          test a connection without changing its state
 GET  /api/mcp/servers/{name}/stats         per-tool call counters
 PUT  /api/mcp/servers/{name}/tools/{tool}  enable/disable a single tool {"enabled": false}
+POST /api/mcp/servers/{name}/oauth/start   begin OAuth authorization (returns authorize_url)
+GET  /api/mcp/servers/{name}/oauth/status  poll the authorization state
+POST /api/mcp/servers/{name}/oauth/signout sign out (delete the local token)
 ```
 
 The Web UI ships a catalog of common servers (GitHub, Slack, Notion, Postgres, Playwright, …): picking one pre-fills the command and the credential names it needs.

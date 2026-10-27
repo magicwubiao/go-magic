@@ -45,6 +45,25 @@ type kindError struct {
 func (e *kindError) Error() string { return e.Err.Error() }
 func (e *kindError) Unwrap() error { return e.Err }
 
+// statusError 记录产生错误的 HTTP 状态码。401 自动刷新重试
+// （transport.doRequest）需要区分"401"和其它 auth 类失败（如 403 该停就停）。
+type statusError struct {
+	status int
+	err    error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
+// HTTPStatusOf 提取错误对应的 HTTP 状态码；非 HTTP 错误返回 0。
+func HTTPStatusOf(err error) int {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.status
+	}
+	return 0
+}
+
 // WrapKind 给错误打上分类标签；err 为 nil 时返回 nil。
 func WrapKind(kind ErrorKind, err error) error {
 	if err == nil {

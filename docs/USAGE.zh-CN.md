@@ -1140,10 +1140,23 @@ magic mcp add github --transport http --url https://api.githubcopilot.com/mcp/ \
 | `enabled` | `false` = 启动时不自动连接（配置保留，可在页面手动连）。缺省视为 `true`。 |
 | `profiles` | 只在列出的分身里生效；留空 = 所有分身。 |
 | `require_approval` | 每次工具调用都要人工确认。用于没写 tool annotations 的 server。 |
+| `oauth` | 启用 OAuth 2.1 授权（见下节）。`true` 或 `{}` = 纯自动；也可带 `client_id` / `client_secret` / `scopes`。 |
 
 **审批**：MCP 工具按 `annotations` 判定——`destructiveHint` 或有副作用的 `openWorldHint` 会走人工确认（与 `bash` 同一条审批链路），`readOnlyHint` 直接放行。没写 annotations 的 server 默认放行，用 `require_approval: true` 兜底。
 
 **状态与排错**：连接器列表会区分 `connected` / `unauthorized`（凭据问题）/ `error` / `configured` 四种状态，失败原因带分类（`auth` / `network` / `server` / `protocol` / `not_found`）和一句"该怎么办"的建议。后台每 3 分钟自动 ping 一次已连接 server。
+
+**OAuth 2.1 授权**：不想手填 token 的云端连接器可以启用 `oauth`：
+
+```jsonc
+"github": {
+  "transport": "http",
+  "url": "https://api.githubcopilot.com/mcp/",
+  "oauth": true
+}
+```
+
+流程全自动：从端点发现授权服务器（RFC 8414/9728）→ 需要时动态注册客户端（RFC 7591）→ PKCE 授权码流程（本机 127.0.0.1 回调）→ token 存到 `<magicHome>/mcp/oauth_tokens.json`（0600，原子写）。之后每次请求自动带 `Authorization: Bearer`，token 过期静默用 refresh_token 续期，401 时自动刷新重试一次。Web 页在连接器详情里提供「登录授权 / 登出」按钮；不开放动态注册的服务需要在 `oauth` 里手填 `client_id`（及 `client_secret`）。密钥在 API 里一律掩码为 `***`。
 
 相关的 HTTP 接口：
 
@@ -1152,6 +1165,9 @@ GET  /api/mcp/catalog                      内置连接器目录（?q= 搜索、
 POST /api/mcp/servers/{name}/test          试连（不改变启用状态）
 GET  /api/mcp/servers/{name}/stats         各工具调用次数
 PUT  /api/mcp/servers/{name}/tools/{tool}  单独启用/屏蔽工具 {"enabled": false}
+POST /api/mcp/servers/{name}/oauth/start   发起 OAuth 授权（返回 authorize_url）
+GET  /api/mcp/servers/{name}/oauth/status  轮询授权状态
+POST /api/mcp/servers/{name}/oauth/signout 登出（删除本地 token）
 ```
 
 Web 页「连接器 → 从目录添加」里内置了一批常见 server（GitHub、Slack、Notion、Postgres、Playwright…），选中后会预填命令与需要的凭据名，填完保存即可。

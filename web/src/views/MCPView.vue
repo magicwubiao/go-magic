@@ -313,6 +313,35 @@
                   :placeholder="t('mcp.profilesPlaceholder')"
                 />
                 <n-text depth="3" style="font-size: 12px;">{{ t('mcp.profilesHint') }}</n-text>
+
+                <n-space align="center" size="small">
+                  <n-switch
+                    v-model:value="formData.useOAuth"
+                    size="small"
+                    :disabled="formData.transport === 'stdio'"
+                  />
+                  <n-text style="font-size: 13px;">{{ t('mcp.oauthToggle') }}</n-text>
+                </n-space>
+                <template v-if="formData.useOAuth && isRemote">
+                  <n-text depth="3" style="font-size: 12px;">{{ t('mcp.oauthHint') }}</n-text>
+                  <n-input
+                    v-model:value="formData.oauthClientId"
+                    size="small"
+                    :placeholder="t('mcp.oauthClientId')"
+                  />
+                  <n-input
+                    v-model:value="formData.oauthClientSecret"
+                    type="password"
+                    show-password-on="click"
+                    size="small"
+                    :placeholder="t('mcp.oauthClientSecret')"
+                  />
+                  <n-input
+                    v-model:value="formData.oauthScopes"
+                    size="small"
+                    :placeholder="t('mcp.oauthScopes')"
+                  />
+                </template>
               </n-space>
             </n-form-item>
           </div>
@@ -406,7 +435,7 @@ import {
   LayersOutline,
 } from '@vicons/ionicons5'
 import { useMCPStore } from '@/stores/mcp'
-import { getMCPCatalog, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, testMCPServer } from '@/api/mcp'
+import { getMCPCatalog, getMCPOAuthStatus, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, signOutMCPOAuth, startMCPOAuth, testMCPServer } from '@/api/mcp'
 import type { CatalogCategory, CatalogConnector, MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
 
 const { t } = useI18n()
@@ -459,6 +488,11 @@ const formData = reactive({
   requireApproval: false,
   /** 启动时自动连接 */
   autoConnect: true,
+  /** 启用 OAuth 2.1 授权（仅远程连接器有意义） */
+  useOAuth: false,
+  oauthClientId: '',
+  oauthClientSecret: '',
+  oauthScopes: '',
 })
 
 const transportOptions = [
@@ -540,6 +574,44 @@ function renderExpandedRow(row: MCPServer) {
           ? h(NText, { depth: 3, style: 'font-size: 12px; display: block; margin-top: 6px;' }, { default: () => row.error_hint })
           : null,
       ].filter(Boolean)),
+    }))
+  }
+
+  // OAuth：配置了就展示状态与登录/登出入口。unauthorized 状态下这是
+  // 最重要的一颗按钮——错误提示说"凭据有问题"，这颗按钮就是修复动作。
+  if (row.oauth?.enabled) {
+    const stateKey: Record<string, string> = {
+      authorized: 'mcp.oauthStateAuthorized',
+      awaiting_authorization: 'mcp.oauthStateAwaiting',
+      failed: 'mcp.oauthStateFailed',
+      expired: 'mcp.oauthStateExpired',
+      none: 'mcp.oauthStateNone',
+    }
+    children.push(h(NSpace, { size: 8, align: 'center', style: 'margin-bottom: 12px;' }, {
+      default: () => [
+        h(NTag, {
+          size: 'small',
+          type: row.oauth!.state === 'authorized' ? 'success' : (row.oauth!.state === 'failed' ? 'error' : 'warning'),
+          bordered: false,
+        }, { default: () => t(stateKey[row.oauth!.state] || 'mcp.oauthStateNone') }),
+        h(NButton, {
+          size: 'small',
+          type: row.oauth!.state === 'authorized' ? 'default' : 'primary',
+          secondary: true,
+          loading: oauthBusy.value,
+          onClick: () => handleOAuthSignIn(row),
+        }, { default: () => t('mcp.oauthSignIn') }),
+        row.oauth!.has_token
+          ? h(NButton, {
+              size: 'small',
+              quaternary: true,
+              onClick: () => handleOAuthSignOut(row),
+            }, { default: () => t('mcp.oauthSignOut') })
+          : null,
+        row.oauth!.error
+          ? h(NText, { depth: 3, style: 'font-size: 12px;' }, { default: () => row.oauth!.error })
+          : null,
+      ].filter(Boolean),
     }))
   }
 
@@ -1024,6 +1096,71 @@ async function handleTest(row: MCPServer) {
   }
 }
 
+// --- OAuth 2.1 授权 ---
+
+const oauthBusy = ref(false)
+
+/**
+ * 发起 OAuth 授权：后端完成发现/注册后返回 authorize URL，浏览器打开它，
+ * 用户点"允许"后回调落 token，后端自动重连。这里轮询状态直到授权完成
+ * 或超时（3 分钟）——轮询而不是事件推送，是因为 SSE bus 上不该为一次
+ * 交互性流程加一种新事件类型。
+ */
+async function handleOAuthSignIn(row: MCPServer) {
+  if (oauthBusy.value) return
+  oauthBusy.value = true
+  try {
+    const res = await startMCPOAuth(row.name)
+    if (res.already_authorized) {
+      message.success(t('mcp.oauthAlready'))
+      await mcpStore.loadServers()
+      return
+    }
+    if (!res.authorize_url) {
+      message.error(t('mcp.oauthFailed'))
+      return
+    }
+    window.open(res.authorize_url, '_blank', 'noopener')
+    message.info(t('mcp.oauthPopup'), { duration: 8000 })
+
+    const deadline = Date.now() + 3 * 60 * 1000
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000))
+      let st
+      try {
+        st = await getMCPOAuthStatus(row.name)
+      } catch {
+        continue // 单次轮询失败不终止等待
+      }
+      if (st.state === 'authorized') {
+        message.success(t('mcp.oauthDone', { name: row.name }))
+        await mcpStore.loadServers()
+        return
+      }
+      if (st.state === 'failed') {
+        message.error(st.error || t('mcp.oauthFailed'), { duration: 10000 })
+        await mcpStore.loadServers()
+        return
+      }
+    }
+    message.warning(t('mcp.oauthTimeout'))
+  } catch (e: any) {
+    message.error(mcpErrorMessage(e) || t('mcp.oauthFailed'))
+  } finally {
+    oauthBusy.value = false
+  }
+}
+
+async function handleOAuthSignOut(row: MCPServer) {
+  try {
+    await signOutMCPOAuth(row.name)
+    message.success(t('mcp.oauthSignedOut'))
+    await mcpStore.loadServers()
+  } catch (e: any) {
+    message.error(mcpErrorMessage(e) || t('mcp.oauthFailed'))
+  }
+}
+
 /** 单独启用/屏蔽某个工具：屏蔽的工具不会进模型看到的工具表。 */
 async function handleToggleTool(row: MCPServer, toolName: string, enabled: boolean) {
   try {
@@ -1135,6 +1272,10 @@ function resetForm() {
     profilesStr: '',
     requireApproval: false,
     autoConnect: true,
+    useOAuth: false,
+    oauthClientId: '',
+    oauthClientSecret: '',
+    oauthScopes: '',
   })
 }
 
@@ -1161,8 +1302,33 @@ function openEditModal(row: MCPServer) {
     profilesStr: (row.profiles || []).join(', '),
     requireApproval: !!row.require_approval,
     autoConnect: row.enabled !== false,
+    useOAuth: !!row.oauth?.enabled,
+    // client_secret 是 *** 掩码回显，原样回传时后端还原成磁盘真值
+    oauthClientId: row.oauth?.client_id || '',
+    oauthClientSecret: row.oauth?.client_secret || '',
+    oauthScopes: (row.oauth?.scopes || []).join(', '),
   })
   showAddModal.value = true
+}
+
+/**
+ * 把表单里的 OAuth 字段聚合成 API 载荷。
+ *
+ * 关键点是 client_secret 的掩码透传：编辑表单回显的是 ***，用户没改就
+ * 原样回传，后端据此保留磁盘真值；清空输入框则真的清掉密钥。
+ * stdio 连接器没有 URL，OAuth 无从谈起，直接返回 undefined。
+ */
+function buildOAuthConfig(): MCPConfig['oauth'] {
+  if (!formData.useOAuth || !isRemote.value) return undefined
+  const scopes = formData.oauthScopes
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+  return {
+    client_id: formData.oauthClientId.trim() || undefined,
+    client_secret: formData.oauthClientSecret || undefined,
+    scopes: scopes.length ? scopes : undefined,
+  }
 }
 
 // saving 同时承担两件事：给保存按钮一个 loading 态，以及**防重入**。
@@ -1216,6 +1382,7 @@ async function doSave() {
     enabled: formData.autoConnect,
     profiles: profiles.length ? profiles : undefined,
     require_approval: formData.requireApproval || undefined,
+    oauth: buildOAuthConfig(),
   }
 
   try {

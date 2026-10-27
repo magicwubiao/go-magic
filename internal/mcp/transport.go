@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // DeadNotifier 是 transport 的可选能力：底层链路终判死亡（stdio 子进程退出、
@@ -320,6 +322,9 @@ type SSETransport struct {
 	// headers 是用户为该连接器配置的额外请求头（Authorization / X-API-Key
 	// 等）。按值拷贝，构造后不再改写，因此无锁读取是安全的。
 	headers map[string]string
+	// auth 是 OAuth token 提供者（见 oauth.go）。必须在第一次 Send 之前
+	// 用 SetAuthProvider 设置（buildClient 正是这么做的），之后只读。
+	auth AuthTokenProvider
 }
 
 // defaultSSEConnectTimeout 是 SSE/Streamable-HTTP 传输单次 HTTP 请求的超时。
@@ -367,6 +372,24 @@ func NewSSETransportWithOptions(url string, headers map[string]string, timeout t
 		retryDelay: time.Second,
 		headers:    copied,
 	}, nil
+}
+
+// AuthTokenProvider 为传输层供给 OAuth 凭据（oauth.go 的 oauthProvider 实现）。
+//
+// 拆成接口而不是直接依赖 *OAuthManager：测试里可以塞一个内存假实现，
+// 不用起整套发现/注册/回调流程。
+type AuthTokenProvider interface {
+	// CurrentToken 返回当前可用的 Authorization 头值（含 scheme，如
+	// "Bearer xxx"）。无凭据时返回 auth 类错误。
+	CurrentToken(ctx context.Context) (string, error)
+	// RefreshToken 强制续期后返回新值。401 重试路径专用。
+	RefreshToken(ctx context.Context) (string, error)
+}
+
+// SetAuthProvider 挂上 OAuth token 提供者。必须在第一次 Send 之前调用
+// （buildClient 在握手前设置），设置后只读，无并发写。
+func (t *SSETransport) SetAuthProvider(p AuthTokenProvider) {
+	t.auth = p
 }
 
 // retryableMethod reports whether a JSON-RPC method may safely be retried.
@@ -498,7 +521,9 @@ func classifyHTTPError(err error) error {
 // auth、5xx → server、406/400 → protocol、404/405 → not_found），供 UI 决定
 // 给出"去补凭据"还是"去改 URL"。
 func httpStatusError(status int, contentType, body string) error {
-	return WrapKind(ClassifyStatus(status), httpStatusErrorPlain(status, contentType, body))
+	// statusError 让调用方能取回原始状态码（HTTPStatusOf），401 自动刷新
+	// 重试依赖它；kindError 让 UI 能按 auth/network/… 分类提示。
+	return WrapKind(ClassifyStatus(status), &statusError{status: status, err: httpStatusErrorPlain(status, contentType, body)})
 }
 
 func httpStatusErrorPlain(status int, contentType, body string) error {
@@ -542,7 +567,40 @@ func httpStatusErrorPlain(status int, contentType, body string) error {
 	}
 }
 
+// doRequest 发送一次请求；启用 OAuth 时，401 会触发一次 token 刷新重试。
+//
+// 为什么只重试一次：反复刷新往往意味着 token 被吊销或权限被改，重试
+// 解决不了，只会给授权服务器刷请求量。把 401 的最终失败透传出去，UI
+// 才能亮出"重新授权"按钮。
 func (t *SSETransport) doRequest(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error) {
+	resp, err := t.doRequestOnce(ctx, req)
+	if err == nil {
+		return resp, nil
+	}
+	if t.auth != nil && HTTPStatusOf(err) == http.StatusUnauthorized {
+		if header, rerr := t.auth.RefreshToken(ctx); rerr == nil && header != "" {
+			log.Warnf("[MCP] access token rejected (HTTP 401), retrying once with refreshed credentials")
+			return t.doRequestWithToken(ctx, req, header)
+		}
+	}
+	return nil, err
+}
+
+// doRequestOnce 取当前 token 后发送请求。
+func (t *SSETransport) doRequestOnce(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error) {
+	var tokenHeader string
+	if t.auth != nil {
+		header, terr := t.auth.CurrentToken(ctx)
+		if terr != nil {
+			// EnsureToken 返回的已经是 auth 类错误，原样透传。
+			return nil, terr
+		}
+		tokenHeader = header
+	}
+	return t.doRequestWithToken(ctx, req, tokenHeader)
+}
+
+func (t *SSETransport) doRequestWithToken(ctx context.Context, req *JSONRPCRequest, tokenHeader string) (*JSONRPCResponse, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -565,6 +623,12 @@ func (t *SSETransport) doRequest(ctx context.Context, req *JSONRPCRequest) (*JSO
 		if k != "" {
 			httpReq.Header.Set(k, v)
 		}
+	}
+
+	// OAuth token 最后注入：启用 OAuth 时它是最"新鲜"的凭据（401 会自动
+	// 刷新重试），应当覆盖用户手填的同名头。
+	if tokenHeader != "" {
+		httpReq.Header.Set("Authorization", tokenHeader)
 	}
 
 	// 有状态 server：回传它派发的会话 id。

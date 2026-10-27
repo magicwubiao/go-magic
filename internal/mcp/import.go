@@ -333,6 +333,15 @@ func normalizeServerConfig(name string, raw interface{}) (ServerConfig, bool, er
 		cfg.Enabled = &enabled
 	}
 
+	// oauth：三种写法都收——
+	//   "oauth": true / {}          纯自动（发现 + DCR + PKCE）；
+	//   "oauth": {client_id, ...}   预注册客户端（不开放 DCR 的服务）。
+	oauth, err := normalizeOAuthConfig(m["oauth"])
+	if err != nil {
+		return ServerConfig{}, false, fmt.Errorf("server %q: oauth: %w", name, err)
+	}
+	cfg.OAuth = oauth
+
 	for _, key := range []string{"url", "baseUrl", "base_url", "serverUrl", "server_url", "endpoint"} {
 		if s, ok := m[key].(string); ok && strings.TrimSpace(s) != "" {
 			cfg.URL = strings.TrimSpace(s)
@@ -475,6 +484,53 @@ func EnvMapToSlice(m map[string]string) []string {
 		env = append(env, k+"="+m[k])
 	}
 	return env
+}
+
+// normalizeOAuthConfig 解析 ServerConfig 的 oauth 字段。
+//
+// 接受三种形态：缺省(nil)、true/{}（纯自动模式）、对象（可带 client_id /
+// client_secret / scopes / redirect_port / resource）。字段名用 snake_case，
+// 与配置文件的其它扩展字段一致。
+func normalizeOAuthConfig(raw interface{}) (*OAuthConfig, error) {
+	switch v := raw.(type) {
+	case nil:
+		return nil, nil
+	case bool:
+		if v {
+			return &OAuthConfig{}, nil
+		}
+		return nil, nil
+	case map[string]interface{}:
+		out := &OAuthConfig{}
+		if s, ok := v["client_id"].(string); ok {
+			out.ClientID = strings.TrimSpace(s)
+		}
+		if s, ok := v["client_secret"].(string); ok {
+			out.ClientSecret = strings.TrimSpace(s)
+		}
+		if s, ok := v["clientID"].(string); ok && out.ClientID == "" {
+			out.ClientID = strings.TrimSpace(s)
+		}
+		if arr, ok := v["scopes"].([]interface{}); ok {
+			for _, item := range arr {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					out.Scopes = append(out.Scopes, strings.TrimSpace(s))
+				}
+			}
+		} else if s, ok := v["scopes"].(string); ok && strings.TrimSpace(s) != "" {
+			// 也接受空格分隔的单字符串，外部配置常见这种写法。
+			out.Scopes = strings.Fields(s)
+		}
+		if f, ok := v["redirect_port"].(float64); ok && f > 0 && f == float64(int(f)) {
+			out.RedirectPort = int(f)
+		}
+		if s, ok := v["resource"].(string); ok {
+			out.Resource = strings.TrimSpace(s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("expected an object, true or absent, got %s", jsonTypeName(raw))
+	}
 }
 
 // EnvSliceToMap 把 "K=V" 切片转成 map（后者覆盖前者；无 "=" 的项被忽略）。

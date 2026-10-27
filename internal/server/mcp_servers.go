@@ -74,10 +74,33 @@ type mcpServerView struct {
 
 	// Enabled 表示启动时是否自动连接；nil 在 JSON 里序列化为 true 的等价物
 	// （视图层总是给出明确布尔值）。
-	Enabled         bool     `json:"enabled"`
-	Profiles        []string `json:"profiles,omitempty"`
-	DisabledTools   []string `json:"disabled_tools,omitempty"`
-	RequireApproval bool     `json:"require_approval,omitempty"`
+	Enabled         bool            `json:"enabled"`
+	Profiles        []string        `json:"profiles,omitempty"`
+	DisabledTools   []string        `json:"disabled_tools,omitempty"`
+	RequireApproval bool            `json:"require_approval,omitempty"`
+	OAuth           *mcpOAuthView   `json:"oauth,omitempty"`
+}
+
+// mcpOAuthView 是连接器的 OAuth 状态视图。
+//
+// 客户端密钥（client_secret）**永远不会**出现在这里：列表接口会被任何已
+// 登录的浏览器读到，密钥只在保存时以 *** 掩码参与合并。
+type mcpOAuthView struct {
+	// Enabled 标记该连接器配置了 OAuth（决定 UI 是否渲染登录按钮）。
+	Enabled bool `json:"enabled"`
+	// ClientID 只回显预配置的 id（非敏感）；动态注册出来的 id 不在此列。
+	ClientID string   `json:"client_id,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
+	// ClientSecret 掩码回显（*** 或空）。编辑表单原样回传时由
+	// mergeMaskedOAuth 还原成磁盘真值——这与 env/headers 的约定一致，
+	// 否则用户改个 scope 就会把密钥抹掉。
+	ClientSecret string `json:"client_secret,omitempty"`
+	// HasToken 表示本地是否存有该连接器的 OAuth token（不含值）。
+	HasToken bool `json:"has_token"`
+	// State 为 OAuthFlowStatus.State：authorized / awaiting_authorization /
+	// failed / expired / none。
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
 }
 
 func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +179,37 @@ func (s *Server) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			}
 			s.handleMCPTest(w, name)
 			return
+		case "oauth":
+			if len(parts) < 3 {
+				http.Error(w, "Not found", http.StatusNotFound)
+				return
+			}
+			switch parts[2] {
+			case "start":
+				if r.Method != http.MethodPost {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				s.handleMCPOAuthStart(w, name)
+				return
+			case "status":
+				if r.Method != http.MethodGet {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				s.handleMCPOAuthStatus(w, name)
+				return
+			case "signout":
+				if r.Method != http.MethodPost {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				s.handleMCPOAuthSignout(w, name)
+				return
+			default:
+				http.Error(w, "Not found", http.StatusNotFound)
+				return
+			}
 		case "stats":
 			if r.Method != http.MethodGet {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -358,6 +412,7 @@ func (s *Server) applyMCPServers(w http.ResponseWriter, servers []mcp.NamedServe
 		// 掩码还原：表单回填过的 *** 不能被当成真值写回去。
 		cfg.Env = mergeMaskedServerEnv(stored[item.Name].Env, cfg.Env)
 		cfg.Headers = mergeMaskedServerHeaders(stored[item.Name].Headers, cfg.Headers)
+		cfg.OAuth = mergeMaskedOAuth(stored[item.Name].OAuth, cfg.OAuth)
 		upsert[item.Name] = cfg
 	}
 
@@ -536,6 +591,9 @@ func (s *Server) listMCPServers() []mcpServerView {
 			RequireApproval: cfg.RequireApproval,
 			State:           mcp.StateConfigured,
 		}
+		if cfg.OAuth != nil {
+			view.OAuth = s.buildMCPOAuthView(name, cfg.OAuth)
+		}
 		if view.Transport == "" {
 			// 兜底：按字段推断，避免前端拿不到传输方式。
 			switch {
@@ -659,6 +717,39 @@ func mergeMaskedServerEnv(stored, incoming []string) []string {
 	return out
 }
 
+// mergeMaskedOAuth 把回传的 OAuth 配置里的 *** 密钥还原成磁盘真值。
+//
+// 与 headers 同一套约定：编辑表单回显时密钥被替换为 ***，用户没改就原样
+// 回传，必须还原；incoming 为 nil 表示用户关闭了 OAuth（清掉整段配置）。
+func mergeMaskedOAuth(stored, incoming *mcp.OAuthConfig) *mcp.OAuthConfig {
+	if incoming == nil {
+		return nil
+	}
+	// cloneOAuth 是 mcp 包的私有方法，这里手工浅拷贝 + 拷贝 scopes slice。
+	cp := *incoming
+	if len(incoming.Scopes) > 0 {
+		cp.Scopes = append([]string(nil), incoming.Scopes...)
+	}
+	if cp.ClientSecret == maskedEnvValue {
+		if stored != nil {
+			cp.ClientSecret = stored.ClientSecret
+		} else {
+			// 之前没存过密钥，*** 是前端凭空填的，清掉。
+			cp.ClientSecret = ""
+		}
+	}
+	return &cp
+}
+
+// maskServerSecret 把 OAuth client_secret 掩码成 ***；空值返回空串，
+// 前端靠空/非空区分"配置过密钥"和"没配过"。
+func maskServerSecret(secret string) string {
+	if secret == "" {
+		return ""
+	}
+	return maskedEnvValue
+}
+
 // maskServerHeaders 与 maskServerEnv 同一套约定：只回显 key，值一律 ***。
 // 认证头里放的是 token，列表接口会被任何已登录的浏览器读到。
 func maskServerHeaders(headers map[string]string) map[string]string {
@@ -754,6 +845,97 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, name string) {
 	result["ok"] = true
 	result["tool_count"] = len(tools)
 	jsonResponse(w, result)
+}
+
+// handleMCPOAuthStart 发起 OAuth 2.1 授权，返回浏览器要打开的 authorize URL。
+//
+// 前端拿到 URL 后 window.open，浏览器在本机完成授权，回调 listener 收到
+// code 换 token，授权完成回调会自动重连该连接器。前端随后轮询
+// oauth/status 把"等待授权"翻成"已授权"。
+func (s *Server) handleMCPOAuthStart(w http.ResponseWriter, name string) {
+	if s.mcpMgr == nil {
+		jsonError(w, http.StatusInternalServerError, "MCP manager not initialized")
+		return
+	}
+	cfg, configured := s.mcpServerConfigs()[name]
+	if !configured {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("MCP server %q is not configured", name))
+		return
+	}
+	mgr := s.mcpMgr.OAuth()
+	if mgr == nil {
+		jsonError(w, http.StatusInternalServerError, "OAuth token store is not initialized")
+		return
+	}
+
+	authorizeURL, err := mgr.StartOAuth(name, cfg)
+	if err != nil {
+		// 授权失败不是 5xx：发现/注册失败都有明确的修复动作（改 URL / 手填
+		// client_id），按 422 交给 UI 原样展示。
+		jsonError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	resp := map[string]interface{}{"status": mgr.Status(name)}
+	if authorizeURL != "" {
+		resp["authorize_url"] = authorizeURL
+		resp["already_authorized"] = false
+	} else {
+		// 空串 + nil 错误 = 已有有效 token，幂等调用。
+		resp["already_authorized"] = true
+	}
+	jsonResponse(w, resp)
+}
+
+// handleMCPOAuthStatus 供前端轮询。响应只含状态与错误信息，绝不含 token。
+func (s *Server) handleMCPOAuthStatus(w http.ResponseWriter, name string) {
+	mgr := s.mcpMgr.OAuth()
+	if mgr == nil {
+		jsonResponse(w, mcp.OAuthFlowStatus{State: "none"})
+		return
+	}
+	jsonResponse(w, mgr.Status(name))
+}
+
+// handleMCPOAuthSignout 删除 token 并终止进行中的流程（登出）。
+func (s *Server) handleMCPOAuthSignout(w http.ResponseWriter, name string) {
+	mgr := s.mcpMgr.OAuth()
+	if mgr == nil {
+		jsonError(w, http.StatusInternalServerError, "OAuth token store is not initialized")
+		return
+	}
+	if err := mgr.SignOut(name); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"status": mcp.OAuthFlowStatus{State: "none"}})
+}
+
+// buildMCPOAuthView 汇总连接器的 OAuth 状态（列表视图用）。
+//
+// 状态以 Manager 持有的 OAuthManager 为准（token 存储在那里）；测试环境
+// Manager 的 oauth 为 nil 时退化为 none / 无 token。
+func (s *Server) buildMCPOAuthView(name string, ocfg *mcp.OAuthConfig) *mcpOAuthView {
+	view := &mcpOAuthView{
+		Enabled:      true,
+		ClientID:     ocfg.ClientID,
+		Scopes:       ocfg.Scopes,
+		ClientSecret: maskServerSecret(ocfg.ClientSecret),
+		State:        "none",
+	}
+	if s.mcpMgr == nil {
+		return view
+	}
+	mgr := s.mcpMgr.OAuth()
+	if mgr == nil {
+		return view
+	}
+	status := mgr.Status(name)
+	view.State = status.State
+	view.Error = status.Error
+	// has_token 通过"状态是否 authorized/expired"间接体现：
+	// authorized 一定有 token，expired 是有 token 但过期，其余为无。
+	view.HasToken = status.State == mcp.OAuthStateAuthorized || status.State == "expired"
+	return view
 }
 
 // handleMCPToolToggle 单独启用/屏蔽某个工具（PUT {enabled:bool}）。

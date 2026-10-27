@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -192,6 +194,11 @@ type ServerConfig struct {
 	// 给没写 tool annotations 的 server 兜底——annotations 是可选字段，
 	// 不写就无从判断危险程度，只能由用户显式声明。
 	RequireApproval bool `json:"require_approval,omitempty"`
+
+	// OAuth 启用 OAuth 2.1 授权（发现/注册/PKCE/刷新，见 oauth.go）。
+	// 配置了它，远程连接器不再依赖手工 headers，token 由流程自动管理。
+	// nil = 不用 OAuth（继续走静态 headers）。
+	OAuth *OAuthConfig `json:"oauth,omitempty"`
 }
 
 // AutoConnect 报告该连接器是否应在启动时自动连接。
@@ -258,6 +265,8 @@ type Manager struct {
 	// stats 记录每个工具被调用的次数与失败次数（server + "/" + tool 为键），
 	// 用于连接器页展示"到底有没有在用"。
 	stats map[string]*ToolStat
+	// oauth 管理 OAuth 2.1 授权（nil = 未配置 token store，OAuth 不可用）。
+	oauth *OAuthManager
 	// healthStop 关闭时停止后台健康巡检。
 	healthStop chan struct{}
 	healthOnce sync.Once
@@ -289,6 +298,43 @@ func NewManager() *Manager {
 		stats:          make(map[string]*ToolStat),
 		reconnectDelay: DefaultReconnectDelay,
 	}
+}
+
+// SetTokenStore 配置 OAuth token 持久化路径（通常 <magicHome>/mcp/oauth_tokens.json）。
+//
+// 为什么路径由外部注入而不是本包自己算：pkg/config 反向依赖本包（ServerConfig
+// 定义在这里），本包再 import 它就是循环依赖。调用方（internal/server）有
+// magicHome，传进来即可。
+func (m *Manager) SetTokenStore(path string) error {
+	if path == "" {
+		return fmt.Errorf("token store path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create OAuth token dir: %w", err)
+	}
+	m.mu.Lock()
+	m.oauth = NewOAuthManager(NewOAuthTokenStore(path))
+	m.mu.Unlock()
+	log.Infof("[MCP] OAuth token store at %s", path)
+	return nil
+}
+
+// OnOAuthAuthorized 注册授权成功回调：OAuth 回调拿到 token 后触发，
+// 上层用它重连该连接器并同步工具注册表。异步调用（新 goroutine）。
+func (m *Manager) OnOAuthAuthorized(fn func(serverName string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.oauth == nil {
+		m.oauth = NewOAuthManager(nil)
+	}
+	m.oauth.SetOnAuthorized(fn)
+}
+
+// OAuth 返回 OAuth 管理器；未配置时返回 nil（调用方需判空）。
+func (m *Manager) OAuth() *OAuthManager {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.oauth
 }
 
 // LastFailure returns the most recent connection error recorded for a server
@@ -413,6 +459,11 @@ func (m *Manager) connect(name string, config ServerConfig) error {
 // buildClient 建好 transport 并完成 initialize 握手(含工具发现)。
 // 全程不持有 Manager.mu —— 这是连接不再阻塞其它操作的关键。
 func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error) {
+	// oauth 在构造后基本不再变化，快照一份避免无锁读竞争。
+	m.mu.RLock()
+	oauth := m.oauth
+	m.mu.RUnlock()
+
 	client := &Client{
 		name:           name,
 		config:         config,
@@ -433,6 +484,23 @@ func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error)
 		// sse 与 http 共用同一实现：客户端的动作都是"POST 一个 JSON-RPC，
 		// 按响应 Content-Type 分流"，两者的差异全在服务端。
 		transport, err = NewSSETransportWithOptions(config.URL, config.Headers, defaultSSEConnectTimeout)
+		if err == nil && config.OAuth != nil {
+			// OAuth 在握手**前**校验凭据：token 没有就立刻失败并打上 auth
+			// 分类，而不是让 initialize 吃一个 401 再绕一圈。UI 依赖这个
+			// 分类亮"去授权"按钮。
+			if oauth == nil {
+				err = WrapKind(ErrKindAuth, fmt.Errorf(
+					"OAuth is enabled for %q but no token store is configured (SetTokenStore was never called)", name))
+			} else if _, terr := oauth.EnsureToken(name); terr != nil {
+				err = terr
+			}
+		}
+		if err == nil {
+			if st, ok := transport.(*SSETransport); ok && config.OAuth != nil && oauth != nil {
+				// 挂 provider 后每次请求自动带 Authorization，401 自动刷新重试。
+				st.SetAuthProvider(oauth.Provider(name))
+			}
+		}
 	default:
 		kind = "stdio"
 		transport, err = NewStdioTransport(config.Command, config.Args, config.Env)

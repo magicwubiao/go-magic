@@ -680,6 +680,28 @@ Your working directory is: %s
 		s.configMtimeNs.Store(info.ModTime().UnixNano())
 	}
 
+	// OAuth token 持久化：<magicHome>/mcp/oauth_tokens.json（0600，原子写）。
+	// 密钥不进 config.json：那个文件用户会手工编辑/备份/分享。
+	if s.mcpMgr != nil {
+		if err := s.mcpMgr.SetTokenStore(filepath.Join(magicHome, "mcp", "oauth_tokens.json")); err != nil {
+			log.Warnf("[MCP] failed to init OAuth token store: %v", err)
+		}
+		// 授权完成 → 自动重连该连接器并把工具同步进注册表，
+		// 用户在浏览器点完"允许"回到页面就能看到连接成功。
+		s.mcpMgr.OnOAuthAuthorized(func(name string) {
+			cfg, ok := s.mcpServerConfigs()[name]
+			if !ok {
+				return
+			}
+			if err := s.connectMCPServer(name, cfg); err != nil {
+				log.Warnf("[MCP] OAuth reconnect for %q failed: %v", name, err)
+				return
+			}
+			s.syncMCPServerToRegistry(name)
+			log.Infof("[MCP] %q connected after OAuth authorization", name)
+		})
+	}
+
 	// 绑定全局 todo 变更通知，让 TodoTool 的任何改动都会广播到
 	// globalBus -> SSE 订阅者（前端侧边栏通过 /api/events 订阅）。
 	tool.SetDefaultTodoChangeNotifier(&tool.GlobalBusOrDefaultTodoNotifier{Bus: s.globalBus})
