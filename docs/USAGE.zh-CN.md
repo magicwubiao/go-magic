@@ -220,7 +220,6 @@ magic config reset     # 恢复默认
   "magic_home": "~/.magic",
   "provider": "deepseek",               // 当前 Provider
   "model": "deepseek-chat",             // 已废弃，建议用 providers.<x>.models[0]
-  "chat_mode": "chat",                  // magic chat 的默认模式：chat | coding
   "browser_profile_dir": "~/.magic/browser-profile",  // 自动化浏览器持久 profile 目录（默认值，不写就是这个）；路径支持 ~ 开头（展开为用户主目录）；显式写成 "" = 每次全新临时 profile（无 cookie/登录态）
   "browser_headless": true,             // 浏览器是否无头运行（默认值，不写就是这个）；服务器/容器请保持 true；设 false 需有显示服务（Xvfb/noVNC），仅人工登录时用；环境变量 BROWSER_HEADLESS 优先级更高
 
@@ -412,17 +411,13 @@ magic chat -v              # 带详细日志
 
 | 项目 | Chat（默认） | Coding |
 |------|-------------|--------|
-| 文件写入权限 | 受限 | 放宽 |
-| 命令执行超时 | 30 秒 | 300 秒 |
-| Python / Node 代码执行 | 禁用 | 启用 |
-| Shell 访问 | 有限 | 完全 |
-| 工具自动批准 | 否 | 是 |
+| 命令注入 / 管道链式检查 | 开启 | 跳过 |
+| execute_command 超时上限 | 120 秒 | 600 秒 |
+| execute_code 超时上限 | 120 秒 | 300 秒 |
+| execute_code 内存 / 网络 | 2GB / 禁网 | 4GB / 允许联网 |
+| 危险命令（rm -rf / 等） | 拦截 | 仍拦截 |
 
-TUI 内用 `/mode coding` 切换，`/mode chat` 切回。持久化默认值写配置：
-
-```bash
-magic config set chat_mode coding
-```
+TUI 内用 `/mode coding` 切换，`/mode chat` 切回。模式仅在 TUI 内生效，不做全局持久化配置。
 
 ### 7.2 `magic server` —— Web Dashboard
 

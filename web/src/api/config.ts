@@ -74,7 +74,6 @@ export interface Config {
    * 环境变量 BROWSER_HEADLESS 优先级高于本字段。
    */
   browser_headless?: boolean
-  chat_mode?: string
   agent?: AgentConfig
   memory?: Record<string, unknown>
   provider_config?: Record<string, unknown>

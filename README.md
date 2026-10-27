@@ -315,25 +315,13 @@ Switch to coding mode for development tasks:
 
 | Feature | Chat Mode | Coding Mode |
 |---------|-----------|-------------|
-| File write permissions | Restricted | Relaxed |
-| Command execution timeout | 30s | 300s |
-| Code execution (Python/Node) | Disabled | Enabled |
-| Shell access | Limited | Full |
-| Auto-approve tools | No | Yes |
+| Injection / pipe-chain checks | on | skipped |
+| execute_command timeout cap | 120s | 600s |
+| execute_code timeout cap | 120s | 300s |
+| execute_code memory / network | 2GB / no network | 4GB / network allowed |
+| Dangerous commands (rm -rf / etc.) | blocked | still blocked |
 
-Switch back with `/mode chat`.
-
-### Default Mode Configuration
-
-Set the default startup mode in your config file:
-
-```json
-{
-  "chat_mode": "coding"
-}
-```
-
-Available values: `"chat"` (default) or `"coding"`.
+Switch back with `/mode chat`. The mode only applies inside the TUI; there is no global persisted config for it.
 
 ## Web Dashboard
 

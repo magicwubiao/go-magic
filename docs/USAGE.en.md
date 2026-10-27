@@ -222,7 +222,6 @@ magic config reset     # restore defaults
   "magic_home": "~/.magic",
   "provider": "deepseek",               // current provider
   "model": "deepseek-chat",             // deprecated; prefer providers.<x>.models[0]
-  "chat_mode": "chat",                  // default mode for magic chat: chat | coding
   "browser_profile_dir": "~/.magic/browser-profile",  // persistent browser profile dir (this is the default when omitted); a leading ~ expands to the user home dir; set it to "" for a fresh temp profile each start (no cookies/login)
   "browser_headless": true,             // run the browser headless (this is the default when omitted); keep true on servers/containers; false needs a display server (Xvfb/noVNC) and is only for manual login; the BROWSER_HEADLESS env var takes precedence
 
@@ -414,17 +413,13 @@ Once inside, just type. Enter `/help` to see all slash commands.
 
 | Item | Chat (default) | Coding |
 |------|---------------|--------|
-| File write permission | restricted | relaxed |
-| Command exec timeout | 30s | 300s |
-| Python / Node code exec | disabled | enabled |
-| Shell access | limited | full |
-| Auto-approve tools | no | yes |
+| Injection / pipe-chain checks | on | skipped |
+| execute_command timeout cap | 120s | 600s |
+| execute_code timeout cap | 120s | 300s |
+| execute_code memory / network | 2GB / no network | 4GB / network allowed |
+| Dangerous commands (rm -rf / etc.) | blocked | still blocked |
 
-Inside the TUI use `/mode coding` to switch, `/mode chat` to switch back. Persist the default via config:
-
-```bash
-magic config set chat_mode coding
-```
+Inside the TUI use `/mode coding` to switch, `/mode chat` to switch back. The mode only applies inside the TUI; there is no global persisted config for it.
 
 ### 7.2 `magic server` — Web Dashboard
 

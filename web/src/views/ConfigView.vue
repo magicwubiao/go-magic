@@ -72,16 +72,6 @@
 
               <div class="row">
                 <div class="row-label">
-                  <span class="row-title">{{ t('config.chatMode') }}</span>
-                  <span class="hint">{{ t('config.chatModeHint') }}</span>
-                </div>
-                <div class="control">
-                  <n-select v-model:value="generalForm.chat_mode" :options="chatModeOptions" style="width: 200px;" />
-                </div>
-              </div>
-
-              <div class="row">
-                <div class="row-label">
                   <span class="row-title">{{ t('config.language') }}</span>
                   <span class="hint">{{ t('config.languageHint') }}</span>
                 </div>
@@ -577,13 +567,7 @@ const currentSection = computed(() => sectionList.value.find(s => s.key === acti
 // ---------------------------------------------------------------- 表单
 const generalForm = reactive({
   working_dir: '',
-  chat_mode: 'chat',
 })
-
-const chatModeOptions = computed(() => [
-  { label: t('config.chatModes.chat'), value: 'chat' },
-  { label: t('config.chatModes.coding'), value: 'coding' },
-])
 
 const injectProtocolOptions = computed(() => [
   { label: t('config.botModeInjectDefault'), value: '' },
@@ -727,7 +711,6 @@ const savingKey = ref<SaveKey | null>(null)
 // ---------------------------------------------------------------- 载入
 function populateFromConfig(cfg: any) {
   generalForm.working_dir = cfg.working_dir || ''
-  generalForm.chat_mode = cfg.chat_mode || 'chat'
 
   const agent = cfg.agent || {}
   // 0 means "use built-in default"; show the effective value in UI.
@@ -823,7 +806,6 @@ async function saveGeneral(): Promise<boolean> {
   try {
     await configStore.updateConfig({
       working_dir: generalForm.working_dir,
-      chat_mode: generalForm.chat_mode,
     })
     // Reload to ensure sync with server
     await configStore.loadConfig()

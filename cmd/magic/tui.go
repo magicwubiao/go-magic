@@ -2663,8 +2663,8 @@ func RunTUI(ctx context.Context, cfg *config.Config, prov provider.Provider, reg
 	// Generate tools schema for provider
 	toolsSchema := getToolsSchema(registry)
 
-	// Determine initial coding mode from config (chat_mode: "chat" or "coding")
-	codingMode := cfg.ChatMode == "coding"
+	// Chat/coding mode is a TUI runtime toggle (/mode), always start in chat mode.
+	codingMode := false
 
 	// Build system prompt
 	systemPrompt := buildSystemPrompt(cfg, codingMode)

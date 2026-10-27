@@ -316,25 +316,13 @@ docker exec -u 0 go-magic chown -R 1000:1000 /home/magic/.magic
 
 | 功能 | Chat 模式 | Coding 模式 |
 |------|-----------|-------------|
-| 文件写入权限 | 受限 | 放宽 |
-| 命令执行超时 | 30秒 | 300秒 |
-| 代码执行 (Python/Node) | 禁用 | 启用 |
-| Shell 访问 | 有限 | 完全 |
-| 工具自动批准 | 否 | 是 |
+| 命令注入 / 管道链式检查 | 开启 | 跳过 |
+| execute_command 超时上限 | 120 秒 | 600 秒 |
+| execute_code 超时上限 | 120 秒 | 300 秒 |
+| execute_code 内存 / 网络 | 2GB / 禁网 | 4GB / 允许联网 |
+| 危险命令（rm -rf / 等） | 拦截 | 仍拦截 |
 
-使用 `/mode chat` 切换回来。
-
-### 全局配置默认模式
-
-在配置文件中设置默认启动模式：
-
-```json
-{
-  "chat_mode": "coding"
-}
-```
-
-可选值：`"chat"`（默认）或 `"coding"`。
+使用 `/mode chat` 切换回来。模式仅在 TUI 内生效，不做全局持久化配置。
 
 ## Web Dashboard
 
