@@ -471,8 +471,8 @@ func (t *VideoGenerationTool) runVolcengine(ctx context.Context, prompt, imageUR
 	}
 
 	var submitResp struct {
-		ID     string `json:"id"`
-		Error  *struct {
+		ID    string `json:"id"`
+		Error *struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
@@ -509,7 +509,7 @@ func (t *VideoGenerationTool) pollVolcengineTask(ctx context.Context, baseURL, t
 		}
 
 		var resp struct {
-			Status string `json:"status"`
+			Status  string `json:"status"`
 			Content *struct {
 				VideoURL string `json:"video_url"`
 			} `json:"content"`
