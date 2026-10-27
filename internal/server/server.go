@@ -686,6 +686,13 @@ Your working directory is: %s
 		if err := s.mcpMgr.SetTokenStore(filepath.Join(magicHome, "mcp", "oauth_tokens.json")); err != nil {
 			log.Warnf("[MCP] failed to init OAuth token store: %v", err)
 		}
+		// 自动授权：连接时缺 token 会自动发起 OAuth 流程，这里弹浏览器。
+		// 用户在授权页完成登录后走下面的 OnOAuthAuthorized 自动重连，
+		// 全程不需要在 UI 里手动点任何按钮。
+		s.mcpMgr.OnOAuthFlowStarted(func(name, authorizeURL string) {
+			log.Infof("[MCP] opening browser for OAuth authorization of %q", name)
+			openURLBrowser(authorizeURL)
+		})
 		// 授权完成 → 自动重连该连接器并把工具同步进注册表，
 		// 用户在浏览器点完"允许"回到页面就能看到连接成功。
 		s.mcpMgr.OnOAuthAuthorized(func(name string) {

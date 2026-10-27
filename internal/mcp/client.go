@@ -330,6 +330,18 @@ func (m *Manager) OnOAuthAuthorized(fn func(serverName string)) {
 	m.oauth.SetOnAuthorized(fn)
 }
 
+// OnOAuthFlowStarted 注册"新授权流程已创建"回调：上层用它自动打开浏览器，
+// 让用户在授权页完成登录后凭据自动回流（授权成功另有 OnOAuthAuthorized
+// 触发重连）。手动发起的流程不触发。异步调用（新 goroutine）。
+func (m *Manager) OnOAuthFlowStarted(fn func(serverName, authorizeURL string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.oauth == nil {
+		m.oauth = NewOAuthManager(nil)
+	}
+	m.oauth.SetOnFlowStarted(fn)
+}
+
 // OAuth 返回 OAuth 管理器；未配置时返回 nil（调用方需判空）。
 func (m *Manager) OAuth() *OAuthManager {
 	m.mu.RLock()
@@ -493,6 +505,22 @@ func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error)
 					"OAuth is enabled for %q but no token store is configured (SetTokenStore was never called)", name))
 			} else if _, terr := oauth.EnsureToken(name); terr != nil {
 				err = terr
+				// 自动获取路径：缺 token 就地发起授权流程（发现 + DCR +
+				// 本机回调 listener），onFlowStarted 回调会弹出浏览器。
+				// 异步执行——buildFlow 的网络往返最长 20s，不能拖住连接
+				// 报错；失败也只记日志，原始 auth 错误照常向上返回。
+				autoCfg := config
+				go func(server string) {
+					u, aerr := oauth.EnsureAuthorized(server, autoCfg)
+					if aerr != nil {
+						log.Warnf("[MCP] auto OAuth authorization for %q failed: %v", server, aerr)
+						return
+					}
+					if u == "" {
+						return // 冷却中，不打扰用户
+					}
+					log.Infof("[MCP] auto OAuth authorization started for %q — browser should open at the authorize page", server)
+				}(name)
 			}
 		}
 		if err == nil {

@@ -477,7 +477,10 @@ func (s *Server) connectMCPServer(name string, cfg mcp.ServerConfig) error {
 	_ = s.mcpMgr.Disconnect(name)
 
 	var err error
-	if cfg.Transport == mcp.TransportSSE {
+	// http 与 sse 共用同一份远程传输实现（ConnectSSE 按响应 Content-Type
+	// 分流），这里必须两个都放行——只认 sse 会把 transport:"http" 的配置
+	// 掉进 stdio 分支，报 "exec: no command"。
+	if cfg.Transport == mcp.TransportSSE || cfg.Transport == mcp.TransportHTTP {
 		err = s.mcpMgr.ConnectSSE(name, cfg)
 	} else {
 		err = s.mcpMgr.ConnectStdio(name, cfg)
@@ -868,7 +871,10 @@ func (s *Server) handleMCPOAuthStart(w http.ResponseWriter, name string) {
 		return
 	}
 
-	authorizeURL, err := mgr.StartOAuth(name, cfg)
+	// StartOAuthManual 而不是 StartOAuth：这是用户在 UI 里手动点"登录"的
+	// 路径，前端自己会 window.open authorize URL；后端 onFlowStarted 弹
+	// 浏览器的行为是给"连接时自动发起"的路径准备的，两边都开会双开标签页。
+	authorizeURL, err := mgr.StartOAuthManual(name, cfg)
 	if err != nil {
 		// 授权失败不是 5xx：发现/注册失败都有明确的修复动作（改 URL / 手填
 		// client_id），按 422 交给 UI 原样展示。

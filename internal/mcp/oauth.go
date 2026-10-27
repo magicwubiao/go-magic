@@ -405,6 +405,9 @@ const (
 	OAuthStateFailed                  = "failed"
 	oauthFlowTimeout                  = 10 * time.Minute
 	oauthCallbackPath                 = "/callback"
+	// oauthAutoStartCooldown 自动发起授权的最小间隔。没有它，每次重连/
+	// 健康巡检失败都会再弹一个浏览器标签页，用户会被轰炸。
+	oauthAutoStartCooldown = 2 * time.Minute
 )
 
 // oauthFlow 记录一次进行中的授权。浏览器点完"允许"后回调会消费它。
@@ -436,15 +439,23 @@ type OAuthManager struct {
 	flows map[string]*oauthFlow
 	// onAuthorized 在 token 落盘后被调用（新 goroutine），上层用它触发重连。
 	onAuthorized func(serverName string)
-	hc           *http.Client
+	// onFlowStarted 在一个**新的**授权流程创建后被调用（新 goroutine），
+	// 上层用它自动打开浏览器。手动发起（UI 按钮）的流程不触发——前端
+	// 自己会 window.open，两边都开会出现两个重复标签页。
+	onFlowStarted func(serverName, authorizeURL string)
+	// lastAutoStart 记录每个 server 最近一次自动发起授权的时间（冷却用）。
+	// 读写都发生在 m.mu 临界区内。
+	lastAutoStart map[string]time.Time
+	hc            *http.Client
 }
 
 // NewOAuthManager 构造管理器；store 为 nil 时所有流程启动都会报错。
 func NewOAuthManager(store *OAuthTokenStore) *OAuthManager {
 	return &OAuthManager{
-		store: store,
-		flows: make(map[string]*oauthFlow),
-		hc:    &http.Client{Timeout: 15 * time.Second},
+		store:         store,
+		flows:         make(map[string]*oauthFlow),
+		lastAutoStart: make(map[string]time.Time),
+		hc:            &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -452,6 +463,13 @@ func NewOAuthManager(store *OAuthTokenStore) *OAuthManager {
 func (m *OAuthManager) SetOnAuthorized(fn func(serverName string)) {
 	m.mu.Lock()
 	m.onAuthorized = fn
+	m.mu.Unlock()
+}
+
+// SetOnFlowStarted 注册"新授权流程已创建"回调（自动打开浏览器用）。
+func (m *OAuthManager) SetOnFlowStarted(fn func(serverName, authorizeURL string)) {
+	m.mu.Lock()
+	m.onFlowStarted = fn
 	m.mu.Unlock()
 }
 
@@ -485,7 +503,21 @@ func (m *OAuthManager) Status(name string) OAuthFlowStatus {
 // StartOAuth 发起一次完整授权，返回浏览器要打开的 authorize URL。
 //
 // 返回 ("", nil) 表示已经有有效 token，无需再授权（幂等，UI 可据此直接刷新）。
+// 新流程创建后会异步触发 onFlowStarted（后端自动弹浏览器）。
 func (m *OAuthManager) StartOAuth(serverName string, cfg ServerConfig) (string, error) {
+	return m.startOAuth(serverName, cfg, true)
+}
+
+// StartOAuthManual 与 StartOAuth 相同，但不触发 onFlowStarted。
+// 供"用户在 UI 里手动点登录"的路径使用：前端自己会 window.open authorize
+// URL，后端再弹一次就是两个重复标签页。
+func (m *OAuthManager) StartOAuthManual(serverName string, cfg ServerConfig) (string, error) {
+	return m.startOAuth(serverName, cfg, false)
+}
+
+// startOAuth 是两条入口的公共实现。fireNotify 控制新流程创建后是否回调
+// onFlowStarted；进行中流程的幂等返回路径永远不触发通知。
+func (m *OAuthManager) startOAuth(serverName string, cfg ServerConfig, fireNotify bool) (string, error) {
 	if m.store == nil {
 		return "", WrapKind(ErrKindAuth, fmt.Errorf("OAuth token store is not configured"))
 	}
@@ -527,7 +559,56 @@ func (m *OAuthManager) StartOAuth(serverName string, cfg ServerConfig) (string, 
 	go m.watchdog(serverName, flow)
 
 	log.Infof("[MCP] OAuth flow started for %q (redirect %s)", serverName, flow.redirectURI)
+
+	if fireNotify {
+		m.mu.Lock()
+		fn := m.onFlowStarted
+		m.mu.Unlock()
+		if fn != nil {
+			name, authorizeURL := serverName, flow.authorizeURL
+			go fn(name, authorizeURL)
+		}
+	}
 	return flow.authorizeURL, nil
+}
+
+// EnsureAuthorized 是"自动获取"路径：保证该连接器有可用凭据，必要时自动
+// 发起授权流程（onFlowStarted 会被触发，上层弹浏览器）。
+//
+// 与手动 StartOAuth 的差异：
+//   - 已有进行中的流程 → 直接复用，绝不重复弹浏览器；
+//   - 冷却期内（oauthAutoStartCooldown 内已自动发起过）→ 不再发起，
+//     避免重连/巡检失败循环轰炸用户。
+//
+// 返回 ("", nil) 表示无需动作（已有 token 或冷却中）。
+func (m *OAuthManager) EnsureAuthorized(serverName string, cfg ServerConfig) (string, error) {
+	if m == nil || m.store == nil {
+		return "", WrapKind(ErrKindAuth, fmt.Errorf("OAuth token store is not configured"))
+	}
+	if tok, ok := m.store.Get(serverName); ok && tok.Valid() {
+		return "", nil
+	}
+
+	m.mu.Lock()
+	if flow, ok := m.flows[serverName]; ok {
+		select {
+		case <-flow.done: // 已结束，走下面的正常发起
+		default:
+			url := flow.authorizeURL
+			m.mu.Unlock()
+			log.Debugf("[MCP] OAuth flow for %q already in progress, reusing it", serverName)
+			return url, nil
+		}
+	}
+	if time.Since(m.lastAutoStart[serverName]) < oauthAutoStartCooldown {
+		m.mu.Unlock()
+		return "", nil
+	}
+	// 先占坑再发起：并发重连只允许第一个进入 buildFlow（最长达 20s 网络 IO）。
+	m.lastAutoStart[serverName] = time.Now()
+	m.mu.Unlock()
+
+	return m.StartOAuth(serverName, cfg)
 }
 
 // buildFlow 完成 发现 → 注册 → 起 listener → 拼 authorize URL。
