@@ -146,7 +146,7 @@ type Config struct {
 	Server          ServerConfig  `json:"server,omitempty"`
 	// Agent settings
 	SecretRedaction bool   `json:"secret_redaction,omitempty"`
-	Mode            string `json:"mode,omitempty"`      // chat, plan, act
+	Mode            string `json:"mode,omitempty"` // chat, plan, act
 	Agent           struct {
 		// MaxTurns caps one conversation turn's tool-loop iterations for
 		// server/bot agents (default 150). 0 keeps the built-in default.

@@ -400,11 +400,11 @@ type OAuthFlowStatus struct {
 }
 
 const (
-	OAuthStateAuthorized              = "authorized"
-	OAuthStateAwaitingAuthorization   = "awaiting_authorization"
-	OAuthStateFailed                  = "failed"
-	oauthFlowTimeout                  = 10 * time.Minute
-	oauthCallbackPath                 = "/callback"
+	OAuthStateAuthorized            = "authorized"
+	OAuthStateAwaitingAuthorization = "awaiting_authorization"
+	OAuthStateFailed                = "failed"
+	oauthFlowTimeout                = 10 * time.Minute
+	oauthCallbackPath               = "/callback"
 	// oauthAutoStartCooldown 自动发起授权的最小间隔。没有它，每次重连/
 	// 健康巡检失败都会再弹一个浏览器标签页，用户会被轰炸。
 	oauthAutoStartCooldown = 2 * time.Minute

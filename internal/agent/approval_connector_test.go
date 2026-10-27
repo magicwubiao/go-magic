@@ -13,8 +13,8 @@ import (
 // 连接器工具（mcp_*）在 2026-10-27 之前完全绕过审批：BeforeTool 的 default
 // 分支直接放行，于是暴露 delete_file 的 MCP server 可以被模型直接调用，
 // 而同样的操作走 bash 一定弹窗。这里锁定两条边界：
-//   1. 工具自己声明 RequiresApproval 时，必须进审批链路（非交互环境 fail-closed）；
-//   2. 没声明时保持原样放行，不能把每个连接器工具都变成确认弹窗。
+//  1. 工具自己声明 RequiresApproval 时，必须进审批链路（非交互环境 fail-closed）；
+//  2. 没声明时保持原样放行，不能把每个连接器工具都变成确认弹窗。
 func TestBeforeToolHonorsToolDeclaredApproval(t *testing.T) {
 	t.Setenv("GO_MAGIC_HOME", t.TempDir())
 

@@ -168,4 +168,3 @@ func ErrorKindHint(kind ErrorKind) string {
 		return ""
 	}
 }
-

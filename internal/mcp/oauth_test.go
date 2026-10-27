@@ -27,17 +27,17 @@ import (
 //   - /authorize：校验 PKCE 参数后 302 到回调（带 code + state）
 //   - /token：校验 code_verifier 后发 token
 type fakeAuthServer struct {
-	t           *testing.T
-	mu          sync.Mutex
-	server      *httptest.Server
-	srvBase     string
-	registered  int
-	tokenExch   int
-	lastCode    string
-	lastVerifier string
-	lastScope   string
+	t              *testing.T
+	mu             sync.Mutex
+	server         *httptest.Server
+	srvBase        string
+	registered     int
+	tokenExch      int
+	lastCode       string
+	lastVerifier   string
+	lastScope      string
 	lastAuthHeader string // /token 收到的 Authorization 头（机密客户端用）
-	authCode    string
+	authCode       string
 }
 
 func newFakeAuthServer(t *testing.T, secretClient bool) *fakeAuthServer {
@@ -56,11 +56,11 @@ func newFakeAuthServer(t *testing.T, secretClient bool) *fakeAuthServer {
 	// AS 元数据
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"issuer":                 f.srvBase,
-			"authorization_endpoint": f.srvBase + "/authorize",
-			"token_endpoint":         f.srvBase + "/token",
-			"registration_endpoint":  f.srvBase + "/register",
-			"scopes_supported":       []string{"mcp:tools", "other"},
+			"issuer":                           f.srvBase,
+			"authorization_endpoint":           f.srvBase + "/authorize",
+			"token_endpoint":                   f.srvBase + "/token",
+			"registration_endpoint":            f.srvBase + "/register",
+			"scopes_supported":                 []string{"mcp:tools", "other"},
 			"code_challenge_methods_supported": []string{"S256"},
 		})
 	})

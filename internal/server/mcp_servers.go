@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
-	"github.com/magicwubiao/go-magic/pkg/connectors"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/connectors"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -74,11 +74,11 @@ type mcpServerView struct {
 
 	// Enabled 表示启动时是否自动连接；nil 在 JSON 里序列化为 true 的等价物
 	// （视图层总是给出明确布尔值）。
-	Enabled         bool            `json:"enabled"`
-	Profiles        []string        `json:"profiles,omitempty"`
-	DisabledTools   []string        `json:"disabled_tools,omitempty"`
-	RequireApproval bool            `json:"require_approval,omitempty"`
-	OAuth           *mcpOAuthView   `json:"oauth,omitempty"`
+	Enabled         bool          `json:"enabled"`
+	Profiles        []string      `json:"profiles,omitempty"`
+	DisabledTools   []string      `json:"disabled_tools,omitempty"`
+	RequireApproval bool          `json:"require_approval,omitempty"`
+	OAuth           *mcpOAuthView `json:"oauth,omitempty"`
 }
 
 // mcpOAuthView 是连接器的 OAuth 状态视图。
@@ -1036,7 +1036,8 @@ func (s *Server) handleMCPCatalog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func readMCPBody(r *http.Request) ([]byte, error) {	body, err := io.ReadAll(io.LimitReader(r.Body, maxMCPImportBody+1))
+func readMCPBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxMCPImportBody+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read request body: %w", err)
 	}
