@@ -142,10 +142,10 @@ type Manager struct {
 	// the same snapshot and saved it back, dropping one update.
 	//
 	// Lock order: roomMu is acquired BEFORE m.mu and never while m.mu is held.
-	roomMu sync.Mutex
-	stopCh chan struct{}
-	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
-	wg        sync.WaitGroup
+	roomMu  sync.Mutex
+	stopCh  chan struct{}
+	rootCtx context.Context // lifecycle context passed to Start(); used by late-joined workers
+	wg      sync.WaitGroup
 	// stopping is set by Stop() before it waits for the worker WaitGroup. Once
 	// true no new worker/coordinator goroutine may be spawned: a wg.Add racing
 	// wg.Wait is undefined behaviour (and can panic with "WaitGroup is reused
