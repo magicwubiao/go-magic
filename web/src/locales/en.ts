@@ -1951,6 +1951,8 @@ export default {
     botCreated: 'Bot created and online',
     botUpdated: 'Bot updated (applies on next turn)',
     botDeleted: 'Bot deleted (chat history kept)',
+    deleteConfirmTitle: 'Delete Bot',
+    deleteConfirmContent: 'Delete bot "{name}"? Its directory, persona, and credentials will be removed, and it will be dropped from all rooms. Chat history is kept. This cannot be undone.',
     noMessages: 'No messages yet — say hello to your bot',
     you: 'You',
     inputPlaceholder: 'Type a message, Enter to send…',

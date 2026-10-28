@@ -1953,6 +1953,8 @@ export default {
     botCreated: 'Bot 已创建并上线',
     botUpdated: 'Bot 已更新（下次对话生效）',
     botDeleted: 'Bot 已删除（会话记录保留）',
+    deleteConfirmTitle: '删除 Bot',
+    deleteConfirmContent: '确定删除 Bot「{name}」？它的目录、人设与凭据会一并删除，并从所有群聊成员中移除；会话记录保留。此操作不可恢复。',
     noMessages: '暂无消息，向 Bot 发送第一条消息吧',
     you: '我',
     inputPlaceholder: '输入消息，Enter 发送…',

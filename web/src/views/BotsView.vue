@@ -989,7 +989,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import {
   NAlert, NAvatar, NButton, NCard, NCollapse, NCollapseItem, NDivider, NDropdown, NEmpty, NForm,
   NFormItem, NFormItemGi, NGi, NGrid, NH6, NIcon, NInput, NModal,
-  NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, useMessage,
+  NPopconfirm, NSpace, NSelect, NSlider, NSpin, NSwitch, NTag, NText, useDialog, useMessage,
 } from 'naive-ui'
 import {
   AddOutline, ArrowBackOutline, AttachOutline, CheckmarkOutline, ChevronForwardOutline, CloseOutline,
@@ -1016,6 +1016,7 @@ import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 
 const { t } = useI18n()
 const message = useMessage()
+const dialog = useDialog()
 const botsStore = useBotsStore()
 const modelsStore = useModelsStore()
 const roomsStore = useRoomsStore()
@@ -1196,7 +1197,7 @@ function cardMenuOptions(b: Bot) {
     { label: t('bots.manageRoutines'), key: 'routines' },
     { label: t('bots.cloneBot'), key: 'clone' },
     { label: b.hidden ? t('bots.unhideBot') : t('bots.hideBot'), key: 'hidden' },
-    { label: t('common.delete'), key: 'delete' },
+    { label: t('common.delete'), key: 'delete', props: { style: 'color: #d03050' } },
   ]
 }
 
@@ -1386,15 +1387,25 @@ async function handleRenameConfirm() {
 }
 
 async function handleDeleteBot(b: Bot) {
-  try {
-    await botsStore.deleteBot(b.name)
-    message.success(t('bots.botDeleted'))
-    // 后端删除时会同步把它从所有群聊成员表里移除；这里必须拉一次房间列表，
-    // 否则房间头部和成员 chips 要等重新进页面才更新（后端不会主动推）。
-    await roomsStore.loadRooms()
-  } catch (e: any) {
-    message.error(e.message || t('common.operationFailed'))
-  }
+  // 删除是破坏性操作：目录、人设、凭据一起清，且会把它从所有群聊成员里移除。
+  // 必须二次确认——右键菜单里手滑一点就没了不可接受。
+  dialog.warning({
+    title: t('bots.deleteConfirmTitle'),
+    content: t('bots.deleteConfirmContent', { name: b.name }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      try {
+        await botsStore.deleteBot(b.name)
+        message.success(t('bots.botDeleted'))
+        // 后端删除时会同步把它从所有群聊成员表里移除；这里必须拉一次房间列表，
+        // 否则房间头部和成员 chips 要等重新进页面才更新（后端不会主动推）。
+        await roomsStore.loadRooms()
+      } catch (e: any) {
+        message.error(e.message || t('common.operationFailed'))
+      }
+    },
+  })
 }
 
 async function handleToggleActive(b: Bot | null | undefined) {
