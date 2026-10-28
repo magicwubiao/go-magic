@@ -188,6 +188,14 @@ type botRuntime struct {
 	turnRunning bool
 	turnCancel  context.CancelFunc
 	turnRoomID  string
+
+	// workerWaiting is true while the queue worker is parked in queueCond.Wait()
+	// — i.e. it has already seen the current queue contents. Guarded by m.mu.
+	// Lets tests deterministically wait for "the worker has parked" before
+	// enqueueing: without it a test that seeds the queue directly races the
+	// worker's first pass (worker may pop the message first, turning the
+	// "dropped while queued" scenario into an in-flight turn).
+	workerWaiting bool
 }
 
 // NewManager creates a bot manager. Returns nil (no error) when no bots are defined.
@@ -403,7 +411,13 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 				return
 			default:
 			}
+			m.bots[key].workerWaiting = true
 			m.queueCond.Wait()
+			// Wait may return after DeleteBot removed the runtime; the map
+			// lookup is then nil and a bare field write would panic.
+			if rt := m.bots[key]; rt != nil {
+				rt.workerWaiting = false
+			}
 		}
 		msg := m.bots[key].queue[0]
 		m.bots[key].queue = m.bots[key].queue[1:]

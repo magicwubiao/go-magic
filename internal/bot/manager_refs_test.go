@@ -106,6 +106,22 @@ func TestDeleteBotAnswersQueuedCallers(t *testing.T) {
 	mgr := newTestManager(t, "alice")
 
 	replyCh := make(chan turnResult, 1)
+	// 等 worker 停进 Wait 再入队：worker goroutine 是异步启动的，如果它的
+	// 首次队列检查晚于入队（CI 慢机上出现过），消息会被直接取走变成在途
+	// 回合，DeleteBot 就只能取消它，调用方收到 canceled 而不是 deleted。
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mgr.mu.Lock()
+		parked := mgr.bots["alice"] != nil && mgr.bots["alice"].workerWaiting
+		mgr.mu.Unlock()
+		if parked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queue worker never parked before enqueue")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	// 直接入队而不 Broadcast：确保消息还在队列里被 DeleteBot 丢弃，而不是
 	// 先被 worker 取走。
 	mgr.mu.Lock()
