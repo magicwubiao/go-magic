@@ -1702,11 +1702,10 @@ onMounted(() => cronStore.loadJobs())
 }
 
 /* ===== 手机端（断点与 App.vue 的 768 一致） =====
-   页面本身有 24px 内边距，小屏上太浪费宽度：这里收回一半，
-   并让任务卡片的操作按钮单独占一行，避免把标题挤成一列字。 */
+   任务卡片操作按钮单独占一行，避免把标题挤成一列字。
+   注意不要用负 margin 收页面内边距：内容区是 overflow:auto 的滚动容器，
+   负 margin 会触发横向滚动/裁切（实测左侧被切掉一个字宽）。 */
 @media (max-width: 768px) {
-  .cron-page { margin: 0 -12px; }
-
   .cron-head { margin-bottom: 12px; gap: 10px; }
   .cron-title { font-size: 18px; }
   .cron-subtitle { font-size: 12px; line-height: 1.5; }
