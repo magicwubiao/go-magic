@@ -166,3 +166,49 @@ func TestRememberMemoryIdempotentAndCapped(t *testing.T) {
 		t.Fatal("blank fact should be refused")
 	}
 }
+
+// TestDeleteBotPurgesRoomMembership: 删除 bot 后，它必须从所有群聊的成员表里
+// 消失（磁盘 + Manager.ListRooms 的返回值），否则房间头部和成员 chips 会一直
+// 显示一个运行时早已跳过的"幽灵成员"。掉到最小人数以下的房间保留不删。
+func TestDeleteBotPurgesRoomMembership(t *testing.T) {
+	mgr := newTestManager(t, "alice", "bob", "carol")
+
+	room := &RoomConfig{
+		ID:      "room-1",
+		Name:    "lab",
+		Members: []string{"alice", "bob", "carol"},
+	}
+	if err := mgr.store.SaveRoom(room); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mgr.DeleteBot("alice"); err != nil {
+		t.Fatalf("delete bot: %v", err)
+	}
+
+	rooms, err := mgr.ListRooms()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) != 1 {
+		t.Fatalf("expected 1 room, got %d", len(rooms))
+	}
+	got := rooms[0].Members
+	if len(got) != 2 || got[0] != "bob" || got[1] != "carol" {
+		t.Fatalf("room members after delete = %v; want [bob carol]", got)
+	}
+
+	// 磁盘上的房间文件也要清理（重启后不能复活）。
+	persisted, err := mgr.store.LoadRoom("room-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Members) != 2 {
+		t.Fatalf("persisted room members = %v; want 2 entries", persisted.Members)
+	}
+	for _, mem := range persisted.Members {
+		if strings.EqualFold(mem, "alice") {
+			t.Fatalf("deleted bot still in persisted room: %v", persisted.Members)
+		}
+	}
+}

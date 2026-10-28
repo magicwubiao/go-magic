@@ -1749,7 +1749,56 @@ func (m *Manager) DeleteBot(name string) error {
 	if err := m.store.Delete(cfg.Name); err != nil {
 		return fmt.Errorf("failed to delete bot: %w", err)
 	}
+
+	// 从所有群聊的成员表里移除这个 bot：运行时虽然会跳过不存在的成员，
+	// 但房间头部、成员 chips 和协调员提示词都会照着 Members 显示/播报，
+	// 用户会一直看到一个"幽灵成员"。房间人数掉到下限以下时保留房间
+	// （剩余成员仍可对话），补人或删除交给用户在编辑器里做。
+	m.purgeBotFromRooms(key, cfg.Name)
 	return nil
+}
+
+// purgeBotFromRooms removes botKey from every room's member list and hot-reloads
+// the affected coordinators. Called with cfgMu held (DeleteBot); takes m.mu
+// only briefly, preserving the cfgMu → m.mu ordering used everywhere else.
+func (m *Manager) purgeBotFromRooms(botKey, botName string) {
+	rooms, err := m.store.ListRooms()
+	if err != nil {
+		log.Warnf("[BotMode] Failed to list rooms while purging bot %s: %v", botName, err)
+		return
+	}
+	for _, room := range rooms {
+		filtered := make([]string, 0, len(room.Members))
+		changed := false
+		for _, mem := range room.Members {
+			if strings.ToLower(mem) == botKey {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, mem)
+		}
+		if !changed {
+			continue
+		}
+		room.Members = filtered
+		room.UpdatedAt = time.Now().Unix()
+		if err := m.store.SaveRoom(room); err != nil {
+			// 运行时会跳过不存在的成员，写失败只影响显示，不致命。
+			log.Warnf("[BotMode] Failed to purge deleted bot %s from room %s: %v", botName, room.Name, err)
+			continue
+		}
+		// Hot-reload: stop the old coordinator so the new member list takes
+		// effect immediately (same pattern as UpdateRoom).
+		m.mu.Lock()
+		if rt, ok := m.rooms[strings.ToLower(room.ID)]; ok {
+			cancelRoomRoundLocked(rt)
+			close(rt.stopCh)
+			delete(m.rooms, strings.ToLower(room.ID))
+		}
+		m.mu.Unlock()
+		m.startRoomLocked(room)
+		log.Infof("[BotMode] Removed deleted bot %s from room %q", botName, room.Name)
+	}
 }
 
 // GetBot loads one bot's config from disk.

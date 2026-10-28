@@ -1389,6 +1389,9 @@ async function handleDeleteBot(b: Bot) {
   try {
     await botsStore.deleteBot(b.name)
     message.success(t('bots.botDeleted'))
+    // 后端删除时会同步把它从所有群聊成员表里移除；这里必须拉一次房间列表，
+    // 否则房间头部和成员 chips 要等重新进页面才更新（后端不会主动推）。
+    await roomsStore.loadRooms()
   } catch (e: any) {
     message.error(e.message || t('common.operationFailed'))
   }
@@ -2694,6 +2697,7 @@ async function loadCandidates() {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
+  margin-bottom: 4px; /* 行与行之间留出空隙：高亮底色是圆角卡片，贴在一起会连成一片 */
   border-radius: 10px;
   cursor: pointer;
   transition: background 0.15s;

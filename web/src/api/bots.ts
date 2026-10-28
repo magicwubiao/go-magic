@@ -110,6 +110,11 @@ export async function aiFillBot(idea: string, name?: string): Promise<BotAIFillR
   return request('/bots/ai-fill', {
     method: 'POST',
     body: JSON.stringify({ idea, name: name || undefined }),
+    retries: 0,
+    // 服务端预算 60s：默认 30s 超时会把慢一点的生成掐掉，用户看到的是
+    // 无意义的 "Failed to fetch" 而不是真实结果。比服务端略长，让服务端的
+    // 错误（含真实原因）先回来。
+    timeoutMs: 65000,
   })
 }
 

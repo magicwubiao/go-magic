@@ -1214,6 +1214,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
+  margin-bottom: 4px; /* 与 Bot 列表一致：高亮卡片之间留空隙 */
   border-radius: 10px;
   cursor: pointer;
   position: relative;

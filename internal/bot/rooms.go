@@ -238,8 +238,24 @@ func (m *Manager) DeleteRoom(id string) error {
 }
 
 // ListRooms returns all room configs with live member status.
+// Members whose bot no longer exists are filtered from the returned copy so
+// the dashboard never shows ghost chips for deleted bots (the on-disk file is
+// cleaned up by DeleteBot's purge; this covers rooms written before that fix).
 func (m *Manager) ListRooms() ([]*RoomConfig, error) {
-	return m.store.ListRooms()
+	rooms, err := m.store.ListRooms()
+	if err != nil {
+		return nil, err
+	}
+	for _, room := range rooms {
+		live := make([]string, 0, len(room.Members))
+		for _, mem := range room.Members {
+			if m.FindByTag(mem) != nil {
+				live = append(live, mem)
+			}
+		}
+		room.Members = live
+	}
+	return rooms, nil
 }
 
 // GetRoom loads one room config.
@@ -705,8 +721,14 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 	sb.WriteString("Members: ")
 	parts := make([]string, 0, len(room.Members))
 	for _, mem := range room.Members {
+		// Deleted bots must not reach the model: it would address a ghost
+		// member, and the ghost's "turn" silently produces nothing.
+		mc := m.FindByTag(mem)
+		if mc == nil {
+			continue
+		}
 		entry := "@" + mem
-		if mc := m.FindByTag(mem); mc != nil && mc.Title != "" {
+		if mc.Title != "" {
 			entry += " (" + mc.Title + ")"
 		}
 		parts = append(parts, entry)

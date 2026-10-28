@@ -86,25 +86,38 @@ func (s *Server) handleBotAIFill(w http.ResponseWriter, r *http.Request) {
 		userMsg += fmt.Sprintf("\nBot name (already chosen): %s", name)
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), aiFillTimeout)
-	defer cancel()
-	resp, err := s.provider.Chat(ctx, []types.Message{
-		{Role: "system", Content: aiFillSystemPrompt},
-		{Role: "user", Content: userMsg},
-	})
-	if err != nil {
-		http.Error(w, "AI generation failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	if resp == nil || strings.TrimSpace(resp.Content) == "" {
-		http.Error(w, "AI returned an empty response", http.StatusBadGateway)
-		return
+	// 每次调用独立计时：解析失败还有预算自动重试一次。共享一个 ctx 的话，
+	// 第一次调用耗掉大半超时后，重试会立刻 deadline exceeded。
+	generate := func(extra string) (*botAIFillResult, error) {
+		callCtx, cancel := context.WithTimeout(r.Context(), aiFillTimeout)
+		defer cancel()
+		prompt := userMsg
+		if extra != "" {
+			prompt += "\n\n" + extra
+		}
+		resp, err := s.provider.Chat(callCtx, []types.Message{
+			{Role: "system", Content: aiFillSystemPrompt},
+			{Role: "user", Content: prompt},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("AI generation failed: %w", err)
+		}
+		if resp == nil || strings.TrimSpace(resp.Content) == "" {
+			return nil, fmt.Errorf("AI returned an empty response")
+		}
+		return parseAIFillJSON(resp.Content)
 	}
 
-	result, err := parseAIFillJSON(resp.Content)
+	result, err := generate("")
 	if err != nil {
-		http.Error(w, "failed to parse AI response: "+err.Error(), http.StatusBadGateway)
-		return
+		// 模型偶尔在 JSON 前后夹带说明文字、或把内容塞进思考区导致正文为空。
+		// 重问一次（附加更硬的格式要求）通常就干净了；再失败才把原始错误给用户。
+		var retryErr error
+		result, retryErr = generate("IMPORTANT: respond with ONLY the raw JSON object — no markdown fences, no explanations, no text before or after it.")
+		if retryErr != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
 	}
 	// 兜底：模型偶尔会把用途塞进 title 而留空 description。
 	if strings.TrimSpace(result.Description) == "" && strings.TrimSpace(result.Title) != "" {
