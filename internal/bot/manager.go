@@ -131,7 +131,7 @@ type Manager struct {
 	//     moment and one Save would drop the other's fact.
 	//
 	// Lock order: cfgMu is acquired BEFORE m.mu and never while m.mu is held.
-	cfgMu sync.Mutex
+	cfgMu     sync.Mutex
 	queueCond *sync.Cond
 	stopCh    chan struct{}
 	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers

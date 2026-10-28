@@ -137,7 +137,7 @@
           </n-avatar>
           <div class="chat-title-text">
             <div class="chat-name">{{ dmPeer.name }}</div>
-            <n-text code depth="3" class="chat-url">{{ dmPeer.base_url }}</n-text>
+            <n-text depth="3" class="chat-url">{{ dmPeer.base_url }}</n-text>
           </div>
           <n-space :size="6" align="center" class="chat-actions" wrap>
             <n-tag :type="statusTagType" size="small" :bordered="false" :title="statusTitle(dmPeer.name)">
@@ -306,7 +306,7 @@
               v-model:value="dmForm.message"
               type="textarea"
               :autosize="{ minRows: 1, maxRows: 6 }"
-              :placeholder="dmForm.bot ? t('peers.dmMessagePlaceholder') : t('peers.dmPickBot')"
+              :placeholder="dmForm.bot ? t('peers.dmHint') : t('peers.dmPickBot')"
               :disabled="!dmForm.bot || waiting"
               class="chat-input"
               :input-props="{ onKeydown: onComposerKeydown }"
@@ -327,12 +327,6 @@
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             </button>
-          </div>
-
-          <!-- 提示行：等待时换成计时，省掉再堆一个「停止等待」按钮 -->
-          <div class="input-hint">
-            <span v-if="waiting">{{ t('peers.dmWaitingElapsed', { s: waitSeconds }) }}</span>
-            <span v-else>{{ t('peers.dmHint') }}</span>
           </div>
         </footer>
       </template>
@@ -1166,7 +1160,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   border-right: 1px solid #eeeff3;
-  background: #fafafc;
 }
 
 .rail-header {
@@ -1887,11 +1880,10 @@ onUnmounted(() => {
   color: #4f7cff;
 }
 
-/* ----- 输入区（对齐 Bot 页：边框卡片 + 内嵌工具键 + 右下角圆形发送键） ----- */
+/* ----- 输入区（对齐 Bot 页：边框卡片 + 右下角圆形发送键） ----- */
 .input-area {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   padding: 12px 24px 14px;
   border-top: 1px solid #e0e0e0;
   background: #fff;
@@ -1900,8 +1892,7 @@ onUnmounted(() => {
 }
 
 /* 与消息区同宽上限，宽屏下不会拉成一条长条 */
-.input-wrapper,
-.input-hint {
+.input-wrapper {
   width: 100%;
   max-width: 960px;
   margin-left: auto;
@@ -1996,12 +1987,6 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
-.input-hint {
-  font-size: 12px;
-  color: #999;
-  text-align: center;
-}
-
 .field-hint,
 .peer-hint {
   font-size: 12px;
@@ -2072,11 +2057,6 @@ onUnmounted(() => {
   .input-wrapper {
     padding: 8px 12px;
     padding-right: 44px; /* 内置发送键仍留空间 */
-  }
-
-  /* 触屏没有物理键盘，提示行隐藏（等待秒数在消息区的 typing 气泡里已显示） */
-  .input-hint {
-    display: none;
   }
 }
 </style>
