@@ -26,7 +26,7 @@ func TestClassifyFailureContentPolicy(t *testing.T) {
 			if cls.Code != FailureContentPolicy {
 				t.Errorf("classifyFailure(%q) = %s, want %s", tc.err, cls.Code, FailureContentPolicy)
 			}
-			if cls.Transient || cls.Retryable {
+			if cls.Transient {
 				t.Errorf("content policy failure must not be retryable: %+v", cls)
 			}
 		})

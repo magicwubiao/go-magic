@@ -186,6 +186,137 @@ func TestPeerDMRelaysToRemoteInstance(t *testing.T) {
 	}
 }
 
+// TestPeerUpdate covers PUT /api/peers/{name}: fixing an address must keep the
+// stored relay secret (the dashboard never receives it), the peer name and the
+// creation time, and a masked token must be rejected like on add.
+func TestPeerUpdate(t *testing.T) {
+	s := newPeerServer(t)
+	if rec := s.peerReq(t, http.MethodPost, "/api/peers",
+		`{"name":"lab","base_url":"http://old-host:8642","token":"shared"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("add peer = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Change only the address: the token stays as it was.
+	rec := s.peerReq(t, http.MethodPut, "/api/peers/lab", `{"base_url":"http://new-host:9000/"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/peers/lab = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var updated map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated["base_url"] != "http://new-host:9000" {
+		t.Errorf("base_url = %v, want the trailing slash stripped", updated["base_url"])
+	}
+	if updated["has_token"] != true {
+		t.Error("editing the address must keep the stored relay token")
+	}
+	if updated["name"] != "lab" {
+		t.Errorf("name changed to %v; the name is the table key and must be stable", updated["name"])
+	}
+
+	// created_at must survive the edit (the dashboard sorts/labels by it).
+	createdAt, _ := updated["created_at"].(float64)
+	if createdAt == 0 {
+		t.Errorf("created_at missing from the update response: %v", updated)
+	}
+	rec = s.peerReq(t, http.MethodGet, "/api/peers", "")
+	var overview struct {
+		Peers []map[string]interface{} `json:"peers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &overview); err != nil {
+		t.Fatal(err)
+	}
+	if len(overview.Peers) != 1 || overview.Peers[0]["created_at"] != createdAt {
+		t.Errorf("created_at not preserved across the edit: %v", overview.Peers)
+	}
+
+	// Rotation: a non-empty token replaces the secret.
+	if rec = s.peerReq(t, http.MethodPut, "/api/peers/lab",
+		`{"base_url":"http://new-host:9000","token":"rotated"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT with a new token = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Rejections: masked token, missing URL, unknown peer, invalid URL.
+	if rec = s.peerReq(t, http.MethodPut, "/api/peers/lab",
+		`{"base_url":"http://new-host:9000","token":"`+maskedEnvValue+`"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("PUT with a masked token = %d, want 400", rec.Code)
+	}
+	if rec = s.peerReq(t, http.MethodPut, "/api/peers/lab", `{"token":"x"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("PUT without a base URL = %d, want 400", rec.Code)
+	}
+	if rec = s.peerReq(t, http.MethodPut, "/api/peers/lab", `{"base_url":"not-a-url"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("PUT with an invalid URL = %d, want 400", rec.Code)
+	}
+	if rec = s.peerReq(t, http.MethodPut, "/api/peers/nope", `{"base_url":"http://x:1"}`); rec.Code != http.StatusNotFound {
+		t.Errorf("PUT on an unknown peer = %d, want 404", rec.Code)
+	}
+}
+
+// TestPeerPing covers GET /api/peers/{name}/ping, the reachability probe behind
+// the dashboard's online/offline dot.
+func TestPeerPing(t *testing.T) {
+	var gotToken string
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("X-Relay-Token")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"bots": []map[string]string{{"name": "researcher"}, {"name": "writer"}},
+		})
+	}))
+	defer relay.Close()
+
+	s := newPeerServer(t)
+	if rec := s.peerReq(t, http.MethodPost, "/api/peers",
+		`{"name":"lab","base_url":"`+relay.URL+`","token":"shared"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("add peer = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	rec := s.peerReq(t, http.MethodGet, "/api/peers/lab/ping", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/peers/lab/ping = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		OK        bool   `json:"ok"`
+		Peer      string `json:"peer"`
+		BotCount  int    `json:"bot_count"`
+		LatencyMS *int64 `json:"latency_ms"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode ping response: %v (%s)", err, rec.Body.String())
+	}
+	if !out.OK || out.Peer != "lab" || out.BotCount != 2 {
+		t.Errorf("unexpected ping response: %+v", out)
+	}
+	if out.LatencyMS == nil || *out.LatencyMS < 0 {
+		t.Errorf("latency_ms must be reported: %s", rec.Body.String())
+	}
+	if gotToken != "shared" {
+		t.Errorf("X-Relay-Token = %q, want the peer's secret", gotToken)
+	}
+
+	// Unknown peer -> 404, unreachable peer -> 502 with the remote's reason.
+	if rec = s.peerReq(t, http.MethodGet, "/api/peers/nope/ping", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("ping on an unknown peer = %d, want 404", rec.Code)
+	}
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"invalid relay token"}`, http.StatusForbidden)
+	}))
+	defer broken.Close()
+	if rec = s.peerReq(t, http.MethodPost, "/api/peers",
+		`{"name":"broken","base_url":"`+broken.URL+`","token":"wrong"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("add broken peer = %d", rec.Code)
+	}
+	rec = s.peerReq(t, http.MethodGet, "/api/peers/broken/ping", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("failing ping = %d, want 502 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "403") {
+		t.Errorf("the upstream status should be surfaced: %s", rec.Body.String())
+	}
+}
+
 // TestPeerBotsProxy drives the dashboard bot-listing endpoint against a stub
 // relay server: lookup -> peer client -> remote GET /api/relay/v1/bots, with
 // the peer's token forwarded in the X-Relay-Token header.

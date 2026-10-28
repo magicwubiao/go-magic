@@ -25,7 +25,16 @@ export function setAuthToken(token: string | null): void {
 export interface RequestOptions extends RequestInit {
   retries?: number
   skipAuth?: boolean
+  /**
+   * Per-request timeout in ms. Defaults to 30s, which is right for dashboard
+   * calls but far too short for cross-machine relays: one relayed DM drives a
+   * full agent turn on the remote box and legitimately runs for minutes.
+   */
+  timeoutMs?: number
 }
+
+/** Default request timeout: dashboard reads/writes, not agent turns. */
+const DEFAULT_TIMEOUT_MS = 30000
 
 /** Error carrying the HTTP status, so callers can tell 401/429/5xx apart without
  *  string-matching on the message. */
@@ -72,13 +81,28 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   const retries = options.retries ?? MAX_RETRIES
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-  return doRequest<T>(url, { ...options, headers }, retries)
+  return doRequest<T>(url, { ...options, headers }, retries, timeoutMs)
 }
 
-async function doRequest<T>(url: string, options: RequestInit & { headers: Record<string, string> }, retries: number): Promise<T> {
+async function doRequest<T>(
+  url: string,
+  options: RequestInit & { headers: Record<string, string> },
+  retries: number,
+  timeoutMs: number,
+): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30000)
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  // Forward a caller-side cancel (e.g. the user pressed "stop" on a long
+  // cross-machine turn) into our controller, so the timeout and the caller's
+  // abort share one signal path and the fetch is really torn down.
+  const external = options.signal
+  if (external) {
+    if (external.aborted) controller.abort()
+    else external.addEventListener('abort', () => controller.abort(), { once: true })
+  }
 
   try {
     const response = await fetch(url, {
@@ -97,7 +121,7 @@ async function doRequest<T>(url: string, options: RequestInit & { headers: Recor
 
     if (RETRY_STATUS_CODES.includes(response.status) && retries > 0) {
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS * (MAX_RETRIES - retries + 1)))
-      return doRequest(url, options, retries - 1)
+      return doRequest(url, options, retries - 1, timeoutMs)
     }
 
     if (!response.ok) {

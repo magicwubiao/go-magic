@@ -54,7 +54,7 @@
           <n-layout>
             <n-layout-content :class="{'full-content': isChatPage}" style="padding: 24px; overflow: auto;">
               <!-- 路由出口按元信息分流：
-                   - meta.keepAlive 的页面（/chat、/bots 这两个聊天形态页）走 keep-alive
+                   - meta.keepAlive 的页面（/chat、/bots、/peers 这三个聊天形态页）走 keep-alive
                      缓存，切到别的页面再回来时保留组件状态（输入框草稿、消息区滚动位置、
                      侧栏展开态），不再重新挂载 → 重新请求 → 重铺骨架；
                    - 其余页面保持原语义（切走即销毁），不占额外内存。
@@ -167,7 +167,12 @@ const naiveLocale = computed(() => locale.value === 'zh' ? zhCN : enUS)
 const naiveDateLocale = computed(() => locale.value === 'zh' ? dateZhCN : dateEnUS)
 
 const isLoginPage = computed(() => route.path === '/login')
-const isChatPage = computed(() => route.path === '/chat' || route.path === '/rooms' || route.path === '/bots')
+// 聊天形态页要整屏铺满（内容区 padding 归零，computed 见 .full-content）。
+// /peers 与 /bots 同为「左栏 + 会话」两栏布局，漏登记会让页面被 24px 内边距挤出一圈留白，
+// 且自身 100vh 高度在多出的内边距之外再溢出 48px —— 既不满屏又带滚动条。
+const isChatPage = computed(
+  () => route.path === '/chat' || route.path === '/rooms' || route.path === '/bots' || route.path === '/peers',
+)
 const activeKey = computed(() => route.path)
 
 onUnmounted(() => {

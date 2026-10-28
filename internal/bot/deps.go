@@ -18,7 +18,14 @@ import (
 // honoring per-bot model/provider pins with global fallback, pruning tools to
 // the bot's allowlist, restricting its skills, and giving the bot an isolated
 // workdir (with its own .env) so credentials never leak across bots.
-func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, *tool.Registry, error) {
+//
+// skillMgr is the manager-wide shared skills manager (nil = skills unavailable).
+// It must NOT be constructed here: each build used to call skills.NewManager(),
+// which rescans the skill tree and starts three background goroutines, so every
+// agent rebuild (UpdateBot, remember_memory, each room agent) leaked another
+// set. The per-bot allowlist is applied by wrapping the shared manager in
+// skillFilter instead.
+func buildBotDeps(globalCfg *config.Config, botCfg *Config, skillMgr *skills.Manager) (provider.Provider, *tool.Registry, error) {
 	cfg := *globalCfg // Shallow copy so we can override pins
 
 	if botCfg.Provider != "" {
@@ -71,7 +78,7 @@ func buildBotDeps(globalCfg *config.Config, botCfg *Config) (provider.Provider, 
 
 	registry := tool.NewRegistry()
 	registry.RegisterBotTools(botWorkDir)
-	if skillMgr, err := skills.NewManager(); err == nil {
+	if skillMgr != nil {
 		if len(botCfg.Skills) > 0 {
 			// Restrict the skill tool to this bot's skill allowlist.
 			registry.RegisterSkillTool(newSkillFilter(skillMgr, botCfg.Skills))

@@ -28,7 +28,7 @@ func TestBuildBotDepsInstallsConvertConfig(t *testing.T) {
 		},
 	}
 
-	prov, _, err := buildBotDeps(cfg, &Config{Name: "alice"})
+	prov, _, err := buildBotDeps(cfg, &Config{Name: "alice"}, nil)
 	if err != nil {
 		t.Fatalf("buildBotDeps: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestBuildBotDepsInstallsConvertConfig(t *testing.T) {
 	cfg.Providers["custom"] = config.ProviderConfig{
 		APIKey: "k", Models: []string{"gpt-4o-mini"}, Vision: &no,
 	}
-	prov, _, err = buildBotDeps(cfg, &Config{Name: "bob"})
+	prov, _, err = buildBotDeps(cfg, &Config{Name: "bob"}, nil)
 	if err != nil {
 		t.Fatalf("buildBotDeps with explicit vision=false: %v", err)
 	}

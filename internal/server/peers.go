@@ -56,7 +56,8 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePeerByName routes /api/peers/{name} and /api/peers/{name}/dm.
+// handlePeerByName routes /api/peers/{name}, /api/peers/{name}/dm,
+// /api/peers/{name}/bots and /api/peers/{name}/ping.
 func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/peers/")
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
@@ -69,8 +70,12 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case len(parts) == 1 && r.Method == http.MethodDelete:
 		s.handlePeerDelete(w, r, name)
+	case len(parts) == 1 && (r.Method == http.MethodPut || r.Method == http.MethodPatch):
+		s.handlePeerUpdate(w, r, name)
 	case len(parts) == 2 && parts[1] == "bots" && r.Method == http.MethodGet:
 		s.handlePeerBots(w, r, name)
+	case len(parts) == 2 && parts[1] == "ping" && r.Method == http.MethodGet:
+		s.handlePeerPing(w, r, name)
 	case len(parts) == 2 && parts[1] == "dm" && r.Method == http.MethodPost:
 		s.handlePeerDM(w, r, name)
 	default:
@@ -152,6 +157,78 @@ func (s *Server) handlePeerDelete(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	jsonResponse(w, map[string]interface{}{"deleted": name})
+}
+
+// handlePeerUpdate PUT|PATCH /api/peers/{name} — fix an address or rotate the
+// relay secret without deleting and re-adding the peer. Deleting first (the
+// only option before) also orphaned the dashboard's local conversation history,
+// which is keyed by peer name.
+func (s *Server) handlePeerUpdate(w http.ResponseWriter, r *http.Request, name string) {
+	store, ok := s.peerStore(w)
+	if !ok {
+		return
+	}
+	if _, found := store.Get(name); !found {
+		http.Error(w, "peer not found: "+name, http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		BaseURL string `json:"base_url"`
+		Token   string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.BaseURL) == "" {
+		http.Error(w, "base URL is required", http.StatusBadRequest)
+		return
+	}
+	// Same guard as add: the dashboard renders "***" for a configured secret,
+	// and round-tripping that value would overwrite the real token.
+	if req.Token == maskedEnvValue {
+		http.Error(w, "relay token looks like a mask; re-enter the actual secret", http.StatusBadRequest)
+		return
+	}
+
+	updated, err := store.Update(name, req.BaseURL, req.Token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jsonResponse(w, peerToResponse(updated))
+}
+
+// handlePeerPing GET /api/peers/{name}/ping — is this peer reachable right now?
+//
+// The dashboard shows an online/offline dot per peer, which the DM path alone
+// cannot provide (a peer that has never been messaged has no state at all).
+// The probe reuses the bot listing, so one round trip yields reachability,
+// latency and the remote bot count; a failure returns the remote's own reason
+// as 502 (bad token vs. network need different fixes).
+func (s *Server) handlePeerPing(w http.ResponseWriter, r *http.Request, name string) {
+	store, ok := s.peerStore(w)
+	if !ok {
+		return
+	}
+	p, found := store.Get(name)
+	if !found {
+		http.Error(w, "peer not found: "+name, http.StatusNotFound)
+		return
+	}
+
+	botCount, latency, err := peer.NewClient().Probe(r.Context(), p)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"ok":         true,
+		"peer":       p.Name,
+		"bot_count":  botCount,
+		"latency_ms": latency.Milliseconds(),
+	})
 }
 
 // handlePeerBots GET /api/peers/{name}/bots — proxy the peer's bot listing so

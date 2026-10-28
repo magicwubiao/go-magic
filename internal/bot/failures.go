@@ -21,7 +21,6 @@ const (
 	FailureProviderRateLimit FailureCode = "provider_rate_limit"
 	FailureContextOverflow   FailureCode = "context_overflow"
 	FailureRuntimeOffline    FailureCode = "runtime_offline"
-	FailureQueuedExpired     FailureCode = "queued_expired"
 	FailureDeliveryTimeout   FailureCode = "delivery_timeout"
 	FailureMissingConfig     FailureCode = "missing_config"
 	FailureAuth              FailureCode = "auth_error"
@@ -32,10 +31,13 @@ const (
 )
 
 // failureClass describes how a failure should be handled by the worker.
+//
+// Transient is the single retry switch: processMessage retries exactly once
+// when it is set. There used to be a second `Retryable` flag alongside it that
+// was always set to the same value and never read — one flag, one meaning.
 type failureClass struct {
 	Code      FailureCode
-	Transient bool // safe to retry automatically
-	Retryable bool // automatic retry will be attempted (once)
+	Transient bool // safe to retry automatically (worker retries once)
 }
 
 // classifyFailure maps an arbitrary turn error to a typed reason code plus
@@ -47,7 +49,7 @@ func classifyFailure(err error) failureClass {
 		return failureClass{Code: FailureUnknown}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return failureClass{Code: FailureTurnTimeout, Transient: true, Retryable: true}
+		return failureClass{Code: FailureTurnTimeout, Transient: true}
 	}
 	if errors.Is(err, context.Canceled) {
 		return failureClass{Code: FailureCanceled}
@@ -91,7 +93,7 @@ func classifyFailure(err error) failureClass {
 	if strings.Contains(msg, "429") ||
 		strings.Contains(msg, "rate limit") ||
 		strings.Contains(msg, "too many requests") {
-		return failureClass{Code: FailureProviderRateLimit, Transient: true, Retryable: true}
+		return failureClass{Code: FailureProviderRateLimit, Transient: true}
 	}
 
 	// Context overflow — retryable after history compaction.
@@ -103,14 +105,14 @@ func classifyFailure(err error) failureClass {
 		strings.Contains(msg, "token limit") ||
 		strings.Contains(msg, "max tokens") ||
 		strings.Contains(msg, "maximum tokens") {
-		return failureClass{Code: FailureContextOverflow, Transient: true, Retryable: true}
+		return failureClass{Code: FailureContextOverflow, Transient: true}
 	}
 
 	// Timeouts (non-context): delivery/network timeouts — transient, retry once.
 	if strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "timed out") ||
 		strings.Contains(msg, "deadline exceeded") {
-		return failureClass{Code: FailureDeliveryTimeout, Transient: true, Retryable: true}
+		return failureClass{Code: FailureDeliveryTimeout, Transient: true}
 	}
 
 	// Transport / server-side 5xx — transient, retry once.
@@ -127,7 +129,7 @@ func classifyFailure(err error) failureClass {
 		strings.Contains(msg, "server error") ||
 		strings.Contains(msg, "unavailable") ||
 		strings.Contains(msg, "internal error") {
-		return failureClass{Code: FailureRuntimeOffline, Transient: true, Retryable: true}
+		return failureClass{Code: FailureRuntimeOffline, Transient: true}
 	}
 
 	// Missing provider/config wiring.
@@ -190,14 +192,6 @@ func turnFailureReplyCoded(err error, turnTimeout time.Duration) (string, Failur
 	default:
 		return fmt.Sprintf("(error: %v)", err), cls.Code
 	}
-}
-
-// turnFailureReply keeps the legacy text-only signature for callers that only
-// need the human-facing string (tests, TUI). The coded variant is used by the
-// worker so results carry a machine-readable reason.
-func turnFailureReply(err error, turnTimeout time.Duration) string {
-	reply, _ := turnFailureReplyCoded(err, turnTimeout)
-	return reply
 }
 
 // compactHistory drops the oldest complete turns (user-turn boundaries) from

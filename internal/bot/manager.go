@@ -16,6 +16,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	sessionstore "github.com/magicwubiao/go-magic/internal/session"
+	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
@@ -118,6 +119,19 @@ type Manager struct {
 	// Lock order: routineMu is always acquired BEFORE m.mu and never while m.mu
 	// is held, so the two can never deadlock.
 	routineMu sync.Mutex
+	// cfgMu serializes every read-modify-write cycle over a bot's config file
+	// (CreateBot, CloneBot, UpdateBot, SetBotActive, DeleteBot, RememberMemory).
+	//
+	// Two reasons it exists:
+	//  1. Lost updates: two concurrent PUTs on the same bot both Load, both
+	//     mutate their own copy, both Save — the second silently drops the
+	//     first one's fields (including a pause the user just requested).
+	//  2. remember_memory is called from agent turns: a room turn and the
+	//     canonical turn (or two room agents) can append facts at the same
+	//     moment and one Save would drop the other's fact.
+	//
+	// Lock order: cfgMu is acquired BEFORE m.mu and never while m.mu is held.
+	cfgMu sync.Mutex
 	queueCond *sync.Cond
 	stopCh    chan struct{}
 	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
@@ -136,6 +150,16 @@ type Manager struct {
 	// write_file was fail-closed denied in the non-interactive server process
 	// ("写入被拒绝" clarify loops).
 	approvalMgr *approval.Manager
+
+	// skillMgr is the single skills manager every bot agent registers its
+	// skill tool against. It must be shared: skills.NewManager() creates
+	// directories, scans the whole skill tree and starts three background
+	// goroutines (effectiveness autosave/cleanup, trigger optimization, skill
+	// evolution) that have no stop path of their own. Building one per agent —
+	// which is what every UpdateBot / remember_memory / room-agent creation
+	// did — leaked a fresh goroutine set each time and rescanned the disk on
+	// the way. Owners: NewManager creates it, Stop closes it.
+	skillMgr *skills.Manager
 }
 
 // botRuntime holds one bot's live agents plus its message queue. A bot has
@@ -143,10 +167,9 @@ type Manager struct {
 // dedicated agent per room (roomAgents) so room context never bleeds into the
 // canonical conversation (and vice versa).
 type botRuntime struct {
-	cfg    *Config
-	ag     *agent.Agent
-	queue  []pendingMessage
-	loaded bool // History restored from session store on first use
+	cfg   *Config
+	ag    *agent.Agent
+	queue []pendingMessage
 
 	// lastActive is the Unix-seconds timestamp of the bot's most recent
 	// completed turn (chat, DM, or routine). Guarded by m.mu. 0 = never.
@@ -204,6 +227,15 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	// Follow the same approval policy as web/CLI sessions (config approval
 	// section). Nil on init failure → agents keep the builtin default hook.
 	m.approvalMgr = approval.NewManagerFromAppConfigOrWarn(cfg.Approval, "BotMode")
+
+	// One skills manager for the whole bot fleet (see the field comment).
+	// Failure is non-fatal: bots then run without the skill tool, exactly as a
+	// per-agent init failure did before.
+	if skillMgr, err := skills.NewManager(); err == nil {
+		m.skillMgr = skillMgr
+	} else {
+		log.Warnf("[BotMode] Failed to initialize skills manager: %v", err)
+	}
 
 	return m, nil
 }
@@ -291,11 +323,19 @@ func (m *Manager) Stop() {
 	close(m.stopCh)
 	m.mu.Lock()
 	m.queueCond.Broadcast()
+	// Snapshot under the lock: UpdateBot/SetBotActive/DeleteBot may still be
+	// running from an API handler and mutate this map concurrently.
+	schedulers := make([]*RoutineScheduler, 0, len(m.routines))
+	for _, sched := range m.routines {
+		schedulers = append(schedulers, sched)
+	}
 	m.mu.Unlock()
 	m.wg.Wait()
 
-	for _, sched := range m.routines {
-		sched.Stop()
+	for _, sched := range schedulers {
+		if sched != nil {
+			sched.Stop()
+		}
 	}
 
 	// Close the session store so the SQLite file handle is released
@@ -305,6 +345,12 @@ func (m *Manager) Stop() {
 		if err := m.sessions.Close(); err != nil {
 			log.Infof("[BotMode] Failed to close session store: %v", err)
 		}
+	}
+	// Last: the shared skills manager owns background goroutines (autosave,
+	// trigger optimization, skill evolution). Nothing may register against it
+	// after the workers are gone.
+	if m.skillMgr != nil {
+		m.skillMgr.Close()
 	}
 }
 
@@ -367,8 +413,14 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 		if !m.bots[key].cfg.IsActive() {
 			pausedName := m.bots[key].cfg.Name
 			m.mu.Unlock()
+			// Log it: dropping silently made "pause, resume" look like the bot
+			// had swallowed every message it received while paused.
+			log.Infof("[BotMode] Dropping queued message for paused bot %q (from=%q)", pausedName, msg.From)
 			if msg.replyCh != nil {
-				msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s is paused", pausedName)}
+				select {
+				case msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s is paused", pausedName)}:
+				default:
+				}
 			}
 			continue
 		}
@@ -411,7 +463,7 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime, roomID string) (*agent.
 // buildAgent constructs a fresh agent for one bot session, restoring its
 // persisted history. Caller must hold m.mu (buildBotSystemPrompt reads cfg).
 func (m *Manager) buildAgent(bc *Config, sessionID string) (*agent.Agent, error) {
-	prov, registry, err := buildBotDeps(m.cfg, bc)
+	prov, registry, err := buildBotDeps(m.cfg, bc, m.skillMgr)
 	if err != nil {
 		return nil, err
 	}
@@ -518,10 +570,15 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		return
 	}
 	ag, err := m.getOrCreateAgentLocked(rt, msg.RoomID)
+	// Snapshot the config while the lock is held. UpdateBot/SetBotActive replace
+	// rt.cfg on a live runtime, and everything below (name, mention tag, workdir,
+	// session IDs) is read outside m.mu — reading rt.cfg there raced with those
+	// writes for no benefit.
+	bc := rt.cfg
 	m.mu.Unlock()
 
 	if err != nil {
-		log.Errorf("[BotMode] Agent init failed for %s: %v", rt.cfg.Name, err)
+		log.Errorf("[BotMode] Agent init failed for %s: %v", bc.Name, err)
 		if msg.replyCh != nil {
 			msg.replyCh <- turnResult{Err: err}
 		}
@@ -559,7 +616,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	// ② file/terminal tools resolve relative paths against the bot sandbox
 	//   (<working_dir>/bots/<name>), matching the RegisterBotTools isolation
 	//   design in buildBotDeps instead of falling back to the server cwd.
-	runCtx = tool.WithWorkDir(runCtx, m.botWorkDir(rt.cfg))
+	runCtx = tool.WithWorkDir(runCtx, m.botWorkDir(bc))
 
 	// Mark the bot as having a turn in flight so /running probes and
 	// /cancel requests can observe and stop it even after the SSE client
@@ -572,9 +629,9 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	m.mu.Lock()
 	if cur, ok := m.bots[key]; !ok || cur != rt {
 		m.mu.Unlock()
-		log.Infof("[BotMode] Dropping turn for deleted bot %s", rt.cfg.Name)
+		log.Infof("[BotMode] Dropping turn for deleted bot %s", bc.Name)
 		if msg.replyCh != nil {
-			msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s was deleted", rt.cfg.Name)}
+			msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s was deleted", bc.Name)}
 		}
 		return
 	}
@@ -661,7 +718,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	reply, err := runTurn(streaming, true)
 	if err != nil {
 		cls := classifyFailure(err)
-		log.Errorf("[BotMode] Bot %s turn failed: %v (code=%s)", rt.cfg.Name, err, cls.Code)
+		log.Errorf("[BotMode] Bot %s turn failed: %v (code=%s)", bc.Name, err, cls.Code)
 
 		// Automatic retry policy:
 		//   - transient failures (rate limit, 5xx, offline, timeout) retry once;
@@ -679,16 +736,16 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 			if cls.Code == FailureContextOverflow {
 				compact := compactHistory(ag.GetHistory())
 				ag.SetHistory(compact)
-				log.Warnf("[BotMode] Bot %s context overflow: compacted history to %d messages, retrying", rt.cfg.Name, len(compact))
+				log.Warnf("[BotMode] Bot %s context overflow: compacted history to %d messages, retrying", bc.Name, len(compact))
 			} else {
-				log.Warnf("[BotMode] Bot %s transient failure (%s): retrying once", rt.cfg.Name, cls.Code)
+				log.Warnf("[BotMode] Bot %s transient failure (%s): retrying once", bc.Name, cls.Code)
 			}
 			// On retry, don't re-forward deltas to the caller — the client
 			// already saw the first attempt's partial stream and will get the
 			// authoritative final text via replyCh.
 			reply, err = runTurn(streaming, false)
 			if err != nil {
-				log.Errorf("[BotMode] Bot %s retry failed: %v", rt.cfg.Name, err)
+				log.Errorf("[BotMode] Bot %s retry failed: %v", bc.Name, err)
 			}
 		}
 
@@ -700,9 +757,9 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	}
 
 	// Persist the turn's session (canonical chat or room session).
-	sessionID := CanonicalSessionID(rt.cfg.Name)
+	sessionID := CanonicalSessionID(bc.Name)
 	if msg.RoomID != "" {
-		sessionID = RoomSessionID(rt.cfg.Name, msg.RoomID)
+		sessionID = RoomSessionID(bc.Name, msg.RoomID)
 	}
 	// Multimodal turns: swap the live data-URL image parts of this turn's
 	// user message back to their lightweight upload refs before the history
@@ -765,8 +822,8 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 			if text == "" {
 				continue
 			}
-			log.Infof("[BotMode] Bot %s: reclaiming unconsumed guide as a new queued turn", rt.cfg.Name)
-			_ = m.Enqueue(rt.cfg.Name, text, "user")
+			log.Infof("[BotMode] Bot %s: reclaiming unconsumed guide as a new queued turn", bc.Name)
+			_ = m.Enqueue(bc.Name, text, "user")
 		}
 	}
 
@@ -782,7 +839,7 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		if err != nil {
 			status = "failed: " + err.Error()
 		}
-		m.recordRoutineResult(rt.cfg.Name, msg.RoutineID, status, reply)
+		m.recordRoutineResult(bc.Name, msg.RoutineID, status, reply)
 	}
 
 	// Deliver the result to a synchronous caller if one is waiting.
@@ -803,36 +860,62 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 	// coordinator owns delivery.
 	switch {
 	case msg.RoomID != "":
-		log.Debugf("[BotMode] Room %s turn finished for %s", msg.RoomID, rt.cfg.Name)
+		log.Debugf("[BotMode] Room %s turn finished for %s", msg.RoomID, bc.Name)
 	case strings.HasPrefix(msg.From, "bot:"):
 		// Bot-to-bot DM reply goes back to the sender's canonical chat queue.
 		// From carries the sender's mention tag; resolve it back to the bot name
 		// (the queue is keyed by name, which may differ from the tag).
 		senderTag := strings.TrimPrefix(msg.From, "bot:")
 		if senderCfg := m.FindByTag(senderTag); senderCfg != nil {
-			log.Debugf("[BotMode] Bot %s -> %s", rt.cfg.Name, senderCfg.Name)
+			log.Debugf("[BotMode] Bot %s -> %s", bc.Name, senderCfg.Name)
 			// NOTE: avoid square brackets — this text reaches the LLM as a user
 			// message and GLM mimics the bracket format. Use "reply from @tag:".
-			_ = m.Enqueue(senderCfg.Name, fmt.Sprintf("reply from @%s: %s", rt.cfg.MentionTag(), reply), "bot:"+rt.cfg.MentionTag())
+			_ = m.Enqueue(senderCfg.Name, fmt.Sprintf("reply from @%s: %s", bc.MentionTag(), reply), "bot:"+bc.MentionTag())
 		} else {
 			log.Warnf("[BotMode] Reply target bot %q no longer exists", senderTag)
 		}
 	case msg.From == "":
 		// Routine output: log only (routines run headless).
-		log.Debugf("[BotMode] Routine result for %s", rt.cfg.Name)
+		log.Debugf("[BotMode] Routine result for %s", bc.Name)
 	default:
 		// Human user turns are delivered via replyCh above.
-		log.Debugf("[BotMode] Result for %s -> user", rt.cfg.Name)
+		log.Debugf("[BotMode] Result for %s -> user", bc.Name)
 	}
 }
 
-// EnqueueMsg appends a pre-built message to a bot's queue.
-func (m *Manager) EnqueueMsg(botName string, msg pendingMessage) error {
-	key := strings.ToLower(botName)
+// runtimeByRefLocked resolves a bot by name OR @mention tag to its runtime and
+// map key (the lowercased bot name). Caller must hold m.mu.
+//
+// Bots are keyed by lowercased Name, but the fleet-facing surface (delegate_task,
+// message_agent, relay, CLI) addresses them by mention tag — and MentionTag
+// rewrites "_" to "-". Looking a tag straight up in the map therefore missed
+// every bot whose name contains an underscore ("research-bot" != "research_bot"),
+// so delegating to such a bot failed with "bot not found" even though the tool
+// description advertised the tag. Every message-delivery entry point resolves
+// through here instead.
+func (m *Manager) runtimeByRefLocked(ref string) (*botRuntime, string) {
+	ref = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "@")))
+	if ref == "" {
+		return nil, ""
+	}
+	if rt, ok := m.bots[ref]; ok {
+		return rt, ref
+	}
+	if cfg := m.findByTagLocked(ref); cfg != nil {
+		key := strings.ToLower(cfg.Name)
+		if rt, ok := m.bots[key]; ok {
+			return rt, key
+		}
+	}
+	return nil, ""
+}
 
+// EnqueueMsg appends a pre-built message to a bot's queue. botName may be a bot
+// name or its @mention tag.
+func (m *Manager) EnqueueMsg(botName string, msg pendingMessage) error {
 	m.mu.Lock()
-	rt, ok := m.bots[key]
-	if !ok {
+	rt, _ := m.runtimeByRefLocked(botName)
+	if rt == nil {
 		m.mu.Unlock()
 		return fmt.Errorf("bot not found: %s", botName)
 	}
@@ -865,12 +948,10 @@ func (m *Manager) SendToBotDelegated(botName, text string, chain []string) (stri
 }
 
 func (m *Manager) sendToBot(botName, text string, chain []string) (string, error) {
-	key := strings.ToLower(botName)
-
 	m.mu.Lock()
-	_, ok := m.bots[key]
+	_, key := m.runtimeByRefLocked(botName)
 	m.mu.Unlock()
-	if !ok {
+	if key == "" {
 		return "", fmt.Errorf("bot not found: %s", botName)
 	}
 
@@ -884,13 +965,27 @@ func (m *Manager) sendToBot(botName, text string, chain []string) (string, error
 	if err := m.EnqueueMsg(key, msg); err != nil {
 		return "", err
 	}
+	return m.awaitReply(botName, msg)
+}
 
+// awaitReply blocks until the queued message's turn finishes, the manager shuts
+// down, or the wait exceeds the per-turn budget plus slack.
+//
+// The bound matters for every caller that is not the worker: a message can sit
+// behind earlier turns in the same bot's queue, so "the turn is capped at
+// turnTimeout" alone does not bound the wait. Without a timeout the media
+// entry points (enqueueAndAwait) left an HTTP handler blocked indefinitely when
+// the bot was paused, deleted, or simply busy — the SSE client eventually gave
+// up, the goroutine did not.
+func (m *Manager) awaitReply(botName string, msg pendingMessage) (string, error) {
+	timer := time.NewTimer(m.turnTimeout() + sendToBotTimeoutSlack)
+	defer timer.Stop()
 	select {
 	case res := <-msg.replyCh:
 		return res.Reply, res.Err
 	case <-m.stopCh:
 		return "", fmt.Errorf("bot manager shutting down")
-	case <-time.After(m.turnTimeout() + sendToBotTimeoutSlack):
+	case <-timer.C:
 		return "", fmt.Errorf("timed out waiting for bot %s to reply", botName)
 	}
 }
@@ -910,12 +1005,10 @@ func (m *Manager) SendToBotStream(botName, text string, onDelta StreamHandler) (
 // callback that receives structured tool_start / tool_result events parsed
 // from the agent stream, letting web clients render live tool activity.
 func (m *Manager) SendToBotStreamEvents(botName, text string, onDelta StreamHandler, onToolEvent func(map[string]interface{})) (string, error) {
-	key := strings.ToLower(botName)
-
 	m.mu.Lock()
-	rt, ok := m.bots[key]
+	_, key := m.runtimeByRefLocked(botName)
 	m.mu.Unlock()
-	if !ok || rt == nil {
+	if key == "" {
 		return "", fmt.Errorf("bot not found: %s", botName)
 	}
 	if onDelta == nil {
@@ -934,13 +1027,7 @@ func (m *Manager) SendToBotStreamEvents(botName, text string, onDelta StreamHand
 	if err := m.EnqueueMsg(key, msg); err != nil {
 		return "", err
 	}
-
-	select {
-	case res := <-msg.replyCh:
-		return res.Reply, res.Err
-	case <-m.stopCh:
-		return "", fmt.Errorf("bot manager shutting down")
-	}
+	return m.awaitReply(botName, msg)
 }
 
 // SendToBotWithMedia is SendToBot for multimodal input: parts carries the
@@ -948,12 +1035,10 @@ func (m *Manager) SendToBotStreamEvents(botName, text string, onDelta StreamHand
 // parts, already stripped to upload refs by the caller), and persistedParts
 // is the lightweight on-disk form applied when the history is saved.
 func (m *Manager) SendToBotWithMedia(botName, text string, parts, persistedParts []types.ContentPart) (string, error) {
-	key := strings.ToLower(botName)
-
 	m.mu.Lock()
-	rt, ok := m.bots[key]
+	_, key := m.runtimeByRefLocked(botName)
 	m.mu.Unlock()
-	if !ok || rt == nil {
+	if key == "" {
 		return "", fmt.Errorf("bot not found: %s", botName)
 	}
 
@@ -972,12 +1057,10 @@ func (m *Manager) SendToBotWithMedia(botName, text string, parts, persistedParts
 // through onDelta and structured tool activity through onToolEvent (either
 // callback may be nil) as the turn runs.
 func (m *Manager) SendToBotStreamWithMedia(botName, text string, parts, persistedParts []types.ContentPart, onDelta StreamHandler, onToolEvent func(map[string]interface{})) (string, error) {
-	key := strings.ToLower(botName)
-
 	m.mu.Lock()
-	rt, ok := m.bots[key]
+	_, key := m.runtimeByRefLocked(botName)
 	m.mu.Unlock()
-	if !ok || rt == nil {
+	if key == "" {
 		return "", fmt.Errorf("bot not found: %s", botName)
 	}
 	if onDelta == nil {
@@ -997,28 +1080,23 @@ func (m *Manager) SendToBotStreamWithMedia(botName, text string, parts, persiste
 }
 
 // enqueueAndAwait queues msg on the bot's worker and blocks until the turn
-// finishes (or the manager shuts down). Shared tail of the SendToBot* family.
+// finishes (or the manager shuts down / the bounded wait expires). Shared tail
+// of the SendToBot* family.
 func (m *Manager) enqueueAndAwait(key string, msg pendingMessage) (string, error) {
 	if err := m.EnqueueMsg(key, msg); err != nil {
 		return "", err
 	}
-	select {
-	case res := <-msg.replyCh:
-		return res.Reply, res.Err
-	case <-m.stopCh:
-		return "", fmt.Errorf("bot manager shutting down")
-	}
+	return m.awaitReply(key, msg)
 }
 
 // IsBusy reports whether the bot has a turn in flight or queued. Used by the
 // server's GET /api/bots/{name}/running probe so a client whose SSE stream
 // died (mobile background) can poll until the turn completes.
 func (m *Manager) IsBusy(botName string) bool {
-	key := strings.ToLower(botName)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	rt, ok := m.bots[key]
-	if !ok {
+	rt, _ := m.runtimeByRefLocked(botName)
+	if rt == nil {
 		return false
 	}
 	return rt.turnRunning || len(rt.queue) > 0
@@ -1037,10 +1115,9 @@ func (m *Manager) IsBusy(botName string) bool {
 // the bot chats next): GuideBot checks the in-flight turn's room ID and
 // declines when the bot is busy with a room round.
 func (m *Manager) GuideBot(botName, text string) (bool, error) {
-	key := strings.ToLower(botName)
 	m.mu.Lock()
-	rt, ok := m.bots[key]
-	if !ok {
+	rt, _ := m.runtimeByRefLocked(botName)
+	if rt == nil {
 		m.mu.Unlock()
 		return false, fmt.Errorf("bot not found: %s", botName)
 	}
@@ -1062,11 +1139,10 @@ func (m *Manager) GuideBot(botName, text string) (bool, error) {
 // running turn was actually canceled. Queued (not yet started) messages are
 // not affected — they have no cancellable context yet.
 func (m *Manager) CancelTurn(botName string) bool {
-	key := strings.ToLower(botName)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	rt, ok := m.bots[key]
-	if !ok || rt.turnCancel == nil {
+	rt, _ := m.runtimeByRefLocked(botName)
+	if rt == nil || rt.turnCancel == nil {
 		return false
 	}
 	cancel := rt.turnCancel
@@ -1411,7 +1487,6 @@ func (m *Manager) ClearHistory(name string) error {
 	m.mu.Lock()
 	if rt, ok := m.bots[key]; ok && rt != nil && rt.ag != nil {
 		rt.ag.SetHistory(nil)
-		rt.loaded = true // disk is empty; don't restore stale turns next use
 	}
 	m.mu.Unlock()
 
@@ -1462,6 +1537,10 @@ func (m *Manager) CreateBot(cfg *Config) error {
 	if err := ValidateName(cfg.Name); err != nil {
 		return err
 	}
+	// Serialize the exists-check + save so two concurrent creates cannot both
+	// pass the check and write over each other.
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
 	if existing, err := m.store.Load(cfg.Name); err == nil && existing != nil {
 		return fmt.Errorf("bot %q already exists", cfg.Name)
 	}
@@ -1480,6 +1559,9 @@ func (m *Manager) CreateBot(cfg *Config) error {
 // identity and empty chat history. Routines are NOT copied: a clone starts
 // clean. The clone comes online immediately when the manager is running.
 func (m *Manager) CloneBot(name, newName string) (*Config, error) {
+	// Same exists-check + save serialization as CreateBot.
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
 	src, err := m.store.Load(name)
 	if err != nil {
 		return nil, fmt.Errorf("bot not found: %s", name)
@@ -1519,6 +1601,11 @@ func (m *Manager) CloneBot(name, newName string) (*Config, error) {
 // UpdateBot applies partial updates to an existing bot and hot-reloads its
 // runtime (agent + routine scheduler) without dropping queued messages.
 func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) {
+	// Serialize load-modify-save: two concurrent updates (e.g. a settings PUT
+	// racing a pause) would otherwise each save their own copy and silently
+	// drop the other's change.
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
 	cfg, err := m.store.Load(name)
 	if err != nil {
 		return nil, fmt.Errorf("bot not found: %s", name)
@@ -1543,7 +1630,6 @@ func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) 
 		// updated config too, not just the canonical chat.
 		rt.cfg = cfg
 		rt.ag = nil
-		rt.loaded = false
 		rt.roomAgents = nil
 	}
 	if sched, ok2 := m.routines[key]; ok2 && sched != nil {
@@ -1566,6 +1652,10 @@ func (m *Manager) UpdateBot(name string, mutate func(*Config)) (*Config, error) 
 // routine schedule is suspended; the worker stays alive so it can be resumed
 // instantly. Persists the change and hot-reloads the runtime.
 func (m *Manager) SetBotActive(name string, active bool) (*Config, error) {
+	// Same load-modify-save serialization as UpdateBot: a pause must not be
+	// overwritten by a settings save that read the config a moment earlier.
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
 	cfg, err := m.store.Load(name)
 	if err != nil {
 		return nil, fmt.Errorf("bot not found: %s", name)
@@ -1607,6 +1697,10 @@ func (m *Manager) SetBotActive(name string, active bool) (*Config, error) {
 // DeleteBot removes a bot's config and stops its runtime. Its canonical chat
 // session is kept on disk for audit/history purposes.
 func (m *Manager) DeleteBot(name string) error {
+	// Serialize with the other config writers so a concurrent UpdateBot cannot
+	// re-create the file between the load and the delete.
+	m.cfgMu.Lock()
+	defer m.cfgMu.Unlock()
 	cfg, err := m.store.Load(name)
 	if err != nil {
 		return fmt.Errorf("bot not found: %s", name)
@@ -1618,11 +1712,13 @@ func (m *Manager) DeleteBot(name string) error {
 		sched.Stop()
 		delete(m.routines, key)
 	}
+	var dropped []pendingMessage
 	if rt, ok := m.bots[key]; ok {
 		// Drop any pending messages so the worker exits promptly, and abort the
 		// turn that is currently in flight. Without the cancel the deleted bot
 		// kept running to completion — burning tokens and writing history for a
 		// bot that no longer exists.
+		dropped = rt.queue
 		rt.queue = nil
 		if rt.turnCancel != nil {
 			rt.turnCancel()
@@ -1632,6 +1728,21 @@ func (m *Manager) DeleteBot(name string) error {
 		delete(m.bots, key)
 	}
 	m.mu.Unlock()
+
+	// Every queued message may have a synchronous caller blocked on its
+	// replyCh (web chat, relay DM, delegate_task, a room round). Dropping the
+	// slice without answering left those callers waiting forever: the media
+	// paths (enqueueAndAwait) have no wait timeout of their own, so a DeleteBot
+	// during a busy queue hung the HTTP request until the client gave up.
+	for _, msg := range dropped {
+		if msg.replyCh == nil {
+			continue
+		}
+		select {
+		case msg.replyCh <- turnResult{Err: fmt.Errorf("bot %s was deleted", cfg.Name)}:
+		default:
+		}
+	}
 
 	m.queueCond.Broadcast()
 
@@ -1649,11 +1760,11 @@ func (m *Manager) GetBot(name string) (*Config, error) {
 // RuntimeStatus reports live state for one bot (zero-value if not running).
 func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 	state := RuntimeState{Name: botName, SessionID: CanonicalSessionID(botName)}
-	key := strings.ToLower(botName)
 
 	m.mu.Lock()
-	rt, ok := m.bots[key]
-	if ok {
+	rt, _ := m.runtimeByRefLocked(botName)
+	var liveAgent *agent.Agent
+	if rt != nil {
 		state.QueueDepth = len(rt.queue)
 		state.LastActiveUnix = rt.lastActive
 		state.Active = rt.cfg.IsActive()
@@ -1667,6 +1778,9 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 		// them up with the lowercased key made ActiveRoutines read 0 for every
 		// bot whose name contains an uppercase letter.
 		botName = rt.cfg.Name
+		state.Name = rt.cfg.Name
+		state.SessionID = CanonicalSessionID(rt.cfg.Name)
+		liveAgent = rt.ag
 	}
 	m.mu.Unlock()
 
@@ -1680,14 +1794,19 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 		}
 	}
 
-	if ag := m.AgentFor(botName); ag != nil {
-		state.HistoryLength = len(ag.GetHistory())
-	}
-
-	// Last-message preview: read the canonical chat from disk (the store is
-	// saved after every turn, so disk is never more than one turn behind).
-	// Runs without m.mu like the routine load above.
-	if sess, err := m.loadSessionForPreview(CanonicalSessionID(strings.ToLower(botName))); err == nil && sess != nil {
+	// Live history first. A running bot's agent already holds every message, so
+	// the dashboard no longer re-reads and re-decodes the whole session row
+	// (messages JSON included, up to the 200-message window) on every list
+	// refresh just to render one preview line. The disk path stays as the
+	// fallback for bots that have not run a turn since the process started.
+	if liveAgent != nil {
+		history := liveAgent.GetHistory()
+		state.HistoryLength = len(history)
+		if text, ts, ok := lastChatPreview(history); ok {
+			state.LastMessage = truncateString(text, 120)
+			state.LastMessageUnix = ts
+		}
+	} else if sess, err := m.loadSessionForPreview(CanonicalSessionID(strings.ToLower(botName))); err == nil && sess != nil {
 		for i := len(sess.Messages) - 1; i >= 0; i-- {
 			msg := sess.Messages[i]
 			if (msg.Role != "user" && msg.Role != "assistant") || strings.TrimSpace(msg.Content) == "" {
@@ -1702,7 +1821,30 @@ func (m *Manager) RuntimeStatus(botName string) RuntimeState {
 			break
 		}
 	}
+	if state.LastMessage != "" && state.LastMessageUnix == 0 {
+		// In-memory agent messages carry no timestamp; the bot's last completed
+		// turn is the closest honest answer.
+		state.LastMessageUnix = state.LastActiveUnix
+	}
 	return state
+}
+
+// lastChatPreview returns the most recent user/assistant text in a
+// provider-message history plus its Unix timestamp (0 when the message carries
+// none). Mirrors the disk-scan below so both paths agree.
+func lastChatPreview(history []provider.Message) (string, int64, bool) {
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if (msg.Role != "user" && msg.Role != "assistant") || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		var ts int64
+		if !msg.Timestamp.IsZero() {
+			ts = msg.Timestamp.Unix()
+		}
+		return strings.TrimSpace(msg.Content), ts, true
+	}
+	return "", 0, false
 }
 
 // loadSessionForPreview loads one session with a short timeout; preview reads
@@ -1720,11 +1862,10 @@ func (m *Manager) loadSessionForPreview(sessionID string) (*sessionstore.Session
 // AgentFor exposes a bot's live agent (nil when offline). Used by the web
 // layer to read history without racing the message queue.
 func (m *Manager) AgentFor(botName string) *agent.Agent {
-	key := strings.ToLower(botName)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	rt, ok := m.bots[key]
-	if !ok || rt == nil {
+	rt, _ := m.runtimeByRefLocked(botName)
+	if rt == nil {
 		return nil
 	}
 	return rt.ag
@@ -1784,6 +1925,10 @@ func (m *Manager) startBotLocked(cfg *Config) {
 
 // rootCtxOrBackground returns the lifecycle context captured by Start(),
 // falling back to Background for managers created but never started.
+//
+// Caller MUST hold m.mu: rootCtx is written under it by Start(), and every
+// caller (UpdateBot, startBotLocked) already holds the lock — taking it here
+// again would deadlock.
 func (m *Manager) rootCtxOrBackground() context.Context {
 	if m.rootCtx != nil {
 		return m.rootCtx
@@ -1859,11 +2004,17 @@ const sendToBotTimeoutSlack = 2 * time.Minute
 // truncateRoutineResult keeps the head of a routine's output and adds an
 // ellipsis marker when it was cut, so users can see the gist without the
 // full transcript.
+//
+// Cuts on a rune boundary: slicing the byte string at maxRoutineResultLen
+// chopped multi-byte characters in half (routine output is usually Chinese),
+// leaving invalid UTF-8 that reached both the JSON store and the dashboard as
+// replacement glyphs.
 func truncateRoutineResult(result string) string {
-	if len(result) <= maxRoutineResultLen {
+	runes := []rune(result)
+	if maxRoutineResultLen <= 0 || len(runes) <= maxRoutineResultLen {
 		return result
 	}
-	return result[:maxRoutineResultLen] + "\n… [truncated]"
+	return string(runes[:maxRoutineResultLen]) + "\n… [truncated]"
 }
 
 // isInternalMarker returns true if the content is an internal protocol marker

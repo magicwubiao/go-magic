@@ -63,8 +63,10 @@ const router = createRouter({
     // Bot 群聊已整合进 /bots（左侧 rail 内切换），旧链接重定向
     { path: '/rooms', redirect: '/bots' },
     { path: '/bots', component: BotsView, meta: { keepAlive: true } },
-    // Bot Mode 跨机 peer 独立页面（与 /bots 并列，见 App.vue 侧边栏 Bot Mode 分组）
-    { path: '/peers', component: PeersView },
+    // Bot Mode 跨机 peer 独立页面（与 /bots 并列，见 App.vue 侧边栏 Bot Mode 分组）。
+    // 同样是聊天形态：缓存起来才能保住输入框草稿与选中的 peer（跨机回合常要等几分钟，
+    // 切走再回来发现草稿和会话都被重置的体验很差）。
+    { path: '/peers', component: PeersView, meta: { keepAlive: true } },
     { path: '/logs', component: LogsView },
     { path: '/system', component: SystemView },
     { path: '/profiles', component: ProfilesView },

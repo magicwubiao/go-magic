@@ -75,28 +75,71 @@ func NewStore(magicHome string) (*Store, error) {
 	return s, nil
 }
 
-// Add registers a peer (validating name + URL) and persists the table.
-func (s *Store) Add(p *Peer) error {
-	name := strings.TrimSpace(p.Name)
-	if name == "" {
+// normalize validates and canonicalizes a peer entry in place. Shared by Add
+// and Update so a peer the dashboard can save is always a peer the relay client
+// can actually call.
+func normalize(p *Peer) error {
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" {
 		return fmt.Errorf("peer name is required")
 	}
 	u, err := url.Parse(strings.TrimSpace(p.BaseURL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("invalid base URL %q (want http(s)://host[:port])", p.BaseURL)
 	}
-	base := strings.TrimRight(u.String(), "/")
-	p.Name = name
-	p.BaseURL = base
+	p.BaseURL = strings.TrimRight(u.String(), "/")
+	p.Token = strings.TrimSpace(p.Token)
+	return nil
+}
+
+// Add registers a peer (validating name + URL) and persists the table.
+func (s *Store) Add(p *Peer) error {
+	if err := normalize(p); err != nil {
+		return err
+	}
 	if p.CreatedAt == 0 {
 		p.CreatedAt = time.Now().Unix()
 	}
 
 	s.mu.Lock()
-	s.peers[strings.ToLower(name)] = p
-	err = s.saveLocked()
+	s.peers[strings.ToLower(p.Name)] = p
+	err := s.saveLocked()
 	s.mu.Unlock()
 	return err
+}
+
+// Update rewrites an existing peer's address and, optionally, its relay token.
+// An empty token means "keep the stored secret": the dashboard only ever learns
+// whether a token exists (never its value), so requiring it on every edit would
+// force the operator to re-enter a credential just to fix a port number.
+//
+// The name cannot change — it is the table key, referenced by `magic peer dm`
+// and by the logs of instances that already relayed to us.
+func (s *Store) Update(name, baseURL, token string) (*Peer, error) {
+	key := strings.ToLower(strings.TrimSpace(name))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cur, ok := s.peers[key]
+	if !ok {
+		return nil, fmt.Errorf("peer %q not found", name)
+	}
+	next := &Peer{Name: cur.Name, BaseURL: baseURL, CreatedAt: cur.CreatedAt, Token: cur.Token}
+	if strings.TrimSpace(token) != "" {
+		next.Token = token
+	}
+	if err := normalize(next); err != nil {
+		return nil, err
+	}
+
+	s.peers[key] = next
+	if err := s.saveLocked(); err != nil {
+		// Roll back so memory and disk never disagree after a failed write.
+		s.peers[key] = cur
+		return nil, err
+	}
+	return next, nil
 }
 
 // Remove deletes a peer by name.
@@ -138,6 +181,10 @@ func (s *Store) Count() int {
 	return len(s.peers)
 }
 
+// saveLocked persists the table atomically (write temp + rename). Writing
+// peers.json in place left a truncated file behind when the process died
+// mid-write, and the next NewStore then failed for EVERY peer — one bad write
+// taking down all cross-machine links instead of just the last edit.
 func (s *Store) saveLocked() error {
 	list := make([]*Peer, 0, len(s.peers))
 	for _, p := range s.peers {
@@ -148,7 +195,31 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".peers-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, s.path)
 }
 
 // InstanceID returns this machine's stable identity, creating and persisting
@@ -330,6 +401,25 @@ func (c *Client) ListBots(ctx context.Context, p *Peer) ([]RelayBot, error) {
 		return nil, fmt.Errorf("parse bot list from %s: %w", endpoint, err)
 	}
 	return out.Bots, nil
+}
+
+// ProbeTimeout bounds one reachability check. It is deliberately far shorter
+// than a DM: the dashboard runs one probe per peer when the page opens, so an
+// unreachable host (dropped packets, wrong subnet) must not hold the UI for the
+// client's full 6-minute relay budget.
+const ProbeTimeout = 6 * time.Second
+
+// Probe reports whether a peer answers right now, how long the round trip took,
+// and how many bots it advertises. The remote's own failure text is returned
+// unchanged so the dashboard can show "invalid relay token" instead of a
+// generic "offline" — the two need completely different fixes.
+func (c *Client) Probe(ctx context.Context, p *Peer) (int, time.Duration, error) {
+	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
+	defer cancel()
+
+	start := time.Now()
+	bots, err := c.ListBots(ctx, p)
+	return len(bots), time.Since(start), err
 }
 
 // DefaultMagicHome is a convenience alias so callers don't need to import

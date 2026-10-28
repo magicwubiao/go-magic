@@ -172,6 +172,7 @@ func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, 
 	// changes take effect immediately. In-flight requests are dropped.
 	m.mu.Lock()
 	if rt, ok := m.rooms[strings.ToLower(id)]; ok {
+		cancelRoomRoundLocked(rt)
 		close(rt.stopCh)
 		delete(m.rooms, strings.ToLower(id))
 	}
@@ -187,11 +188,25 @@ func (m *Manager) DeleteRoom(id string) error {
 		return fmt.Errorf("room not found: %s", id)
 	}
 	m.mu.Lock()
+	var stopped *roomRuntime
 	if rt, ok := m.rooms[strings.ToLower(id)]; ok {
+		cancelRoomRoundLocked(rt)
 		close(rt.stopCh)
 		delete(m.rooms, strings.ToLower(id))
+		stopped = rt
 	}
 	m.mu.Unlock()
+
+	// Let the cancelled round unwind before the session rows go away: its last
+	// member turn may still append a message, which would recreate the room log
+	// just below. Cancellation is already in flight, so this is usually
+	// milliseconds; the deadline only guards against a wedged provider call.
+	if stopped != nil {
+		deadline := time.Now().Add(3 * time.Second)
+		for stopped.roundRunning.Load() && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 
 	if err := m.store.DeleteRoom(cfg.ID); err != nil {
 		return fmt.Errorf("failed to delete room: %w", err)
@@ -412,6 +427,15 @@ func (m *Manager) dropRoomRequest(rt *roomRuntime, req roomRequest) {
 // its old members for the rest of the round, and a stopped round kept burning
 // turn after turn.
 func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
+	// The coordinator may have been torn down (DeleteRoom / UpdateRoom hot
+	// reload) between dequeuing this request and starting the round. Append
+	// writes below recreate the room log that DeleteRoom just deleted, so bail
+	// out before touching the store.
+	if m.roomClosed(rt) {
+		m.dropRoomRequest(rt, req)
+		return
+	}
+
 	roundCtx, cancelRound := context.WithCancel(context.Background())
 	m.mu.Lock()
 	rt.roundCtx = roundCtx
@@ -430,9 +454,22 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 	}()
 
 	room := rt.cfg
+	// Keep the room log in memory for the whole round. Every member turn used
+	// to re-read it from SQLite before building its prompt (and every append
+	// re-read it again), i.e. dozens of redundant reads per round for a log
+	// capped at ~10 entries. One read + in-memory appends gives every member
+	// exactly the same context with a fraction of the I/O.
+	capN := room.MessagesCap()
+	logHistory, err := m.loadRoomHistory(room.ID)
+	if err != nil {
+		// Don't fail the round: the persisted log is best-effort context, and a
+		// transient read error must not silently produce an empty prompt.
+		log.Warnf("[BotMode] Room %s: failed to load log at round start: %v", room.Name, err)
+	}
 	// Persist the human's message into the room log (with attachment refs so
 	// reloads still show what was shared).
-	m.appendRoomMessage(room, "user", req.Text, roomAttachmentsFromParts(req.Persisted))
+	logHistory = capRoomHistory(append(logHistory,
+		m.appendRoomMessage(room, "user", req.Text, roomAttachmentsFromParts(req.Persisted))), capN)
 
 	members := room.Members
 	if req.Target != "" && req.Target != "user" {
@@ -468,7 +505,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 			if m.FindByTag(member) == nil {
 				continue
 			}
-			history, _ := m.loadRoomHistory(room.ID)
+			history := logHistory
 			prompt := m.buildRoomPrompt(room, member, history, round, maxRounds)
 			reply, err := m.sendRoomTurn(roundCtx, rt, member, prompt, turnReq)
 			if err != nil {
@@ -480,7 +517,8 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 					break
 				}
 				log.Warnf("[BotMode] Room %s member %s turn failed: %v", room.Name, member, err)
-				m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")", nil)
+				logHistory = capRoomHistory(append(logHistory,
+					m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")", nil)), capN)
 				continue
 			}
 			// 房间日志是广播面：人和其他成员都会读它，而 buildRoomPrompt
@@ -493,7 +531,8 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 				continue
 			}
 			anySpoke = true
-			m.appendRoomMessage(room, member, reply, nil)
+			logHistory = capRoomHistory(append(logHistory,
+				m.appendRoomMessage(room, member, reply, nil)), capN)
 			if needsHuman(reply) {
 				needsUser = true
 				log.Infof("[BotMode] Room %s: @%s escalated to user", room.Name, member)
@@ -505,8 +544,9 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		}
 	}
 
-	history, _ := m.loadRoomHistory(room.ID)
-	res := &RoomResult{RoomID: room.ID, Messages: history, NeedsUser: needsUser}
+	// logHistory already holds every message this round wrote (appends are
+	// kept in sync above), so answering the caller needs no extra disk read.
+	res := &RoomResult{RoomID: room.ID, Messages: logHistory, NeedsUser: needsUser}
 	select {
 	case req.Reply <- res:
 	default:
@@ -542,6 +582,25 @@ func (m *Manager) roundStopped(rt *roomRuntime) bool {
 	default:
 		return false
 	}
+}
+
+// cancelRoomRoundLocked cancels the room's in-flight round, if any. Caller must
+// hold m.mu.
+//
+// Closing stopCh alone only makes the coordinator skip the NEXT member: the
+// member turn currently in flight is a child of roundCtx, not of stopCh, so it
+// kept running for up to the whole turn budget. A room that was hot-reloaded or
+// deleted therefore left a turn burning tokens for minutes against a
+// configuration that no longer existed. Cancelling roundCtx ends it now, and
+// roundStopped() keeps the exit quiet (no "(no reply …)" row in a log that is
+// about to be dropped anyway).
+func cancelRoomRoundLocked(rt *roomRuntime) {
+	if rt == nil || rt.roundCancel == nil {
+		return
+	}
+	cancel := rt.roundCancel
+	rt.roundCancel = nil
+	cancel()
 }
 
 // StopRoomRound aborts the room's in-flight round so nothing keeps running
@@ -615,9 +674,19 @@ func (m *Manager) sendRoomTurn(roundCtx context.Context, rt *roomRuntime, botNam
 	if err := m.EnqueueMsg(botName, msg); err != nil {
 		return "", err
 	}
+	// roundDone keeps the coordinator from waiting on a reply it no longer
+	// needs: after StopRoomRound (or a room hot-reload) the member turn may
+	// still sit in the bot's queue behind other work, and pop only when the
+	// worker gets to it. The round is over the moment the context is cancelled.
+	var roundDone <-chan struct{}
+	if roundCtx != nil {
+		roundDone = roundCtx.Done()
+	}
 	select {
 	case res := <-msg.replyCh:
 		return res.Reply, res.Err
+	case <-roundDone:
+		return "", roundCtx.Err()
 	case <-rt.stopCh:
 		return "", errors.New("room closed")
 	case <-m.stopCh:
@@ -669,24 +738,41 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 }
 
 // appendRoomMessage persists one message into the room's shared session log
-// and keeps only the last MessagesCap entries (10-message hard cap).
-func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string, atts []RoomAttachment) {
-	msgs, err := m.loadRoomHistory(room.ID)
-	if err != nil {
-		msgs = nil
-	}
-	msgs = append(msgs, RoomMessage{
+// and keeps only the last MessagesCap entries (10-message hard cap). It returns
+// the entry it wrote so a caller that keeps the log in memory for the duration
+// of a round (runRoomRound) stays in sync without re-reading the database.
+func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string, atts []RoomAttachment) RoomMessage {
+	entry := RoomMessage{
 		ID:          "m_" + uuid.New().String()[:8],
 		From:        from,
 		Content:     content,
 		Timestamp:   time.Now().Unix(),
 		Attachments: atts,
-	})
+	}
+	msgs, err := m.loadRoomHistory(room.ID)
+	if err != nil {
+		// A broken read must not lose the message: start a fresh log rather
+		// than appending to nil silently (saveRoomHistory keeps it durable).
+		log.Warnf("[BotMode] Room %s: failed to load log before append: %v", room.Name, err)
+		msgs = nil
+	}
+	msgs = append(msgs, entry)
 	capN := room.MessagesCap()
 	if len(msgs) > capN {
 		msgs = msgs[len(msgs)-capN:]
 	}
 	m.saveRoomHistory(room.ID, msgs)
+	return entry
+}
+
+// capRoomHistory trims an in-memory room log to the same cap the persisted log
+// uses, so a round that keeps the log in memory never hands a member more (or
+// less) context than a fresh disk read would.
+func capRoomHistory(history []RoomMessage, capN int) []RoomMessage {
+	if capN <= 0 || len(history) <= capN {
+		return history
+	}
+	return history[len(history)-capN:]
 }
 
 // roomHistorySessionID is the shared session key for a room's message log.

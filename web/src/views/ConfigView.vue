@@ -64,7 +64,7 @@
                     :placeholder="t('config.workingDirectory')"
                     style="width: 320px;"
                   />
-                  <n-button secondary @click="openDirPicker">
+                  <n-button secondary @click="openDirPicker('working')">
                     <template #icon><n-icon :component="FolderOpenOutline" /></template>
                   </n-button>
                 </div>
@@ -294,6 +294,70 @@
             </n-card>
           </template>
 
+          <!-- 浏览器（自动化工具用的 Chromium） -->
+          <template v-if="active === 'browser'">
+            <n-card size="small" class="setting-card">
+              <template #header>
+                <div class="section-head">
+                  <n-icon :component="GlobeOutline" :size="18" class="section-icon" />
+                  <div>
+                    <div class="section-title">{{ t('config.browserAutomation') }}</div>
+                    <div class="hint">{{ t('config.browserAutomationHint') }}</div>
+                  </div>
+                </div>
+              </template>
+
+              <div class="row">
+                <div class="row-label">
+                  <span class="row-title">{{ t('config.browserHeadless') }}</span>
+                  <span class="hint">{{ t('config.browserHeadlessHint') }}</span>
+                </div>
+                <div class="control">
+                  <n-switch v-model:value="browserForm.headless" />
+                </div>
+              </div>
+
+              <n-alert v-if="!browserForm.headless" type="warning" :bordered="false" class="inline-alert">
+                {{ t('config.browserHeadlessOffWarning') }}
+              </n-alert>
+
+              <div class="row">
+                <div class="row-label">
+                  <span class="row-title">{{ t('config.browserProfileDir') }}</span>
+                  <span class="hint">{{ t('config.browserProfileDirHint') }}</span>
+                </div>
+                <div class="control">
+                  <n-select
+                    v-model:value="browserForm.dir_mode"
+                    :options="browserProfileModeOptions"
+                    style="width: 240px;"
+                  />
+                </div>
+              </div>
+
+              <div v-if="browserForm.dir_mode === 'custom'" class="row">
+                <div class="row-label">
+                  <span class="row-title">{{ t('config.browserProfileDirPath') }}</span>
+                  <span class="hint">{{ t('config.browserProfileDirPathHint') }}</span>
+                </div>
+                <div class="control">
+                  <n-input
+                    v-model:value="browserForm.dir"
+                    :placeholder="browserProfileDefaultDir"
+                    style="width: 320px;"
+                  />
+                  <n-button secondary @click="openDirPicker('browser')">
+                    <template #icon><n-icon :component="FolderOpenOutline" /></template>
+                  </n-button>
+                </div>
+              </div>
+
+              <n-alert v-if="browserForm.dir_mode === 'temp'" type="info" :bordered="false" class="inline-alert">
+                {{ t('config.browserProfileDirTempWarning') }}
+              </n-alert>
+            </n-card>
+          </template>
+
           <!-- 安全 -->
           <template v-if="active === 'security'">
             <n-card size="small" class="setting-card">
@@ -426,7 +490,7 @@
       v-model:show="showDirPicker"
       preset="card"
       class="modal-responsive"
-      :title="t('chat.workDirSelect')"
+      :title="dirPickerTitle"
       style="width: 560px; max-width: 96vw;"
     >
       <div class="dir-picker">
@@ -487,7 +551,7 @@
       <template #footer>
         <n-space>
           <n-button @click="showDirPicker = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" @click="selectWorkDir">{{ t('chat.workDirSet') }}</n-button>
+          <n-button type="primary" @click="selectWorkDir">{{ dirPickerConfirmLabel }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -526,6 +590,7 @@ import {
   EyeOffOutline,
   FolderOpenOutline,
   FolderOutline,
+  GlobeOutline,
   HardwareChipOutline,
   OptionsOutline,
   RefreshOutline,
@@ -557,6 +622,7 @@ const sectionList = computed(() => [
   { key: 'agent', label: t('config.agent'), desc: t('config.sectionDesc.agent'), icon: HardwareChipOutline },
   { key: 'memory', label: t('config.memory'), desc: t('config.sectionDesc.memory'), icon: BulbOutline },
   { key: 'server', label: t('config.server'), desc: t('config.sectionDesc.server'), icon: ServerOutline },
+  { key: 'browser', label: t('config.browser'), desc: t('config.sectionDesc.browser'), icon: GlobeOutline },
   { key: 'security', label: t('config.security'), desc: t('config.sectionDesc.security'), icon: ShieldCheckmarkOutline },
   { key: 'privacy', label: t('config.privacy'), desc: t('config.sectionDesc.privacy'), icon: EyeOffOutline },
   { key: 'raw', label: t('config.rawJson'), desc: t('config.sectionDesc.raw'), icon: CodeSlashOutline },
@@ -621,6 +687,30 @@ const serverForm = reactive({
   file_strategy: 'auto',
 })
 
+// 自动化浏览器（工具里那套 Chromium）的两项部署相关设置。
+// profile 目录在 pkg/config 里是 *string 三态语义，UI 用「模式」表达：
+//   default = 配置里不写这个键（服务端补 ~/.magic/browser-profile）
+//   temp    = 显式空串（每次启动全新临时 profile，登录态不保留）
+//   custom  = 指定目录（支持 ~ 开头，服务端落盘前会展开成绝对路径）
+type BrowserProfileMode = 'default' | 'custom' | 'temp'
+
+// 与 pkg/config.DefaultBrowserProfileDir 保持一致，只用于占位提示
+const browserProfileDefaultDir = '~/.magic/browser-profile'
+
+const browserForm = reactive({
+  // 无头即 Chrome 的启动参数，改了要重启浏览器才生效：后端 PUT 时若无标签页
+  // 会直接关掉，有标签页则留到下次启动（见 internal/server/config.go）。
+  headless: true,
+  dir_mode: 'default' as BrowserProfileMode,
+  dir: '',
+})
+
+const browserProfileModeOptions = computed(() => [
+  { label: t('config.browserProfileModeDefault'), value: 'default' },
+  { label: t('config.browserProfileModeCustom'), value: 'custom' },
+  { label: t('config.browserProfileModeTemp'), value: 'temp' },
+])
+
 const privacyForm = reactive({
   enabled: true,
   redact_phone: true,
@@ -651,9 +741,9 @@ const fileStrategyOptions = computed(() => [
 ])
 
 // ---------------------------------------------------------------- 未保存检测
-type SaveKey = 'general' | 'agent' | 'memory' | 'server' | 'privacy'
+type SaveKey = 'general' | 'agent' | 'memory' | 'server' | 'browser' | 'privacy'
 
-const SAVE_KEYS: SaveKey[] = ['general', 'agent', 'memory', 'server', 'privacy']
+const SAVE_KEYS: SaveKey[] = ['general', 'agent', 'memory', 'server', 'browser', 'privacy']
 
 // 各分区的服务端已生效快照；字符串比较即可，避免挨个字段比对
 const snapshots = reactive<Record<SaveKey, string>>({
@@ -661,6 +751,7 @@ const snapshots = reactive<Record<SaveKey, string>>({
   agent: '',
   memory: '',
   server: '',
+  browser: '',
   privacy: '',
 })
 
@@ -676,6 +767,8 @@ function snapshotOf(key: SaveKey): string {
       return JSON.stringify({ memory: { ...memoryForm }, cortex: { ...cortexForm } })
     case 'server':
       return JSON.stringify(serverForm)
+    case 'browser':
+      return JSON.stringify(browserForm)
     case 'privacy':
       return JSON.stringify(privacyForm)
   }
@@ -692,6 +785,7 @@ const dirtyMap = computed<Record<SaveKey, boolean>>(() => ({
   agent: snapshots.agent !== snapshotOf('agent'),
   memory: snapshots.memory !== snapshotOf('memory'),
   server: snapshots.server !== snapshotOf('server'),
+  browser: snapshots.browser !== snapshotOf('browser'),
   privacy: snapshots.privacy !== snapshotOf('privacy'),
 }))
 
@@ -745,6 +839,8 @@ function populateFromConfig(cfg: any) {
   serverForm.upload_url_prefix = server.upload_url_prefix || ''
   serverForm.file_strategy = server.file_strategy || 'auto'
 
+  applyBrowserConfig(cfg)
+
   const privacy = cfg.privacy || {}
   privacyForm.enabled = privacy.enabled !== false
   privacyForm.redact_phone = privacy.redact_phone !== false
@@ -757,12 +853,34 @@ function populateFromConfig(cfg: any) {
   privacyForm.secret_redaction = cfg.secret_redaction || false
 }
 
+// ---------------------------------------------------------------- 浏览器设置
+// 单独抽出来：保存后只需把这一小段和服务端对齐（含 `~` 被展开、null 被删键），
+// 不能用整份 populateFromConfig 免得把其它分区的未保存改动冲掉。
+function applyBrowserConfig(cfg: any): void {
+  const raw = cfg?.browser_profile_dir
+  if (typeof raw !== 'string') {
+    // 键缺失（老配置 / 从未配过）或 null → 走内置默认目录
+    browserForm.dir_mode = 'default'
+    browserForm.dir = ''
+  } else if (raw === '') {
+    // 显式空串 = 每次全新临时 profile，必须和"没配"区分开
+    browserForm.dir_mode = 'temp'
+    browserForm.dir = ''
+  } else {
+    browserForm.dir_mode = 'custom'
+    browserForm.dir = raw
+  }
+  // 缺省（键缺失）= 无头；只有显式 false 才是有头
+  browserForm.headless = cfg?.browser_headless !== false
+}
+
 // ---------------------------------------------------------------- 保存
 const saveActions: Record<SaveKey, () => Promise<boolean>> = {
   general: saveGeneral,
   agent: saveAgent,
   memory: saveMemory,
   server: saveServer,
+  browser: saveBrowser,
   privacy: savePrivacy,
 }
 
@@ -793,6 +911,9 @@ function resetSection(key: SaveKey): void {
       break
     case 'server':
       Object.assign(serverForm, saved)
+      break
+    case 'browser':
+      Object.assign(browserForm, saved)
       break
     case 'privacy':
       Object.assign(privacyForm, saved)
@@ -885,6 +1006,35 @@ async function saveServer(): Promise<boolean> {
     })
     await configStore.loadConfig()
     message.success(t('config.serverSaved'))
+    return true
+  } catch (e) {
+    message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
+    return false
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveBrowser(): Promise<boolean> {
+  const customDir = browserForm.dir.trim()
+  if (browserForm.dir_mode === 'custom' && !customDir) {
+    message.warning(t('config.browserProfileDirRequired'))
+    return false
+  }
+  saving.value = true
+  try {
+    await configStore.updateConfig({
+      browser_headless: browserForm.headless,
+      // default 模式写 null：服务端 unmarshal 成 nil，落盘时 omitempty 把键删掉，
+      // 从而回到"未配置=用内置默认目录"的原始语义（含 HOME 缺失时的兜底）。
+      // temp 模式必须是空串——空串在这里是有意义的值，不能被当成"没改"。
+      browser_profile_dir:
+        browserForm.dir_mode === 'default' ? null :
+        browserForm.dir_mode === 'temp' ? '' : customDir,
+    })
+    await configStore.loadConfig()
+    if (configStore.config) applyBrowserConfig(configStore.config)
+    message.success(t('config.browserSaved'))
     return true
   } catch (e) {
     message.error(t('common.error') + ': ' + (e instanceof Error ? e.message : 'Unknown error'))
@@ -1023,6 +1173,30 @@ const showNewFolderInput = ref(false)
 const newFolderName = ref('')
 const newFolderInputRef = ref<{ focus: () => void } | null>(null)
 
+// 同一个弹窗复用给「工作目录」和「浏览器 profile 目录」，用 target 决定回填到哪个字段
+type DirPickerTarget = 'working' | 'browser'
+const dirPickerTarget = ref<DirPickerTarget>('working')
+
+const dirPickerTitle = computed(() =>
+  dirPickerTarget.value === 'browser' ? t('config.browserProfileDirPick') : t('chat.workDirSelect')
+)
+const dirPickerConfirmLabel = computed(() =>
+  dirPickerTarget.value === 'browser' ? t('config.browserProfileDirSet') : t('chat.workDirSet')
+)
+
+function pickedDirValue(): string {
+  return dirPickerTarget.value === 'browser' ? browserForm.dir : generalForm.working_dir
+}
+
+function applyPickedDir(path: string): void {
+  if (dirPickerTarget.value === 'browser') {
+    browserForm.dir_mode = 'custom'
+    browserForm.dir = path
+  } else {
+    generalForm.working_dir = path
+  }
+}
+
 const dirParent = computed(() => dirEntries.value.find(e => e.name === '..')?.path || '')
 
 async function loadDirs(path?: string) {
@@ -1039,8 +1213,9 @@ async function loadDirs(path?: string) {
   }
 }
 
-function openDirPicker() {
-  loadDirs(generalForm.working_dir || undefined)
+function openDirPicker(target: DirPickerTarget = 'working') {
+  dirPickerTarget.value = target
+  loadDirs(pickedDirValue() || undefined)
   loadWorkDirHistory()
   showDirPicker.value = true
 }
@@ -1054,8 +1229,10 @@ function normalizeDirPath(p: string): string {
 
 const workDirHistory = ref<string[]>([])
 
-// 已使用过的目录作为推荐项；排除当前表单中已填写的工作目录
+// 已使用过的目录作为推荐项；排除当前表单中已填写的工作目录。
+// profile 目录与"最近使用的工作目录"无关，选 profile 时不展示推荐。
 const recommendedDirs = computed(() => {
+  if (dirPickerTarget.value === 'browser') return []
   const current = normalizeDirPath(generalForm.working_dir || '')
   return workDirHistory.value.filter(d => normalizeDirPath(d) !== current)
 })
@@ -1069,9 +1246,9 @@ async function loadWorkDirHistory() {
   }
 }
 
-// 点击推荐目录直接填入全局工作目录并关闭弹窗
+// 点击推荐目录直接填入目标字段并关闭弹窗
 function applyRecommendedDir(path: string) {
-  generalForm.working_dir = path
+  applyPickedDir(path)
   showDirPicker.value = false
 }
 
@@ -1115,7 +1292,7 @@ async function createNewFolder() {
 
 function selectWorkDir() {
   if (!dirCurrentPath.value) return
-  generalForm.working_dir = dirCurrentPath.value
+  applyPickedDir(dirCurrentPath.value)
   showDirPicker.value = false
 }
 

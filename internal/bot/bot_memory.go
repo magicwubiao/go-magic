@@ -54,23 +54,56 @@ func (t *botMemoryTool) Execute(ctx context.Context, args map[string]interface{}
 	return "Memory saved. You will remember this in future conversations.", nil
 }
 
+// maxBotMemoryRunes caps a bot's long-term memory block. Memory is injected
+// into the system prompt on EVERY turn and every provider request, so an
+// unbounded block slowly turns into a standing token tax on the whole bot.
+// At the cap the tool refuses further writes and tells the model to ask the
+// user to prune, rather than silently growing forever.
+const maxBotMemoryRunes = 8000
+
 // RememberMemory appends a fact to a bot's long-term Memory and hot-reloads
 // its agent so the new memory is reflected in the system prompt immediately.
 func (m *Manager) RememberMemory(botName, fact string) error {
-	cfg, err := m.store.Load(botName)
-	if err != nil {
-		return fmt.Errorf("bot not found: %s", botName)
+	fact = strings.TrimSpace(fact)
+	if fact == "" {
+		return fmt.Errorf("memory fact is empty")
 	}
 
-	// Append to the existing memory block with a timestamped entry.
+	// Serialize load -> append -> save. Two turns of the same bot never run
+	// concurrently, but a room turn and the canonical turn (or two different
+	// room agents of the same bot) can both call remember_memory at once.
+	// Without the lock they load the same Memory, append different facts, and
+	// whichever saves last drops the other's fact.
+	//
+	// cfgMu is released before touching m.mu below, so it never nests.
+	m.cfgMu.Lock()
+	cfg, err := m.store.Load(botName)
+	if err != nil {
+		m.cfgMu.Unlock()
+		return fmt.Errorf("bot not found: %s", botName)
+	}
+	// Idempotent: models routinely restate a fact they already stored a few
+	// turns ago ("the user prefers concise replies"). Appending it again would
+	// grow the prompt for zero information.
+	if strings.Contains(cfg.Memory, fact) {
+		m.cfgMu.Unlock()
+		return nil
+	}
+	entry := "- [" + time.Now().Format("2006-01-02 15:04") + "] " + fact
+	if len([]rune(cfg.Memory))+len([]rune(entry)) > maxBotMemoryRunes {
+		m.cfgMu.Unlock()
+		return fmt.Errorf("memory is full (%d chars max); ask the user to prune the existing memory block first", maxBotMemoryRunes)
+	}
 	if cfg.Memory != "" {
-		cfg.Memory += "\n\n- [" + time.Now().Format("2006-01-02 15:04") + "] " + fact
+		cfg.Memory += "\n\n" + entry
 	} else {
-		cfg.Memory = "- [" + time.Now().Format("2006-01-02 15:04") + "] " + fact
+		cfg.Memory = entry
 	}
 	if err := m.store.Save(cfg); err != nil {
+		m.cfgMu.Unlock()
 		return fmt.Errorf("failed to save memory: %w", err)
 	}
+	m.cfgMu.Unlock()
 
 	// Hot-reload the agent so the updated Memory is injected next turn.
 	// Room agents too, so the new memory is visible everywhere the bot acts.
@@ -83,7 +116,6 @@ func (m *Manager) RememberMemory(botName, fact string) error {
 	if rt, ok := m.bots[key]; ok {
 		rt.cfg = cfg
 		rt.ag = nil
-		rt.loaded = false
 		rt.roomAgents = nil
 	}
 	m.mu.Unlock()

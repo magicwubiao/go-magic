@@ -69,6 +69,13 @@ func (t *messageAgentTool) Execute(ctx context.Context, params map[string]interf
 	}
 
 	target = strings.TrimPrefix(strings.TrimSpace(target), "@")
+	// Refuse self-addressed messages. Delivery is fire-and-forget, so nothing
+	// would stop the bot from answering itself and answering again: one
+	// "notify myself" call turns into an unbounded self-dialogue that keeps
+	// spending tokens with no human in the loop.
+	if tc := t.manager.FindByTag(target); tc != nil && tc.MentionTag() == strings.ToLower(t.sender) {
+		return nil, fmt.Errorf("cannot send a message to yourself (@%s)", t.sender)
+	}
 	if err := t.manager.SendMessageAgent(t.sender, target, message); err != nil {
 		return nil, err
 	}

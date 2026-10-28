@@ -63,10 +63,12 @@ export interface Config {
   gateway?: Record<string, unknown>
   working_dir?: string
   /**
-   * 自动化浏览器持久 profile 目录（Chrome --user-data-dir）。
-   * 缺省 = ~/.magic/browser-profile；显式空串 = 每次全新临时 profile。支持 `~` 开头。
+   * 自动化浏览器持久 profile 目录（Chrome --user-data-dir）。三态：
+   * - 键缺失 / null（写 null 即可清掉该键）= 用默认目录 ~/.magic/browser-profile；
+   * - 空串 = 每次启动都用全新临时 profile（不保留登录态）；
+   * - 其他值 = 指定目录，支持 `~` 开头（服务端落盘前会展开）。
    */
-  browser_profile_dir?: string
+  browser_profile_dir?: string | null
   /**
    * 自动化浏览器是否无头运行。缺省 = true（无头，适合服务器/容器）。
    * 显式 false = 开有头窗口，需要显示服务（本机桌面，或 Xvfb/noVNC），

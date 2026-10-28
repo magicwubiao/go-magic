@@ -71,6 +71,17 @@ func (t *delegateTaskTool) Execute(ctx context.Context, params map[string]interf
 
 	target = strings.TrimPrefix(strings.TrimSpace(target), "@")
 
+	// Refuse self-delegation before anything is enqueued. The nested turn would
+	// land in the sender's OWN queue, i.e. behind the very turn that is now
+	// blocked waiting for its reply: the call cannot succeed, it just burns the
+	// whole turn budget (5 min by default) plus the SendToBot slack before
+	// timing out. Cheap check, obvious failure mode.
+	if tc := t.manager.FindByTag(target); tc != nil && tc.MentionTag() == strings.ToLower(t.sender) {
+		return nil, fmt.Errorf(
+			"cannot delegate to yourself (@%s) — you would wait for a turn that is queued behind your own. "+
+				"Do the work directly in this turn instead.", t.sender)
+	}
+
 	// Detect delegation cycles before enqueueing: if the target bot is already
 	// in the active synchronous delegation chain, delegating to it would block
 	// both workers forever (A delegates to B, B delegates back to A) until the
