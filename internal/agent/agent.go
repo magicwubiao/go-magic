@@ -1323,9 +1323,35 @@ func (a *Agent) recordToolCall(name string) {
 	a.recordToolCallSig(name, "")
 }
 
+// processPollingActions 是 process 工具里"只是查看后台进程状态"的动作。
+// 构建、训练这类长任务需要反复轮询：wait 固定超时、参数完全相同，log/poll 同理。
+// 这些调用不改变任何状态，也不代表模型卡死，计入循环检测只会误杀正常等待。
+var processPollingActions = map[string]bool{
+	"wait": true,
+	"poll": true,
+	"log":  true,
+}
+
+// isLoopExemptCall 判断一次调用是否不应参与循环检测。
+// 目前只豁免 process 工具的轮询动作；run/kill/write/list 仍然计入。
+func isLoopExemptCall(name, args string) bool {
+	if name != "process" || args == "" {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return false
+	}
+	action, _ := m["action"].(string)
+	return processPollingActions[action]
+}
+
 // recordToolCallSig 记录一次工具调用（带参数指纹）。
 func (a *Agent) recordToolCallSig(name, args string) {
 	if name == "" {
+		return
+	}
+	if isLoopExemptCall(name, args) {
 		return
 	}
 	a.mu.Lock()
@@ -1519,7 +1545,7 @@ func (a *Agent) concludeAfterToolLoop(ctx context.Context, lastContent string) (
 	})
 	a.history = append(a.history, provider.Message{
 		Role:      "user",
-		Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools.",
+		Content:   "Please provide a final summary of what has been accomplished so far. Do not call any more tools. If any background process (e.g. a build or test run) is still running, say so explicitly and do not report it as finished.",
 		Timestamp: time.Now(),
 	})
 
