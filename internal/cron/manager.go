@@ -62,6 +62,12 @@ type ExecutionLog struct {
 	// (agent mode only; empty for script mode). Artifacts live here —
 	// surfacing it in the log answers "这次运行的产物在哪" without guessing.
 	WorkDir string `json:"work_dir,omitempty"`
+	// Trigger tells why this run happened: "schedule" (cron fired) or
+	// "manual" (user pressed Run now / a bot called the tool). Logs would
+	// otherwise look identical whether the user just clicked something or
+	// the scheduler woke up at 3am — that distinction is the first thing
+	// people ask about when a run looks unexpected.
+	Trigger string `json:"trigger,omitempty"`
 }
 
 // Manager manages cron jobs with real scheduling
@@ -201,7 +207,7 @@ func (m *Manager) addJobToScheduler(job *Job) {
 
 	jobID := job.ID
 	entryID, err := m.cron.AddFunc(spec, func() {
-		m.executeJob(jobID)
+		m.executeJob(jobID, "schedule")
 	})
 
 	if err != nil {
@@ -228,8 +234,9 @@ func (m *Manager) removeJobFromScheduler(jobID string) {
 	}
 }
 
-// executeJob runs a job and records the result
-func (m *Manager) executeJob(jobID string) {
+// executeJob runs a job and records the result. trigger is "schedule" when
+// the scheduler fired it, "manual" when a user (or tool) asked for a run now.
+func (m *Manager) executeJob(jobID string, trigger string) {
 	m.jobsMu.RLock()
 	job, ok := m.jobs[jobID]
 	m.jobsMu.RUnlock()
@@ -254,10 +261,14 @@ func (m *Manager) executeJob(jobID string) {
 		JobName:   job.Name,
 		StartedAt: startTime,
 		Status:    "running",
+		Trigger:   trigger,
 	}
 
 	var output string
 	var execErr error
+
+	// 先落一条 running 记录：日志面板能立刻看到本次执行，跑完再覆盖成结果。
+	m.addLog(execLog)
 
 	// Execute based on mode
 	if job.NoAgent && job.Script != "" {
@@ -319,7 +330,7 @@ func (m *Manager) executeJob(jobID string) {
 
 // RunJob manually triggers a job execution
 func (m *Manager) RunJob(ctx context.Context, job *Job) error {
-	go m.executeJob(job.ID)
+	go m.executeJob(job.ID, "manual")
 	return nil
 }
 
@@ -453,34 +464,50 @@ func (m *Manager) ClearLogs(jobID string) error {
 	return m.saveLogs()
 }
 
+// addLog 新增或按 ID 覆盖一条执行记录。
+//
+// 运行开始时先落一条 running 记录，结束时用同 ID 覆盖成最终结果：否则日志
+// 只在跑完后才出现，用户在日志面板里看不到"这次正在跑"，一次跑几分钟的
+// 任务就像点了没反应。覆盖路径不参与条数裁剪，避免同一条被反复计数。
 func (m *Manager) addLog(entry ExecutionLog) {
 	m.logsMu.Lock()
 	defer m.logsMu.Unlock()
 
-	// Keep max 1000 logs per job
-	var jobLogCount int
-	for _, l := range m.logs {
-		if l.JobID == entry.JobID {
-			jobLogCount++
+	replaced := false
+	for i := range m.logs {
+		if m.logs[i].ID == entry.ID {
+			m.logs[i] = entry
+			replaced = true
+			break
 		}
 	}
 
-	if jobLogCount > 1000 {
-		var filtered []ExecutionLog
-		count := 0
+	if !replaced {
+		// Keep max 1000 logs per job
+		var jobLogCount int
 		for _, l := range m.logs {
 			if l.JobID == entry.JobID {
-				count++
-				if count > 500 {
-					continue // Skip old logs
-				}
+				jobLogCount++
 			}
-			filtered = append(filtered, l)
 		}
-		m.logs = filtered
-	}
 
-	m.logs = append(m.logs, entry)
+		if jobLogCount > 1000 {
+			var filtered []ExecutionLog
+			count := 0
+			for _, l := range m.logs {
+				if l.JobID == entry.JobID {
+					count++
+					if count > 500 {
+						continue // Skip old logs
+					}
+				}
+				filtered = append(filtered, l)
+			}
+			m.logs = filtered
+		}
+
+		m.logs = append(m.logs, entry)
+	}
 
 	// Save to file directly (we hold the lock)
 	data, err := json.MarshalIndent(m.logs, "", "  ")
@@ -801,7 +828,13 @@ func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	// 按 rune 截断：直接切 []byte 会把多字节字符（中文、emoji）切成半个，
+	// 落库后变成 U+FFFD 乱码——日志页面上直接可见，看起来像执行出错。
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // ValidateSchedule checks if a cron expression is valid

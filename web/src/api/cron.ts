@@ -31,6 +31,8 @@ export interface ExecutionLog {
   error?: string
   duration?: string
   work_dir?: string
+  // 本次运行为何发生：schedule = 定时器触发，manual = 用户点了「立即执行」
+  trigger?: 'schedule' | 'manual'
 }
 
 export async function getCronJobs(locale?: string): Promise<CronJob[]> {

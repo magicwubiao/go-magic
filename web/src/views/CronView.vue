@@ -1,76 +1,231 @@
 <template>
-  <div>
-    <n-space justify="space-between" style="margin-bottom: 16px;">
-      <h2>{{ t('cron.title') }}</h2>
-      <n-space>
-        <n-button :loading="cronStore.loading" @click="cronStore.loadJobs()"><template #icon><n-icon><RefreshOutline /></n-icon></template></n-button>
-        <n-button type="primary" @click="openCreateModal">+ {{ t('cron.createJob') }}</n-button>
+  <div class="cron-page">
+    <!-- 页头：一句话概览 + 操作 -->
+    <header class="cron-head">
+      <div class="cron-head-text">
+        <h2 class="cron-title">{{ t('cron.title') }}</h2>
+        <p class="cron-subtitle">{{ summaryText }}</p>
+      </div>
+      <n-space align="center" :size="8">
+        <n-button quaternary circle :loading="cronStore.loading" :title="t('common.refresh')" @click="cronStore.loadJobs()">
+          <template #icon><n-icon><RefreshOutline /></n-icon></template>
+        </n-button>
+        <n-button type="primary" @click="openCreateModal">
+          <template #icon><n-icon><AddOutline /></n-icon></template>
+          {{ t('cron.createJob') }}
+        </n-button>
       </n-space>
-    </n-space>
+    </header>
 
     <n-spin :show="cronStore.loading">
-      <n-empty v-if="!cronStore.jobs.length" :description="t('cron.noJobs')" />
+      <!-- 空态 -->
+      <div v-if="!cronStore.jobs.length" class="cron-empty">
+        <div class="cron-empty-icon"><n-icon size="28"><CalendarOutline /></n-icon></div>
+        <div class="cron-empty-title">{{ t('cron.emptyTitle') }}</div>
+        <div class="cron-empty-hint">{{ t('cron.emptyHint') }}</div>
+        <n-button type="primary" size="small" style="margin-top: 16px;" @click="openCreateModal">
+          + {{ t('cron.createJob') }}
+        </n-button>
+      </div>
 
-      <n-space vertical>
-        <n-card v-for="job in cronStore.jobs" :key="job.id" size="small">
-          <n-space justify="space-between" align="center">
-            <n-space align="center" :size="12">
-              <n-tag :type="stateType(job.state)" size="small">{{ stateLabel(job.state) }}</n-tag>
-              <n-text strong style="font-size: 15px;">{{ job.name }}</n-text>
-            </n-space>
-            <n-space :size="4">
-              <n-button v-if="job.state === 'active'" size="tiny" @click="handlePause(job.id)">{{ t('cron.pause') }}</n-button>
-              <n-button v-if="job.state === 'inactive'" size="tiny" type="primary" @click="handleResume(job.id)">{{ t('cron.resume') }}</n-button>
-              <n-button size="tiny" @click="handleTrigger(job.id)">{{ t('cron.runNow') }}</n-button>
-              <n-button size="tiny" @click="openEditModal(job)">{{ t('common.edit') }}</n-button>
-              <n-button size="tiny" @click="openLogsModal(job)">{{ t('cron.logs') }}</n-button>
-              <n-button size="tiny" type="error" @click="handleDelete(job.id)">{{ t('common.delete') }}</n-button>
-            </n-space>
-          </n-space>
+      <!-- 任务列表 -->
+      <div v-else class="job-list">
+        <article
+          v-for="job in cronStore.jobs"
+          :key="job.id"
+          class="job-card"
+          :class="{ 'is-paused': job.state === 'inactive' }"
+        >
+          <span class="job-rail" :class="railClass(job)"></span>
 
-          <n-grid :cols="4" :x-gap="16" style="margin-top: 12px;">
-            <n-gi>
-              <n-text depth="3" style="font-size: 12px;">{{ t('cron.schedule') }}</n-text>
-              <div><n-text code>{{ job.schedule }}</n-text></div>
-              <div><n-text depth="3" style="font-size: 11px;">{{ job.schedule_display }}</n-text></div>
-            </n-gi>
-            <n-gi>
-              <n-text depth="3" style="font-size: 12px;">{{ t('cron.nextRun') }}</n-text>
-              <div>{{ job.next_run_at ? formatTime(job.next_run_at) : '-' }}</div>
-            </n-gi>
-            <n-gi>
-              <n-text depth="3" style="font-size: 12px;">{{ t('cron.previousRun') }}</n-text>
-              <div>{{ job.last_run_at ? formatTime(job.last_run_at) : '-' }}</div>
-              <div v-if="job.last_status">
-                <n-tag :type="job.last_status === 'success' ? 'success' : job.last_status === 'failed' ? 'error' : 'warning'" size="tiny">
-                  {{ job.last_status }}
-                </n-tag>
+          <div class="job-body">
+            <div class="job-top">
+              <div class="job-name-wrap">
+                <span class="job-name">{{ job.name }}</span>
+                <span class="job-badge" :class="stateClass(job.state)">
+                  <span v-if="job.state === 'running'" class="pulse-dot"></span>
+                  {{ stateLabel(job.state) }}
+                </span>
+                <span class="job-mode">{{ job.no_agent ? t('cron.scriptModeLabel') : t('cron.agentModeLabel') }}</span>
               </div>
-            </n-gi>
-            <n-gi>
-              <n-text depth="3" style="font-size: 12px;">{{ t('cron.runCount') }}</n-text>
-              <div>{{ job.run_count }}</div>
-            </n-gi>
-          </n-grid>
 
-          <n-space v-if="job.last_error" style="margin-top: 8px;">
-            <n-text type="error" style="font-size: 12px;">{{ t('cron.lastError', { error: job.last_error }) }}</n-text>
-          </n-space>
+              <div class="job-actions">
+                <n-button size="tiny" secondary @click="openLogs(job)">
+                  <template #icon><n-icon><ListOutline /></n-icon></template>
+                  {{ t('cron.logs') }}
+                </n-button>
+                <n-button size="tiny" type="primary" ghost @click="handleTrigger(job.id)">
+                  {{ t('cron.runNow') }}
+                </n-button>
+                <n-button size="tiny" quaternary :title="t('common.edit')" @click="openEditModal(job)">
+                  <template #icon><n-icon><CreateOutline /></n-icon></template>
+                </n-button>
+                <n-dropdown trigger="click" :options="moreOptions(job)" @select="handleMore($event, job)">
+                  <n-button size="tiny" quaternary>
+                    <template #icon><n-icon><EllipsisHorizontalOutline /></n-icon></template>
+                  </n-button>
+                </n-dropdown>
+              </div>
+            </div>
 
-          <n-space style="margin-top: 8px;">
-            <n-tag v-if="job.prompt" size="tiny" type="info">{{ t('cron.agentModeLabel') }}</n-tag>
-            <n-tag v-if="job.script" size="tiny" type="warning">{{ t('cron.scriptModeLabel') }}</n-tag>
-            <n-tag v-if="job.working_dir" size="tiny">{{ t('cron.workingDir') }}: {{ job.working_dir }}</n-tag>
-            <n-text v-if="job.prompt" depth="3" style="font-size: 11px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              {{ job.prompt }}
-            </n-text>
-            <n-text v-if="job.script && !job.prompt" depth="3" style="font-size: 11px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              {{ job.script }}
-            </n-text>
-          </n-space>
-        </n-card>
-      </n-space>
+            <div class="job-schedule-row">
+              <n-icon size="14" class="job-schedule-icon"><TimeOutline /></n-icon>
+              <span class="job-schedule-text">{{ job.schedule_display }}</span>
+              <code class="job-cron">{{ job.schedule }}</code>
+            </div>
+
+            <p v-if="job.prompt || job.script" class="job-prompt">
+              <span class="job-prompt-tag">{{ job.no_agent ? '$' : '›' }}</span>{{ job.prompt || job.script }}
+            </p>
+
+            <div class="job-meta">
+              <span class="meta-item">
+                <span class="meta-label">{{ t('cron.nextRun') }}</span>
+                <span class="meta-value">{{ job.state === 'inactive' ? '—' : (job.next_run_at ? formatTime(job.next_run_at) : '-') }}</span>
+                <span v-if="job.state !== 'inactive' && job.next_run_at" class="meta-hint">{{ relativeTo(job.next_run_at) }}</span>
+              </span>
+              <span class="meta-item">
+                <span class="meta-label">{{ t('cron.previousRun') }}</span>
+                <span class="meta-value">{{ job.last_run_at ? relativePast(job.last_run_at) : t('cron.neverRun') }}</span>
+                <span v-if="job.last_status" class="run-chip" :class="statusClass(job.last_status)">{{ statusLabel(job.last_status) }}</span>
+              </span>
+              <span class="meta-item">
+                <span class="meta-label">{{ t('cron.runCount') }}</span>
+                <span class="meta-value">{{ job.run_count }}</span>
+              </span>
+              <span v-if="job.working_dir" class="meta-item meta-dir" :title="job.working_dir">
+                <n-icon size="13"><FolderOutline /></n-icon>
+                <span class="meta-value mono">{{ job.working_dir }}</span>
+              </span>
+            </div>
+
+            <div v-if="job.last_error" class="job-error">
+              <n-icon size="14"><AlertCircleOutline /></n-icon>
+              <span class="job-error-text">{{ job.last_error }}</span>
+            </div>
+          </div>
+        </article>
+      </div>
     </n-spin>
+
+    <!-- ===== 执行记录抽屉：宽屏左右分栏，手机端单列切换 ===== -->
+    <n-drawer v-model:show="showLogsDrawer" placement="right" :width="drawerWidth" class="cron-logs-drawer">
+      <n-drawer-content
+        closable
+        :native-scrollbar="false"
+        body-content-style="padding: 0; display: flex; flex-direction: column; overflow: hidden;"
+      >
+        <template #header>
+          <div class="logs-head">
+            <span class="logs-head-title">{{ activeJob?.name || t('cron.executionLogs') }}</span>
+            <span v-if="activeJob" class="logs-head-sub">{{ activeJob.schedule_display }}</span>
+          </div>
+        </template>
+
+        <div class="logs-layout">
+          <!-- 左：运行历史（手机端在详情态隐藏） -->
+          <aside class="run-list" :class="{ 'is-hidden': isNarrow && mobileShowDetail }">
+            <div class="run-list-tools">
+              <n-input v-model:value="logQuery" size="small" clearable :placeholder="t('cron.searchRuns')">
+                <template #prefix><n-icon size="14"><SearchOutline /></n-icon></template>
+              </n-input>
+              <div class="run-filter">
+                <button
+                  v-for="f in filters"
+                  :key="f.value"
+                  type="button"
+                  class="run-filter-btn"
+                  :class="{ active: logFilter === f.value }"
+                  @click="logFilter = f.value"
+                >
+                  {{ f.label }}<span class="run-filter-count">{{ f.count }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="run-list-scroll">
+              <div
+                v-for="log in filteredLogs"
+                :key="log.id"
+                class="run-item"
+                :class="{ active: log.id === selectedLogId }"
+                @click="selectLog(log.id)"
+              >
+                <span class="run-dot" :class="statusClass(log.status)"></span>
+                <div class="run-item-body">
+                  <div class="run-item-row">
+                    <span class="run-item-time">{{ formatShort(log.started_at) }}</span>
+                    <span class="run-item-dur">{{ formatDuration(log.duration) || t('cron.running') }}</span>
+                  </div>
+                  <div class="run-item-preview">{{ previewOf(log) }}</div>
+                </div>
+                <n-icon v-if="isNarrow" class="run-item-chevron" size="14"><ChevronForwardOutline /></n-icon>
+              </div>
+              <div v-if="!filteredLogs.length" class="run-list-empty">
+                {{ cronStore.logs.length ? t('cron.noMatchedRuns') : t('cron.noLogs') }}
+              </div>
+            </div>
+          </aside>
+
+          <!-- 右：单次运行详情（手机端仅详情态显示） -->
+          <section class="run-detail" :class="{ 'is-hidden': isNarrow && !mobileShowDetail }">
+            <div v-if="isNarrow" class="mobile-detail-nav">
+              <button type="button" class="back-btn" @click="mobileShowDetail = false">
+                <n-icon size="15"><ChevronBackOutline /></n-icon>
+                {{ t('cron.backToRuns') }}
+              </button>
+            </div>
+            <template v-if="activeLog">
+              <div class="detail-head">
+                <div class="detail-badges">
+                  <span class="run-chip" :class="statusClass(activeLog.status)">{{ statusLabel(activeLog.status) }}</span>
+                  <span class="detail-meta-item">{{ t('cron.startedAt') }} {{ formatTime(activeLog.started_at) }}</span>
+                  <span v-if="activeLog.duration" class="detail-meta-item">{{ t('cron.durationLabel') }} {{ formatDuration(activeLog.duration) }}</span>
+                  <span v-if="activeLog.trigger" class="detail-meta-item">{{ activeLog.trigger === 'manual' ? t('cron.triggerManual') : t('cron.triggerSchedule') }}</span>
+                </div>
+                <n-button v-if="activeLog.output || activeLog.error" size="tiny" quaternary @click="copyOutput">
+                  <template #icon><n-icon><CopyOutline /></n-icon></template>
+                  {{ copied ? t('cron.copied') : t('cron.copyOutput') }}
+                </n-button>
+              </div>
+
+              <div v-if="activeLog.work_dir" class="detail-workdir">
+                <n-icon size="13"><FolderOpenOutline /></n-icon>
+                <code class="detail-workdir-path" :title="activeLog.work_dir">{{ activeLog.work_dir }}</code>
+                <button type="button" class="link-btn" @click="copyText(activeLog.work_dir, t('cron.copied'))">{{ t('cron.copyPath') }}</button>
+              </div>
+
+              <div ref="detailScrollRef" class="detail-scroll">
+                <div v-if="activeLog.error" class="detail-error">
+                  <div class="detail-error-title">
+                    <n-icon size="15"><AlertCircleOutline /></n-icon>{{ t('cron.errorTitle') }}
+                  </div>
+                  <pre>{{ activeLog.error }}</pre>
+                </div>
+
+                <div v-if="activeLog.status === 'running'" class="detail-running">
+                  <n-spin size="small" />
+                  <span>{{ t('cron.runningHint') }}</span>
+                </div>
+
+                <MarkdownBlock v-if="activeLog.output" :text="activeLog.output" />
+
+                <div v-if="isTruncated(activeLog)" class="detail-truncated">{{ t('cron.outputTruncated') }}</div>
+                <div
+                  v-if="!activeLog.output && !activeLog.error && activeLog.status !== 'running'"
+                  class="detail-nothing"
+                >{{ t('cron.noOutput') }}</div>
+              </div>
+            </template>
+
+            <div v-else class="detail-placeholder">
+              <n-icon size="26"><DocumentTextOutline /></n-icon>
+              <span>{{ t('cron.selectRunHint') }}</span>
+            </div>
+          </section>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
 
     <!-- Create/Edit Modal -->
     <n-modal v-model:show="showModal" :title="editingJob ? t('cron.editJob') : t('cron.createJob')" preset="card" class="modal-responsive modal-scroll" style="width: 550px; max-width: 96vw;">
@@ -181,25 +336,6 @@
       </template>
     </n-modal>
 
-    <!-- Logs Modal -->
-    <n-modal v-model:show="showLogsModal" :title="t('cron.executionLogs')" preset="card" class="modal-responsive modal-scroll" style="width: 700px; max-width: 96vw;">
-      <n-empty v-if="!cronStore.logs.length" :description="t('cron.noLogs')" />
-      <n-timeline v-else>
-        <n-timeline-item
-          v-for="log in cronStore.logs"
-          :key="log.id"
-          :type="log.status === 'success' ? 'success' : log.status === 'failed' ? 'error' : 'info'"
-          :title="log.status === 'success' ? t('cron.success') : log.status === 'failed' ? t('cron.failed') : t('cron.running')"
-          :time="formatTime(log.started_at)"
-        >
-          <n-text v-if="log.duration" depth="3" style="font-size: 12px;">{{ t('cron.duration', { duration: log.duration }) }}</n-text>
-          <n-text v-if="log.work_dir" depth="3" style="font-size: 12px; display: block; margin-top: 4px;">{{ t('cron.workingDir') }}: {{ log.work_dir }}</n-text>
-          <n-text v-if="log.output" depth="3" style="font-size: 12px; display: block; margin-top: 4px; white-space: pre-wrap;">{{ log.output }}</n-text>
-          <n-text v-if="log.error" type="error" style="font-size: 12px; display: block; margin-top: 4px;">{{ log.error }}</n-text>
-        </n-timeline-item>
-      </n-timeline>
-    </n-modal>
-
     <!-- Directory Picker Modal（工作目录选择） -->
     <n-modal v-model:show="showDirPicker" :title="t('cron.workingDir')" preset="card" class="modal-responsive" style="width: 520px; max-width: 96vw;">
       <div v-if="recommendedDirs.length" class="dir-picker-recommended">
@@ -267,15 +403,25 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { RefreshOutline, FolderOpenOutline, FolderOutline, AddOutline } from '@vicons/ionicons5'
+import {
+  RefreshOutline, FolderOpenOutline, FolderOutline, AddOutline, CalendarOutline,
+  ListOutline, CreateOutline, EllipsisHorizontalOutline, TimeOutline, SearchOutline,
+  CopyOutline, AlertCircleOutline, DocumentTextOutline, ChevronBackOutline, ChevronForwardOutline,
+} from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog } from 'naive-ui'
-import { NButton, NCard, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NInputGroup, NInputNumber, NModal, NRadio, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NTag, NText, NTimeline, NTimelineItem } from 'naive-ui'
+import type { DropdownOption } from 'naive-ui'
+import {
+  NButton, NDrawer, NDrawerContent, NDropdown, NForm, NFormItem, NIcon,
+  NInput, NInputGroup, NInputNumber, NModal, NRadio, NRadioButton, NRadioGroup,
+  NSelect, NSpace, NSpin, NText,
+} from 'naive-ui'
 import { useCronStore } from '@/stores/cron'
 import { useConfigStore } from '@/stores/config'
-import type { CronJob } from '@/api/cron'
+import type { CronJob, ExecutionLog } from '@/api/cron'
 import { getCronNextRuns, parseCronNatural } from '@/api/cron'
 import { getLocale } from '@/locales'
+import MarkdownBlock from '@/components/MarkdownBlock.vue'
 import * as sessionsApi from '@/api/sessions'
 
 const { t } = useI18n()
@@ -284,7 +430,6 @@ const dialog = useDialog()
 const cronStore = useCronStore()
 const configStore = useConfigStore()
 const showModal = ref(false)
-const showLogsModal = ref(false)
 const editingJob = ref<CronJob | null>(null)
 const saving = ref(false)
 
@@ -295,6 +440,19 @@ const form = reactive({
   script: '',
   working_dir: '',
   no_agent: false,
+})
+
+// ===== 页头概览 =====
+const summaryText = computed(() => {
+  const jobs = cronStore.jobs
+  if (!jobs.length) return t('cron.emptyHint')
+  const active = jobs.filter(j => j.state === 'active' || j.state === 'running').length
+  const running = jobs.filter(j => j.state === 'running').length
+  const failed = jobs.filter(j => j.last_status === 'failed').length
+  let s = t('cron.summary', { total: jobs.length, active, paused: jobs.length - active })
+  if (running) s += ' · ' + t('cron.summaryRunning', { n: running })
+  if (failed) s += ' · ' + t('cron.summaryFailed', { n: failed })
+  return s
 })
 
 // ===== 调度输入三模式：可视化构造器 / 手写表达式 / 自然语言 =====
@@ -441,27 +599,266 @@ async function parseNatural() {
   }
 }
 
-function stateType(state: string) {
-  const map: Record<string, string> = { active: 'success', inactive: 'default', running: 'warning' }
-  return (map[state] || 'default') as any
-}
-
+// ===== 状态与时间格式化 =====
 function stateLabel(state: string) {
   const map: Record<string, string> = { active: t('cron.stateActive'), inactive: t('cron.stateInactive'), running: t('cron.stateRunning') }
   return map[state] || state
 }
 
-function formatTime(timeStr: string) {
+function stateClass(state: string) {
+  if (state === 'running') return 'st-running'
+  if (state === 'inactive') return 'st-idle'
+  return 'st-active'
+}
+
+function statusLabel(s: string) {
+  if (s === 'success') return t('cron.success')
+  if (s === 'failed') return t('cron.failed')
+  if (s === 'running') return t('cron.running')
+  return s || '-'
+}
+
+function statusClass(s: string) {
+  if (s === 'success') return 'c-ok'
+  if (s === 'failed') return 'c-fail'
+  if (s === 'running') return 'c-run'
+  return 'c-idle'
+}
+
+// 卡片左侧色条：失败优先于"启用中"，一眼能看出这条任务出过事
+function railClass(job: CronJob) {
+  if (job.state === 'running') return 'rail-running'
+  if (job.last_status === 'failed') return 'rail-failed'
+  if (job.state === 'inactive') return 'rail-paused'
+  return 'rail-active'
+}
+
+function formatTime(timeStr?: string) {
   if (!timeStr) return ''
-  const t = new Date(timeStr)
-  if (isNaN(t.getTime())) return timeStr
+  const d = new Date(timeStr)
+  if (isNaN(d.getTime())) return timeStr
   const locale = getLocale() === 'zh' ? 'zh-CN' : 'en-US'
-  return t.toLocaleString(locale, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(locale, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+// 运行列表里空间小，只给 月/日 时:分；跨年时补年份
+function formatShort(timeStr?: string) {
+  if (!timeStr) return ''
+  const d = new Date(timeStr)
+  if (isNaN(d.getTime())) return timeStr
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  const datePart = sameYear ? `${pad(d.getMonth() + 1)}/${pad(d.getDate())}` : `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`
+  return `${datePart} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const REL_MIN = 60_000
+const REL_HOUR = 3_600_000
+const REL_DAY = 86_400_000
+
+// 过去的时刻 → "3 分钟前 / 2 小时前 / 4 天前"
+function relativePast(timeStr?: string) {
+  if (!timeStr) return ''
+  const d = new Date(timeStr)
+  if (isNaN(d.getTime())) return timeStr
+  const diff = Date.now() - d.getTime()
+  if (diff < REL_MIN) return t('cron.justNow')
+  if (diff < REL_HOUR) return t('cron.minutesAgo', { n: Math.floor(diff / REL_MIN) })
+  if (diff < REL_DAY) return t('cron.hoursAgo', { n: Math.floor(diff / REL_HOUR) })
+  if (diff < 7 * REL_DAY) return t('cron.daysAgo', { n: Math.floor(diff / REL_DAY) })
+  return formatTime(timeStr)
+}
+
+// 未来的时刻 → "12 分钟后 / 3 小时后 / 2 天后"
+function relativeTo(timeStr?: string) {
+  if (!timeStr) return ''
+  const d = new Date(timeStr)
+  if (isNaN(d.getTime())) return ''
+  const diff = d.getTime() - Date.now()
+  if (diff <= 0) return t('cron.soon')
+  if (diff < REL_HOUR) return t('cron.inMinutes', { n: Math.max(1, Math.round(diff / REL_MIN)) })
+  if (diff < REL_DAY) return t('cron.inHours', { n: Math.round(diff / REL_HOUR) })
+  return t('cron.inDays', { n: Math.round(diff / REL_DAY) })
+}
+
+// Go 的 duration.String() 形如 "27.5260752s" / "1m12.5s" / "350ms"，
+// 直接展示对人不友好；解析成毫秒再按量级挑精度。
+function parseGoDuration(d: string): number | null {
+  const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g
+  const units: Record<string, number> = { ns: 1e-6, us: 1e-3, 'µs': 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 }
+  let total = 0
+  let found = false
+  let m: RegExpExecArray | null
+  while ((m = re.exec(d)) !== null) {
+    total += parseFloat(m[1]) * units[m[2]]
+    found = true
+  }
+  return found ? total : null
+}
+
+function formatDuration(d?: string) {
+  if (!d) return ''
+  const ms = parseGoDuration(d)
+  if (ms === null) return d
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < REL_MIN) {
+    const sec = ms / 1000
+    return `${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`
+  }
+  const totalSec = Math.round(ms / 1000)
+  const mm = Math.floor(totalSec / 60)
+  const ss = totalSec % 60
+  if (mm < 60) return ss ? `${mm}m ${ss}s` : `${mm}m`
+  return `${Math.floor(mm / 60)}h ${mm % 60}m`
 }
 
 function setSchedule(s: string) {
   form.schedule = s
 }
+
+// ===== 执行记录抽屉 =====
+const showLogsDrawer = ref(false)
+const activeJob = ref<CronJob | null>(null)
+const selectedLogId = ref('')
+type LogFilter = 'all' | 'success' | 'failed'
+const logFilter = ref<LogFilter>('all')
+const logQuery = ref('')
+const copied = ref(false)
+const detailScrollRef = ref<HTMLElement | null>(null)
+let copiedTimer: number | null = null
+
+const viewportWidth = ref(window.innerWidth)
+function onResize() { viewportWidth.value = window.innerWidth }
+// 断点与 App.vue 的移动端规范保持一致（768px）
+const isNarrow = computed(() => viewportWidth.value <= 768)
+const drawerWidth = computed(() => (viewportWidth.value <= 768 ? '100%' : viewportWidth.value < 880 ? '100%' : '1000px'))
+
+// 手机端抽屉只有一列：默认看运行历史，点某次运行切到详情，
+// 详情顶部给返回按钮。桌面端两栏并存，这个标记不起作用。
+const mobileShowDetail = ref(false)
+
+const filters = computed<{ value: LogFilter; label: string; count: number }[]>(() => [
+  { value: 'all', label: t('cron.filterAll'), count: cronStore.logs.length },
+  { value: 'success', label: t('cron.filterSuccess'), count: cronStore.logs.filter(l => l.status === 'success').length },
+  { value: 'failed', label: t('cron.filterFailed'), count: cronStore.logs.filter(l => l.status === 'failed').length },
+])
+
+const filteredLogs = computed(() => {
+  const q = logQuery.value.trim().toLowerCase()
+  return cronStore.logs.filter(l => {
+    if (logFilter.value !== 'all' && l.status !== logFilter.value) return false
+    if (!q) return true
+    return (l.output || '').toLowerCase().includes(q) || (l.error || '').toLowerCase().includes(q)
+  })
+})
+
+const activeLog = computed<ExecutionLog | null>(
+  () => cronStore.logs.find(l => l.id === selectedLogId.value) || null
+)
+
+// 筛掉当前选中的那条时（换筛选/搜索），自动落到结果里的第一条
+watch(filteredLogs, (list) => {
+  if (!list.some(l => l.id === selectedLogId.value)) {
+    selectedLogId.value = list[0]?.id || ''
+  }
+})
+
+function selectLog(id: string) {
+  selectedLogId.value = id
+  if (isNarrow.value) mobileShowDetail.value = true
+  nextTick(() => {
+    if (detailScrollRef.value) detailScrollRef.value.scrollTop = 0
+  })
+}
+
+// 列表里的一行摘要：优先错误，其次输出首个非空行（去掉 markdown 记号）
+function previewOf(log: ExecutionLog) {
+  if (log.status === 'running') return t('cron.runningHint')
+  const src = log.error || log.output || ''
+  if (!src) return t('cron.noOutput')
+  const line = src.split('\n').map(s => s.trim()).find(s => s.length > 0) || ''
+  return line.replace(/^[#>*\-\s]+/, '').replace(/\*\*/g, '').slice(0, 120)
+}
+
+// 后端把超长输出截到 2000 字符并以 ... 结尾，命中时提示去哪里看全文
+function isTruncated(log: ExecutionLog) {
+  const out = log.output || ''
+  return out.length >= 2000 && out.endsWith('...')
+}
+
+async function copyText(text: string, okMsg?: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(okMsg || t('common.copied'))
+  } catch {
+    message.error(t('common.copyFailed'))
+  }
+}
+
+async function copyOutput() {
+  const log = activeLog.value
+  if (!log) return
+  const text = log.output || log.error || ''
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    copied.value = true
+    if (copiedTimer) window.clearTimeout(copiedTimer)
+    copiedTimer = window.setTimeout(() => { copied.value = false }, 1500)
+  } catch {
+    message.error(t('common.copyFailed'))
+  }
+}
+
+// 打开面板时若任务正在跑（或历史里有 running 记录），按 4s 轮询刷新，
+// 跑完后自动停——否则用户看到的是永远停在"执行中"的旧快照。
+let logsPollTimer: number | null = null
+
+function startLogsPolling() {
+  stopLogsPolling()
+  logsPollTimer = window.setInterval(async () => {
+    const job = activeJob.value
+    if (!job || !showLogsDrawer.value) { stopLogsPolling(); return }
+    const running = job.state === 'running' || cronStore.logs.some(l => l.status === 'running')
+    if (!running) { stopLogsPolling(); return }
+    await Promise.all([cronStore.loadLogs(job.id, 50), cronStore.loadJobs(true)])
+  }, 4000)
+}
+
+function stopLogsPolling() {
+  if (logsPollTimer) {
+    window.clearInterval(logsPollTimer)
+    logsPollTimer = null
+  }
+}
+
+async function openLogs(job: CronJob) {
+  activeJob.value = job
+  selectedLogId.value = ''
+  logFilter.value = 'all'
+  logQuery.value = ''
+  mobileShowDetail.value = false
+  showLogsDrawer.value = true
+  await cronStore.loadLogs(job.id, 50)
+  selectedLogId.value = cronStore.logs[0]?.id || ''
+  startLogsPolling()
+}
+
+watch(showLogsDrawer, (show) => {
+  if (!show) {
+    stopLogsPolling()
+    activeJob.value = null
+    mobileShowDetail.value = false
+  }
+})
+
+onMounted(() => {
+  window.addEventListener('resize', onResize)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
+  if (copiedTimer) window.clearTimeout(copiedTimer)
+})
 
 // ===== 工作目录选择器 =====
 const showDirPicker = ref(false)
@@ -581,6 +978,28 @@ function applyDirCurrent() {
   showDirPicker.value = false
 }
 
+// ===== 任务操作 =====
+const moreOptions = (job: CronJob): DropdownOption[] => [
+  job.state === 'inactive'
+    ? { label: t('cron.resume'), key: 'resume' }
+    : { label: t('cron.pause'), key: 'pause' },
+  { label: t('common.edit'), key: 'edit' },
+  { type: 'divider', key: 'd1' },
+  { label: t('common.delete'), key: 'delete' },
+]
+
+async function handleMore(key: string | number, job: CronJob) {
+  if (key === 'pause') {
+    await handlePause(job.id)
+  } else if (key === 'resume') {
+    await handleResume(job.id)
+  } else if (key === 'edit') {
+    openEditModal(job)
+  } else if (key === 'delete') {
+    handleDelete(job.id)
+  }
+}
+
 function openCreateModal() {
   editingJob.value = null
   form.name = ''
@@ -612,11 +1031,6 @@ function openEditModal(job: CronJob) {
   scheduleMode.value = parseScheduleToBuilder(job.schedule) ? 'builder' : 'expr'
   if (scheduleMode.value === 'builder') form.schedule = builderExpr.value
   showModal.value = true
-}
-
-function openLogsModal(job: CronJob) {
-  cronStore.loadLogs(job.id)
-  showLogsModal.value = true
 }
 
 async function handleSave() {
@@ -739,6 +1153,544 @@ onMounted(() => cronStore.loadJobs())
 </script>
 
 <style scoped>
+/* ===== 页头 ===== */
+.cron-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.cron-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2329;
+  letter-spacing: 0.2px;
+}
+
+.cron-subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: #9aa1ab;
+}
+
+/* ===== 空态 ===== */
+.cron-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 20px;
+  border: 1px dashed #e3e6ec;
+  border-radius: 12px;
+  background: #fbfcfd;
+}
+
+.cron-empty-icon {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: #eef2f8;
+  color: #7c8798;
+  margin-bottom: 14px;
+}
+
+.cron-empty-title { font-size: 14px; font-weight: 600; color: #41464f; }
+.cron-empty-hint { font-size: 12.5px; color: #9aa1ab; margin-top: 6px; text-align: center; max-width: 420px; line-height: 1.7; }
+
+/* ===== 任务卡片 ===== */
+.job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.job-card {
+  position: relative;
+  background: #fff;
+  border: 1px solid #ebeef3;
+  border-radius: 10px;
+  padding: 14px 16px 13px 20px;
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+
+.job-card:hover {
+  border-color: #dde3ec;
+  box-shadow: 0 4px 14px rgba(31, 35, 41, 0.055);
+}
+
+.job-card.is-paused { background: #fcfcfd; }
+.job-card.is-paused .job-name { color: #6b7280; }
+
+.job-rail {
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #d9dee6;
+}
+.job-rail.rail-active { background: #18a058; }
+.job-rail.rail-running { background: #f0a020; }
+.job-rail.rail-failed { background: #d03050; }
+.job-rail.rail-paused { background: #c8cdd6; }
+
+.job-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.job-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.job-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.job-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.job-badge.st-active { color: #14864b; background: #e9f8ef; }
+.job-badge.st-running { color: #b5701a; background: #fff5e6; }
+.job-badge.st-idle { color: #7a8290; background: #f2f4f7; }
+
+.pulse-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #f0a020;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+.job-mode {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  color: #7a8290;
+  background: #f4f6f9;
+}
+
+.job-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.job-schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 12.5px;
+  color: #5c6169;
+  flex-wrap: wrap;
+}
+
+.job-schedule-icon { color: #a8aeb8; }
+
+.job-schedule-text { font-weight: 500; }
+
+.job-cron {
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 11px;
+  color: #7a8290;
+  background: #f5f7fa;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.job-prompt {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #8a919e;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.job-prompt-tag {
+  color: #b6bcc6;
+  margin-right: 5px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+}
+
+.job-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px 20px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px dashed #f0f2f5;
+  font-size: 12px;
+  color: #5c6169;
+}
+
+.meta-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.meta-label { color: #a3a9b3; }
+.meta-hint { color: #b0b6c0; font-size: 11px; }
+.meta-value { font-variant-numeric: tabular-nums; }
+.meta-value.mono {
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 11.5px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-dir { color: #8a919e; max-width: 100%; }
+
+.run-chip {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.run-chip.c-ok { color: #14864b; background: #e9f8ef; }
+.run-chip.c-fail { color: #c22b45; background: #fdeef1; }
+.run-chip.c-run { color: #b5701a; background: #fff5e6; }
+.run-chip.c-idle { color: #7a8290; background: #f2f4f7; }
+
+.job-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: #fff5f6;
+  border: 1px solid #ffe2e6;
+  color: #c22b45;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.job-error .n-icon { margin-top: 2px; flex-shrink: 0; }
+.job-error-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* ===== 执行记录抽屉 ===== */
+.logs-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.logs-head-title { font-size: 15px; font-weight: 600; color: #1f2329; }
+.logs-head-sub { font-size: 12px; color: #9aa1ab; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.logs-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.run-list {
+  width: 296px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #eef0f4;
+  background: #fafbfc;
+}
+
+.run-list-tools { padding: 12px 12px 8px; }
+
+.run-filter { display: flex; gap: 4px; margin-top: 8px; }
+
+.run-filter-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 22px;
+  padding: 2px 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.run-filter-btn:hover { background: #f0f2f5; }
+.run-filter-btn.active {
+  background: #fff;
+  border-color: #e0e4ea;
+  color: #1f2329;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(31, 35, 41, 0.05);
+}
+.run-filter-count { font-size: 10.5px; color: #a3a9b3; font-weight: 400; }
+
+.run-list-scroll { flex: 1; overflow-y: auto; padding: 2px 8px 14px; }
+
+.run-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
+}
+.run-item:hover { background: #f1f4f8; }
+.run-item.active {
+  background: #fff;
+  border-color: #e0e4ea;
+  box-shadow: 0 2px 6px rgba(31, 35, 41, 0.06);
+}
+
+.run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: #c8cdd6;
+}
+.run-dot.c-ok { background: #18a058; }
+.run-dot.c-fail { background: #d03050; }
+.run-dot.c-run { background: #f0a020; animation: pulse 1.2s ease-in-out infinite; }
+
+.run-item-body { min-width: 0; flex: 1; }
+
+.run-item-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-item-time {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3d434d;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-item-dur { font-size: 11px; color: #a3a9b3; }
+
+.run-item-preview {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #9aa1ab;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-list-empty {
+  padding: 32px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #b0b6c0;
+}
+
+.run-detail {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #f0f2f5;
+  flex-wrap: wrap;
+}
+
+.detail-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.detail-meta-item { font-variant-numeric: tabular-nums; }
+
+.detail-workdir {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: #f8f9fb;
+  border-bottom: 1px solid #f0f2f5;
+  font-size: 11.5px;
+  color: #8a919e;
+  min-width: 0;
+}
+
+.detail-workdir-path {
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.link-btn {
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.link-btn:hover { text-decoration: underline; }
+
+.detail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 32px;
+}
+
+.detail-error {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff5f6;
+  border: 1px solid #ffe2e6;
+}
+.detail-error-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #c22b45;
+  margin-bottom: 6px;
+}
+.detail-error pre {
+  margin: 0;
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #a3233a;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  color: #b5701a;
+}
+
+.detail-truncated {
+  margin-top: 16px;
+  padding: 8px 11px;
+  border-radius: 6px;
+  background: #f8f9fb;
+  border: 1px dashed #e3e6ec;
+  font-size: 11.5px;
+  color: #8a919e;
+  line-height: 1.6;
+}
+
+.detail-nothing {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: #b0b6c0;
+}
+
+.detail-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #b6bcc6;
+  font-size: 12.5px;
+}
+
+@media (max-width: 880px) {
+  .run-list { width: 240px; }
+  .detail-scroll { padding: 14px 16px 24px; }
+  .detail-head { padding: 10px 16px; }
+  .detail-workdir { padding: 7px 16px; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .cron-title { color: #eceef1; }
+  .job-card { background: #1f2126; border-color: #2e3138; }
+  .job-card:hover { border-color: #3a3e46; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); }
+  .job-card.is-paused { background: #1b1d21; }
+  .job-name { color: #eceef1; }
+  .job-schedule-row { color: #b6bcc6; }
+  .job-cron { background: #2a2d33; color: #9aa1ab; }
+  .job-prompt { color: #8f969f; }
+  .job-mode { background: #2a2d33; color: #9aa1ab; }
+  .job-meta { border-top-color: #2e3138; color: #b6bcc6; }
+  .job-error { background: #2c1f23; border-color: #4a2831; color: #f08a9c; }
+  .cron-empty { background: #1b1d21; border-color: #2e3138; }
+  .cron-empty-icon { background: #2a2d33; color: #9aa1ab; }
+  .run-list { background: #1b1d21; border-right-color: #2e3138; }
+  .run-filter-btn.active { background: #26292f; border-color: #3a3e46; color: #eceef1; }
+  .run-item:hover { background: #24272d; }
+  .run-item.active { background: #26292f; border-color: #3a3e46; }
+  .run-item-time { color: #d8dbe0; }
+  .run-detail { background: #1f2126; }
+  .detail-head { border-bottom-color: #2e3138; }
+  .detail-workdir { background: #232529; border-bottom-color: #2e3138; }
+  .detail-error { background: #2c1f23; border-color: #4a2831; }
+  .detail-truncated { background: #232529; border-color: #3a3e46; }
+}
+
+/* ===== 工作目录选择器 ===== */
 .dir-picker-recommended {
   padding: 4px 0 8px;
   border-bottom: 1px solid #f0f0f0;
