@@ -72,6 +72,15 @@ type roomRuntime struct {
 	cfg       *RoomConfig
 	triggerCh chan roomRequest
 	stopCh    chan struct{}
+	// id is the lowercased room ID, fixed at construction. rt.cfg is replaced
+	// wholesale by a metadata-only UpdateRoom (under m.mu), so anything read
+	// outside the lock must use id rather than rt.cfg.ID to stay race-free.
+	id string
+	// closed is set (before stopCh is closed) by DeleteRoom / a hot reload.
+	// runRoomRound checks it before every append: a turn that outlived the
+	// teardown grace period must not recreate the room log DeleteRoom just
+	// removed (the 3s unwind wait is best-effort against a wedged provider).
+	closed atomic.Bool
 	// roundRunning 为 true 表示协调器正在跑一轮（成员逐个发言）。房间回合
 	// 合法耗时可达数分钟，前端靠它判断"还该不该继续轮询房间日志"，而不是
 	// 傻等那个阻塞的 POST。
@@ -86,6 +95,14 @@ type roomRuntime struct {
 	// 生效的唯一无竞态写法。
 	stopGen uint64
 }
+
+// roomRoundBudget bounds one whole coordinated round (all members, all
+// rounds). Per-member turns are capped by bot_mode.turn_timeout_minutes, but
+// nothing bounded their sum: 6 members × 3 rounds × 5min could hold a room for
+// an hour and a half. Members keep their own budget (whichever fires first
+// wins); the round budget exists so a stuck provider cannot pin the room
+// forever after the user walked away.
+const roomRoundBudget = 30 * time.Minute
 
 // NewRoomID generates a unique room identifier.
 func NewRoomID() string {
@@ -102,6 +119,7 @@ func (m *Manager) CreateRoom(cfg *RoomConfig) error {
 	if cfg.ID == "" {
 		cfg.ID = NewRoomID()
 	}
+	cfg.ID = strings.ToLower(cfg.ID)
 	if cfg.Name == "" {
 		cfg.Name = cfg.ID
 	}
@@ -124,24 +142,45 @@ func (m *Manager) CreateRoom(cfg *RoomConfig) error {
 		seen[key] = true
 		cfg.Members[i] = key
 	}
+	// Persist the clamped values so a hand-written or API-supplied extreme
+	// (max_rounds=1000) cannot stay on disk as a landmine.
+	cfg.MaxRounds = cfg.Rounds()
+	cfg.HistoryCap = cfg.History()
 	now := time.Now().Unix()
 	cfg.CreatedAt = now
 	cfg.UpdatedAt = now
+	m.roomMu.Lock()
 	if err := m.store.SaveRoom(cfg); err != nil {
+		m.roomMu.Unlock()
 		return fmt.Errorf("failed to save room: %w", err)
 	}
+	m.roomMu.Unlock()
 	m.startRoomLocked(cfg)
 	log.Infof("[BotMode] Room %q created with %d members", cfg.Name, len(cfg.Members))
 	return nil
 }
 
-// UpdateRoom applies partial updates to a room and hot-reloads its runtime.
+// UpdateRoom applies partial updates to a room.
+//
+// A hot reload (tear down the coordinator, start a fresh one) is only needed
+// when the MEMBER LIST changed: that list is what a running round iterates
+// over. Renaming a room or editing its topic used to kill the in-flight round
+// and orphan every queued request — the update now patches the live config in
+// place instead.
 func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, error) {
+	id = strings.ToLower(id)
+	// Serialize the read-modify-write: two concurrent PATCHes each loaded the
+	// on-disk snapshot and saved it back, silently dropping one update.
+	m.roomMu.Lock()
+	defer m.roomMu.Unlock()
+
 	cfg, err := m.store.LoadRoom(id)
 	if err != nil {
 		return nil, fmt.Errorf("room not found: %s", id)
 	}
+	oldMembers := append([]string(nil), cfg.Members...)
 	mutate(cfg)
+	cfg.ID = id
 	if len(cfg.Members) < MinRoomMembers {
 		return nil, fmt.Errorf("a room needs at least %d members", MinRoomMembers)
 	}
@@ -151,10 +190,10 @@ func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, 
 	seen := map[string]bool{}
 	for i, name := range cfg.Members {
 		key := strings.ToLower(name)
-		// Tolerate members whose bot was deleted: runRoomRound already skips
-		// them at runtime, and this keeps the room editable so the dead member
-		// can be removed via a later update. Only newly added members must
-		// resolve to a known bot.
+		// Normalize even members whose bot was deleted: the room must stay
+		// editable so the dead member can be removed by a later update, and a
+		// mixed-case leftover used to slip past the duplicate check.
+		cfg.Members[i] = key
 		if m.FindByTag(key) == nil {
 			continue
 		}
@@ -162,54 +201,92 @@ func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, 
 			return nil, fmt.Errorf("duplicate room member %q", name)
 		}
 		seen[key] = true
-		cfg.Members[i] = key
 	}
+	cfg.MaxRounds = cfg.Rounds()
+	cfg.HistoryCap = cfg.History()
 	if err := m.store.SaveRoom(cfg); err != nil {
 		return nil, fmt.Errorf("failed to save room: %w", err)
 	}
 
-	// Hot-reload: stop the old coordinator and start a fresh one so member
-	// changes take effect immediately. In-flight requests are dropped.
+	if !sameMembers(oldMembers, cfg.Members) {
+		// Hot-reload: stop the old coordinator and start a fresh one so member
+		// changes take effect immediately. In-flight rounds are cancelled and
+		// queued senders are answered with the current history.
+		m.mu.Lock()
+		var dropped []roomRequest
+		rt, ok := m.rooms[id]
+		if ok {
+			dropped = m.teardownRoomLocked(rt)
+			delete(m.rooms, id)
+		}
+		m.mu.Unlock()
+		m.answerDroppedRequests(rt, dropped)
+		m.startRoomLocked(cfg)
+		return cfg, nil
+	}
+
+	// Metadata-only update: swap the config the live coordinator reads.
 	m.mu.Lock()
-	if rt, ok := m.rooms[strings.ToLower(id)]; ok {
-		cancelRoomRoundLocked(rt)
-		close(rt.stopCh)
-		delete(m.rooms, strings.ToLower(id))
+	if rt, ok := m.rooms[id]; ok && rt != nil {
+		rt.cfg = cfg
 	}
 	m.mu.Unlock()
-	m.startRoomLocked(cfg)
 	return cfg, nil
+}
+
+// sameMembers reports whether two member lists are identical (order matters:
+// it is also the speaking order of a round).
+func sameMembers(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // DeleteRoom removes a room and stops its coordinator.
 func (m *Manager) DeleteRoom(id string) error {
+	id = strings.ToLower(id)
+	// roomMu serializes the load->delete cycle against UpdateRoom: without it a
+	// concurrent PATCH that loaded the config before this delete could save it
+	// back afterwards and resurrect the room. The unwind wait below is kept
+	// OUTSIDE roomMu so a wedged provider cannot block other room edits.
+	m.roomMu.Lock()
 	cfg, err := m.store.LoadRoom(id)
 	if err != nil {
+		m.roomMu.Unlock()
 		return fmt.Errorf("room not found: %s", id)
 	}
 	m.mu.Lock()
 	var stopped *roomRuntime
-	if rt, ok := m.rooms[strings.ToLower(id)]; ok {
-		cancelRoomRoundLocked(rt)
-		close(rt.stopCh)
-		delete(m.rooms, strings.ToLower(id))
+	var dropped []roomRequest
+	if rt, ok := m.rooms[id]; ok {
 		stopped = rt
+		dropped = m.teardownRoomLocked(rt)
+		delete(m.rooms, id)
 	}
 	m.mu.Unlock()
+	if err := m.store.DeleteRoom(cfg.ID); err != nil {
+		m.roomMu.Unlock()
+		return fmt.Errorf("failed to delete room: %w", err)
+	}
+	m.roomMu.Unlock()
+	m.answerDroppedRequests(stopped, dropped)
 
 	// Let the cancelled round unwind before the session rows go away: its last
 	// member turn may still append a message, which would recreate the room log
 	// just below. Cancellation is already in flight, so this is usually
-	// milliseconds; the deadline only guards against a wedged provider call.
+	// milliseconds; the deadline only guards against a wedged provider call —
+	// and rt.closed (set above) makes any straggler's append a no-op.
 	if stopped != nil {
 		deadline := time.Now().Add(3 * time.Second)
 		for stopped.roundRunning.Load() && time.Now().Before(deadline) {
 			time.Sleep(20 * time.Millisecond)
 		}
-	}
-
-	if err := m.store.DeleteRoom(cfg.ID); err != nil {
-		return fmt.Errorf("failed to delete room: %w", err)
 	}
 	// Drop persisted room sessions for all members + the shared room log so
 	// deleted rooms don't leave stale history in bots.db.
@@ -260,7 +337,7 @@ func (m *Manager) ListRooms() ([]*RoomConfig, error) {
 
 // GetRoom loads one room config.
 func (m *Manager) GetRoom(id string) (*RoomConfig, error) {
-	return m.store.LoadRoom(id)
+	return m.store.LoadRoom(strings.ToLower(id))
 }
 
 // RoomRoundRunning 报告该房间此刻是否有回合在进行（含已排队尚未开跑的）。
@@ -280,8 +357,10 @@ func (m *Manager) RoomRoundRunning(roomID string) bool {
 }
 
 // RoomMessages returns the shared message history of a room (most recent
-// first, capped at maxMessages).
+// first, capped at the room's persisted-history cap — NOT at the prompt
+// window, so tuning MaxMessages cannot erase what the user already said).
 func (m *Manager) RoomMessages(roomID string) ([]RoomMessage, error) {
+	roomID = strings.ToLower(roomID)
 	cfg, err := m.store.LoadRoom(roomID)
 	if err != nil {
 		return nil, fmt.Errorf("room not found: %s", roomID)
@@ -290,7 +369,7 @@ func (m *Manager) RoomMessages(roomID string) ([]RoomMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	cap := cfg.MessagesCap()
+	cap := cfg.History()
 	if len(msgs) > cap {
 		msgs = msgs[len(msgs)-cap:]
 	}
@@ -316,8 +395,6 @@ func (m *Manager) SendToRoomWithMedia(ctx context.Context, roomID, text string, 
 		target = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(target), "@"))
 	}
 
-	// gen 在入队瞬间拍快照：停止之后才入队的请求是新的用户意图，必须照常
-	// 执行；停止之前就已排队的请求会被协调器丢弃（见 roomRequest.gen）。
 	req := roomRequest{
 		Text:      text,
 		From:      "user",
@@ -326,24 +403,45 @@ func (m *Manager) SendToRoomWithMedia(ctx context.Context, roomID, text string, 
 		Items:     items,
 		Reply:     make(chan *RoomResult, 1),
 	}
+	// Snapshot stopGen and enqueue under the same lock: taking the snapshot
+	// outside (the old code) left a window where a concurrent StopRoomRound
+	// bumped the generation between snapshot and send, and a brand-new user
+	// message was mistaken for a stale queued one and silently dropped.
+	//
+	// Everything touched here must be the *Locked variant: m.mu is not
+	// reentrant, and calling FindByTag here deadlocked the whole manager.
 	m.mu.Lock()
 	rt, ok := m.rooms[key]
-	if ok && rt != nil {
-		req.gen = rt.stopGen
-	}
-	m.mu.Unlock()
 	if !ok || rt == nil {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("room not found: %s", roomID)
 	}
-
-	if target != "" && target != "user" && m.FindByTag(target) == nil {
+	unknownTarget := target != "" && target != "user" && m.findByTagLocked(target) == nil
+	enqueued := false
+	if !unknownTarget {
+		req.gen = rt.stopGen
+		select {
+		case rt.triggerCh <- req:
+			enqueued = true
+		default:
+		}
+	}
+	m.mu.Unlock()
+	if unknownTarget {
 		return nil, fmt.Errorf("unknown bot %q; available: %s", target, m.TagList())
 	}
 
-	select {
-	case rt.triggerCh <- req:
-	case <-m.stopCh:
-		return nil, errors.New("bot manager shutting down")
+	if !enqueued {
+		// Queue is full (16 in flight): block for a slot, but stay abortable.
+		// Without the ctx case a disconnected client left the handler parked
+		// here with no way out until the coordinator caught up.
+		select {
+		case rt.triggerCh <- req:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-m.stopCh:
+			return nil, errors.New("bot manager shutting down")
+		}
 	}
 
 	select {
@@ -374,6 +472,7 @@ func (m *Manager) startRoomLocked(cfg *RoomConfig) {
 	}
 	rt := &roomRuntime{
 		cfg:       cfg,
+		id:        key,
 		triggerCh: make(chan roomRequest, 16),
 		stopCh:    make(chan struct{}),
 	}
@@ -424,8 +523,8 @@ func (m *Manager) roomRequestStale(rt *roomRuntime, req roomRequest) bool {
 // was never logged (appendRoomMessage runs at round start), so the UI keeps
 // showing the optimistic bubble with no reply attached.
 func (m *Manager) dropRoomRequest(rt *roomRuntime, req roomRequest) {
-	history, _ := m.loadRoomHistory(rt.cfg.ID)
-	res := &RoomResult{RoomID: rt.cfg.ID, Messages: history}
+	history, _ := m.loadRoomHistory(rt.id)
+	res := &RoomResult{RoomID: rt.id, Messages: history}
 	select {
 	case req.Reply <- res:
 	default:
@@ -452,8 +551,9 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		return
 	}
 
-	roundCtx, cancelRound := context.WithCancel(context.Background())
+	roundCtx, cancelRound := context.WithTimeout(context.Background(), roomRoundBudget)
 	m.mu.Lock()
+	room := rt.cfg
 	rt.roundCtx = roundCtx
 	rt.roundCancel = cancelRound
 	m.mu.Unlock()
@@ -469,13 +569,11 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		m.mu.Unlock()
 	}()
 
-	room := rt.cfg
-	// Keep the room log in memory for the whole round. Every member turn used
-	// to re-read it from SQLite before building its prompt (and every append
-	// re-read it again), i.e. dozens of redundant reads per round for a log
-	// capped at ~10 entries. One read + in-memory appends gives every member
-	// exactly the same context with a fraction of the I/O.
-	capN := room.MessagesCap()
+	// Keep the room log in memory for the whole round. Every append used to
+	// re-read the whole log from SQLite and rewrite it (on top of the prompt
+	// build doing its own read), i.e. two full round-trips per single message.
+	// One read + in-memory appends gives every member exactly the same context
+	// with a fraction of the I/O.
 	logHistory, err := m.loadRoomHistory(room.ID)
 	if err != nil {
 		// Don't fail the round: the persisted log is best-effort context, and a
@@ -484,8 +582,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 	}
 	// Persist the human's message into the room log (with attachment refs so
 	// reloads still show what was shared).
-	logHistory = capRoomHistory(append(logHistory,
-		m.appendRoomMessage(room, "user", req.Text, roomAttachmentsFromParts(req.Persisted))), capN)
+	logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "user", req.Text, roomAttachmentsFromParts(req.Persisted))
 
 	members := room.Members
 	if req.Target != "" && req.Target != "user" {
@@ -493,6 +590,28 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 			// Move the targeted member to the front of this round.
 			members = prependMember(members, strings.ToLower(tc.Name))
 		}
+	}
+	// Skip bots that are offline before the round starts. A paused member used
+	// to be enqueued anyway and dropped by its own worker, which wrote
+	// "(no reply: bot X is paused)" into the room log once per member per round
+	// — noise the human sees and every later prompt re-reads, for something
+	// that is not a failure at all.
+	speaking := make([]string, 0, len(members))
+	for _, mem := range members {
+		if mc := m.FindByTag(mem); mc != nil && mc.IsActive() {
+			speaking = append(speaking, mem)
+		}
+	}
+	members = speaking
+	if len(members) == 0 {
+		logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "@system",
+			"没有在线成员，本轮没有开始（成员被暂停或不在了）。", nil)
+		res := &RoomResult{RoomID: room.ID, Messages: logHistory}
+		select {
+		case req.Reply <- res:
+		default:
+		}
+		return
 	}
 
 	maxRounds := room.Rounds()
@@ -505,8 +624,8 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		// 活图只跟首轮投递：req.Persisted 会被每一个成员、每一轮重复使用，
 		// 一次用户发图会变成 4 成员 × 3 轮 = 12 次投递，每投一次成员就重新
 		// 识别一次（单次识别十几秒到几分钟，这正是群聊"卡住"的主因之一）。
-		// 第二轮起成员自己的会话历史里已经有这张图（落库为轻量引用），
-		// 房间日志也记着附件，工作目录里的副本同样还在。
+		// 第二轮起成员不再拿到实时字节：房间日志里有附件记录，工作目录里的
+		// 副本也还在，需要时可以用文件工具重新读取。
 		turnReq := req
 		if round > 0 {
 			turnReq.Persisted = nil
@@ -517,12 +636,11 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 			if m.roomClosed(rt) || m.roundStopped(rt) {
 				break
 			}
-			// Skip members that were removed mid-round.
-			if m.FindByTag(member) == nil {
+			// Skip members that were removed or paused mid-round.
+			if mc := m.FindByTag(member); mc == nil || !mc.IsActive() {
 				continue
 			}
-			history := logHistory
-			prompt := m.buildRoomPrompt(room, member, history, round, maxRounds)
+			prompt := m.buildRoomPrompt(room, member, logHistory, round, maxRounds)
 			reply, err := m.sendRoomTurn(roundCtx, rt, member, prompt, turnReq)
 			if err != nil {
 				// Room torn down mid-turn or round stopped by the user: stop
@@ -533,8 +651,18 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 					break
 				}
 				log.Warnf("[BotMode] Room %s member %s turn failed: %v", room.Name, member, err)
-				logHistory = capRoomHistory(append(logHistory,
-					m.appendRoomMessage(room, member, "(no reply: "+err.Error()+")", nil)), capN)
+				// A round-budget expiry is a coordinated stop, not a member
+				// failure: note it once below instead of writing a fake reply.
+				if errors.Is(err, context.DeadlineExceeded) {
+					break
+				}
+				// Member deleted or paused while its turn was queued: nothing
+				// failed, and an "(no reply: bot X is paused)" row would only
+				// teach the next prompt that the room is broken.
+				if mc := m.FindByTag(member); mc == nil || !mc.IsActive() {
+					continue
+				}
+				logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, member, "(no reply: "+err.Error()+")", nil)
 				continue
 			}
 			// 房间日志是广播面：人和其他成员都会读它，而 buildRoomPrompt
@@ -547,8 +675,7 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 				continue
 			}
 			anySpoke = true
-			logHistory = capRoomHistory(append(logHistory,
-				m.appendRoomMessage(room, member, reply, nil)), capN)
+			logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, member, reply, nil)
 			if needsHuman(reply) {
 				needsUser = true
 				log.Infof("[BotMode] Room %s: @%s escalated to user", room.Name, member)
@@ -558,6 +685,13 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		if needsUser || !anySpoke {
 			break
 		}
+	}
+
+	// The round budget (not the user) ended the round: say so in the log so the
+	// silence is explainable instead of looking like every bot went mute.
+	if !needsUser && !m.roomClosed(rt) && errors.Is(roundCtx.Err(), context.DeadlineExceeded) {
+		logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "@system",
+			"本轮已达到群聊时间上限，剩余发言被跳过。", nil)
 	}
 
 	// logHistory already holds every message this round wrote (appends are
@@ -619,31 +753,86 @@ func cancelRoomRoundLocked(rt *roomRuntime) {
 	cancel()
 }
 
+// teardownRoomLocked takes a coordinator offline and hands back the requests
+// still sitting in its queue. Caller must hold m.mu.
+//
+// Closing stopCh makes roomLoop return, but queued senders are waiting on
+// their own replyCh — nobody would ever write it, so the HTTP handler hung
+// until the client aborted (a room rename/delete with two messages in flight
+// leaked one handler per queued message). The caller answers them outside the
+// lock via answerDroppedRequests.
+func (m *Manager) teardownRoomLocked(rt *roomRuntime) []roomRequest {
+	if rt == nil {
+		return nil
+	}
+	// Mark closed BEFORE stopping: a member turn that outlives the teardown
+	// must not append to (and recreate) a room log that is being deleted.
+	rt.closed.Store(true)
+	cancelRoomRoundLocked(rt)
+	close(rt.stopCh)
+	var dropped []roomRequest
+	for {
+		select {
+		case req := <-rt.triggerCh:
+			dropped = append(dropped, req)
+		default:
+			return dropped
+		}
+	}
+}
+
+// answerDroppedRequests replies to senders whose round will never run. Must be
+// called WITHOUT m.mu (it reads the room log from disk).
+func (m *Manager) answerDroppedRequests(rt *roomRuntime, reqs []roomRequest) {
+	if rt == nil || len(reqs) == 0 {
+		return
+	}
+	history, _ := m.loadRoomHistory(rt.id)
+	for _, req := range reqs {
+		select {
+		case req.Reply <- &RoomResult{RoomID: rt.id, Messages: history}:
+		default:
+		}
+	}
+}
+
 // StopRoomRound aborts the room's in-flight round so nothing keeps running
 // after the user asked to stop: the in-flight member turn is canceled (not
 // merely abandoned), remaining members and rounds are skipped, and queued
 // requests are dropped by the coordinator via the stopGen check. Every
-// waiting sender gets the partial history back. Returns true when a running
-// round was actually aborted; stopping an idle room is a no-op (false).
+// waiting sender gets the partial history back.
+//
+// Queued requests are invalidated even when no round is currently executing:
+// RoomRoundRunning reports "running" for a non-empty queue too, so a stop
+// pressed between two rounds used to return false and let the queued round
+// start anyway — the exact "群聊停不下来" report. Returns true when something
+// was actually stopped; an idle room with an empty queue is a no-op (false).
 func (m *Manager) StopRoomRound(roomID string) bool {
 	key := strings.ToLower(roomID)
 	m.mu.Lock()
 	rt, ok := m.rooms[key]
-	var cancel context.CancelFunc
-	if ok && rt != nil && rt.roundCancel != nil {
-		cancel = rt.roundCancel
-		rt.roundCancel = nil
-		rt.stopGen++
-	}
-	m.mu.Unlock()
 	if !ok || rt == nil {
+		m.mu.Unlock()
 		return false
 	}
-	if cancel == nil {
+	cancel := rt.roundCancel
+	rt.roundCancel = nil
+	queued := len(rt.triggerCh) > 0
+	if cancel == nil && !queued {
+		m.mu.Unlock()
 		return false
 	}
-	cancel()
-	log.Infof("[BotMode] Room %s round stopped by user", rt.cfg.Name)
+	// Bump unconditionally: this is what invalidates requests already sitting
+	// in the queue (their gen no longer matches, so the coordinator answers
+	// them with the current history instead of starting a new round).
+	rt.stopGen++
+	name := rt.cfg.Name
+	m.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	log.Infof("[BotMode] Room %s round stopped by user", name)
 	return true
 }
 
@@ -664,8 +853,8 @@ func (m *Manager) StopRoomRound(roomID string) bool {
 // real bytes at turn start (same path as single-bot chat).
 func (m *Manager) sendRoomTurn(roundCtx context.Context, rt *roomRuntime, botName, text string, req roomRequest) (string, error) {
 	msg := pendingMessage{
-		From:   "room:" + rt.cfg.ID,
-		RoomID: strings.ToLower(rt.cfg.ID),
+		From:   "room:" + rt.id,
+		RoomID: rt.id,
 		// persistedParts 是落库形态：回合开始时 ContentParts 里的图片引用会被
 		// 还原成带字节的 base64 部件送给模型，这份轻量副本让 manager 在写盘前
 		// 把该条消息换回上传引用（与单聊 SendToBotWithMedia 同一语义）。少了它，
@@ -759,18 +948,24 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 	return sb.String()
 }
 
-// appendRoomMessage persists one message into the room's shared session log
-// and keeps only the last MessagesCap entries (10-message hard cap). It returns
-// the entry it wrote so a caller that keeps the log in memory for the duration
-// of a round (runRoomRound) stays in sync without re-reading the database.
-func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string, atts []RoomAttachment) RoomMessage {
-	entry := RoomMessage{
+// newRoomMessage builds one log entry.
+func newRoomMessage(from, content string, atts []RoomAttachment) RoomMessage {
+	return RoomMessage{
 		ID:          "m_" + uuid.New().String()[:8],
 		From:        from,
 		Content:     content,
 		Timestamp:   time.Now().Unix(),
 		Attachments: atts,
 	}
+}
+
+// appendRoomMessage persists one message into the room's shared session log
+// and keeps only the last History() entries. It returns the entry it wrote.
+//
+// Self-loading form, kept for callers that hold no in-memory log (tests, CLI
+// helpers). A round uses appendRoomMessageTo instead — re-reading the whole
+// log for every single message was pure overhead.
+func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string, atts []RoomAttachment) RoomMessage {
 	msgs, err := m.loadRoomHistory(room.ID)
 	if err != nil {
 		// A broken read must not lose the message: start a fresh log rather
@@ -778,13 +973,27 @@ func (m *Manager) appendRoomMessage(room *RoomConfig, from, content string, atts
 		log.Warnf("[BotMode] Room %s: failed to load log before append: %v", room.Name, err)
 		msgs = nil
 	}
-	msgs = append(msgs, entry)
-	capN := room.MessagesCap()
-	if len(msgs) > capN {
-		msgs = msgs[len(msgs)-capN:]
-	}
+	entry := newRoomMessage(from, content, atts)
+	msgs = capRoomHistory(append(msgs, entry), room.History())
 	m.saveRoomHistory(room.ID, msgs)
 	return entry
+}
+
+// appendRoomMessageTo appends to the log a round already holds in memory and
+// writes the capped result once. It returns the updated log and the new entry.
+//
+// It refuses to write once the coordinator has been torn down: DeleteRoom only
+// waits ~3s for the cancelled round to unwind, so a member turn stuck in a
+// wedged provider call could otherwise append afterwards and recreate the room
+// log the delete had just removed.
+func (m *Manager) appendRoomMessageTo(rt *roomRuntime, room *RoomConfig, history []RoomMessage, from, content string, atts []RoomAttachment) ([]RoomMessage, RoomMessage) {
+	entry := newRoomMessage(from, content, atts)
+	out := capRoomHistory(append(history, entry), room.History())
+	if rt != nil && rt.closed.Load() {
+		return out, entry // in-memory only; the room (and its log) is gone
+	}
+	m.saveRoomHistory(room.ID, out)
+	return out, entry
 }
 
 // capRoomHistory trims an in-memory room log to the same cap the persisted log
@@ -867,14 +1076,22 @@ func broadcastReplyText(reply string) string {
 	return provider.SanitizeAssistantContent(provider.StripThinkTrails(reply))
 }
 
-// needsHuman detects an escalation request: reply opens with @user.
+// needsHuman detects an escalation request: the member prompt tells every bot
+// to START its reply with @user, so only the first line is inspected.
+//
+// The previous whole-body substring match ended a round whenever a member
+// merely quoted the protocol ("... then I would escalate to user") — a false
+// positive that silently skipped every remaining member and round.
 func needsHuman(reply string) bool {
-	t := strings.TrimSpace(reply)
-	lower := strings.ToLower(t)
+	line := strings.TrimSpace(reply)
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	lower := strings.ToLower(line)
 	return strings.HasPrefix(lower, "@user") ||
 		strings.HasPrefix(lower, "@ user") ||
-		strings.Contains(lower, "needs your input") ||
-		strings.Contains(lower, "escalating to user")
+		strings.HasPrefix(lower, "needs your input") ||
+		strings.HasPrefix(lower, "escalating to user")
 }
 
 // prependMember moves a member to the front of the speaking order.

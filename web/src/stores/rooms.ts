@@ -3,6 +3,17 @@ import { ref } from 'vue'
 import * as roomsApi from '@/api/rooms'
 import type { Room, RoomMessage, RoomSendResult } from '@/api/rooms'
 
+/**
+ * Identity of one optimistic send: its local bubble id plus the user-message
+ * IDs the room log already had. The server echo is "a user message id we have
+ * not seen before" — comparing text broke as soon as the same sentence was
+ * sent twice.
+ */
+interface SendProbe {
+  id: string
+  seenUserIds: Set<string>
+}
+
 export const useRoomsStore = defineStore('rooms', () => {
   const rooms = ref<Room[]>([])
   const activeRoomId = ref<string | null>(null)
@@ -89,6 +100,14 @@ export const useRoomsStore = defineStore('rooms', () => {
     sendAbort = new AbortController()
 
     const localId = 'local_' + Date.now()
+    // Baseline = the user-message IDs that already existed BEFORE this send.
+    // Echo detection used to compare content strings, so sending the same text
+    // twice made the second bubble "disappear" as soon as any older copy was
+    // in the log; an ID that was not there before is the only reliable signal.
+    const probe: SendProbe = {
+      id: localId,
+      seenUserIds: new Set(messages.value.filter(isUserMessage).map(m => m.id)),
+    }
     messages.value.push({
       id: localId,
       from: '@user',
@@ -98,7 +117,6 @@ export const useRoomsStore = defineStore('rooms', () => {
     })
     // 回合期间持续拉取房间日志（乐观气泡在服务端回传该条消息后自动让位）。
     let watching = true
-    const probe = { id: localId, text: message }
     void (async () => {
       while (watching) {
         await delay(POLL_INTERVAL_MS)
@@ -153,10 +171,11 @@ export const useRoomsStore = defineStore('rooms', () => {
   /**
    * Merge a server room log into the current list. The optimistic bubble is
    * kept (appended last, where it belongs — nothing else can have arrived
-   * before the server echoes it) until the server echoes that same message.
+   * before the server echoes it) until a user message that did not exist
+   * before this send shows up in the log.
    */
-  function applyServerMessages(incoming: RoomMessage[], probe: { id: string; text: string }): void {
-    const echoed = incoming.some(m => isUserMessage(m) && m.content === probe.text)
+  function applyServerMessages(incoming: RoomMessage[], probe: SendProbe): void {
+    const echoed = incoming.some(m => isUserMessage(m) && !probe.seenUserIds.has(m.id))
     if (echoed) {
       messages.value = incoming
       return
@@ -175,7 +194,7 @@ export const useRoomsStore = defineStore('rooms', () => {
    * waiting on the blocking send so the reply of the last member still lands
    * in the UI.
    */
-  async function watchUntilRoundDone(roomId: string, probe: { id: string; text: string }): Promise<void> {
+  async function watchUntilRoundDone(roomId: string, probe: SendProbe): Promise<void> {
     const deadline = Date.now() + 30 * 60 * 1000
     while (Date.now() < deadline) {
       try {

@@ -20,6 +20,7 @@ func roomToResponse(r *bot.RoomConfig) map[string]interface{} {
 		"members":      r.Members,
 		"max_rounds":   r.Rounds(),
 		"max_messages": r.MessagesCap(),
+		"history_cap":  r.History(),
 		"created_at":   r.CreatedAt,
 		"updated_at":   r.UpdatedAt,
 	}
@@ -128,6 +129,7 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 		Members     []string `json:"members"`
 		MaxRounds   *int     `json:"max_rounds,omitempty"`
 		MaxMessages *int     `json:"max_messages,omitempty"`
+		HistoryCap  *int     `json:"history_cap,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -143,6 +145,9 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxMessages != nil {
 		cfg.MaxMessages = *req.MaxMessages
+	}
+	if req.HistoryCap != nil {
+		cfg.HistoryCap = *req.HistoryCap
 	}
 	if err := mgr.CreateRoom(cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -179,6 +184,7 @@ func (s *Server) handleRoomUpdate(w http.ResponseWriter, r *http.Request, id str
 		Members     []string `json:"members,omitempty"`
 		MaxRounds   *int     `json:"max_rounds,omitempty"`
 		MaxMessages *int     `json:"max_messages,omitempty"`
+		HistoryCap  *int     `json:"history_cap,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -200,6 +206,9 @@ func (s *Server) handleRoomUpdate(w http.ResponseWriter, r *http.Request, id str
 		}
 		if req.MaxMessages != nil {
 			c.MaxMessages = *req.MaxMessages
+		}
+		if req.HistoryCap != nil {
+			c.HistoryCap = *req.HistoryCap
 		}
 	})
 	if err != nil {

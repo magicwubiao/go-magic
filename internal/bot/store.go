@@ -340,24 +340,47 @@ type RoomConfig struct {
 	MaxRounds int `json:"max_rounds,omitempty"`
 	// MaxMessages caps how many recent room messages are included in each
 	// bot's context prompt (default 10, matching Hermes' 10-message cap).
-	MaxMessages int   `json:"max_messages,omitempty"`
-	CreatedAt   int64 `json:"created_at"`
-	UpdatedAt   int64 `json:"updated_at"`
+	// It is a PROMPT window only: it no longer trims what is persisted (see
+	// HistoryCap), so tuning token spend cannot silently delete chat history.
+	MaxMessages int `json:"max_messages,omitempty"`
+	// HistoryCap caps how many room messages are persisted and served to the
+	// dashboard (default DefaultRoomHistoryCap). Kept separate from
+	// MaxMessages: the prompt window is a cost knob, history retention is a
+	// product promise. Old rooms without the field fall back to the default,
+	// not to their MaxMessages value, so upgrading never keeps truncating.
+	HistoryCap int   `json:"history_cap,omitempty"`
+	CreatedAt  int64 `json:"created_at"`
+	UpdatedAt  int64 `json:"updated_at"`
 }
 
 // RoomDefaults mirror Hermes' hard caps.
 const (
 	DefaultRoomMaxRounds   = 3
 	DefaultRoomMaxMessages = 10
-	MaxRoomMembers         = 6
-	MinRoomMembers         = 2
+	// DefaultRoomHistoryCap is how many messages a room keeps on disk and
+	// shows in the dashboard. Deliberately much larger than the prompt
+	// window: humans scroll back, models do not need to.
+	DefaultRoomHistoryCap = 500
+	MaxRoomMembers        = 6
+	MinRoomMembers        = 2
+	// MaxRoomRounds is the hard ceiling for MaxRounds. Without it a room
+	// configured with max_rounds=1000 turned one user message into a
+	// thousand sequential member turns with no round-level budget.
+	MaxRoomRounds = 10
+	// MaxRoomHistoryCap bounds the persisted log so a hand-edited config
+	// cannot grow the session row without limit.
+	MaxRoomHistoryCap = 5000
 )
 
 func (r *RoomConfig) Rounds() int {
-	if r.MaxRounds <= 0 {
-		return DefaultRoomMaxRounds
+	n := r.MaxRounds
+	if n <= 0 {
+		n = DefaultRoomMaxRounds
 	}
-	return r.MaxRounds
+	if n > MaxRoomRounds {
+		n = MaxRoomRounds
+	}
+	return n
 }
 
 func (r *RoomConfig) MessagesCap() int {
@@ -365,6 +388,18 @@ func (r *RoomConfig) MessagesCap() int {
 		return DefaultRoomMaxMessages
 	}
 	return r.MaxMessages
+}
+
+// History returns the persisted/visible message cap for this room.
+func (r *RoomConfig) History() int {
+	n := r.HistoryCap
+	if n <= 0 {
+		n = DefaultRoomHistoryCap
+	}
+	if n > MaxRoomHistoryCap {
+		n = MaxRoomHistoryCap
+	}
+	return n
 }
 
 func (s *Store) roomPath(id string) string {

@@ -57,7 +57,8 @@ func init() {
 	editCmd.Flags().StringVar(&roomsFlagTopic, "topic", "", "New room topic")
 	editCmd.Flags().StringVar(&roomsFlagMembers, "members", "", "Comma-separated bot names (2-6); replaces the member list")
 	editCmd.Flags().IntVar(&roomsFlagRounds, "rounds", 0, "Max speaking rounds per message (default 3)")
-	editCmd.Flags().IntVar(&roomsFlagMaxMessages, "max-messages", 0, "Recent messages per bot context (default 10)")
+	editCmd.Flags().IntVar(&roomsFlagMaxMessages, "max-messages", 0, "Recent messages per bot context window (default 10)")
+	editCmd.Flags().IntVar(&roomsFlagHistoryCap, "history-cap", 0, "Messages kept in the room history and dashboard (default 500)")
 
 	roomsCmd.AddCommand(createCmd)
 	roomsCmd.AddCommand(sendCmd)
@@ -95,6 +96,7 @@ var (
 	roomsFlagName        string
 	roomsFlagRounds      int
 	roomsFlagMaxMessages int
+	roomsFlagHistoryCap  int
 )
 
 func newRoomsManager() (*bot.Manager, error) {
@@ -215,7 +217,7 @@ func runRoomsEdit(cmd *cobra.Command, args []string) error {
 	if !cmd.Flags().Changed("name") && !cmd.Flags().Changed("topic") &&
 		!cmd.Flags().Changed("members") && !cmd.Flags().Changed("rounds") &&
 		!cmd.Flags().Changed("max-messages") {
-		return fmt.Errorf("nothing to change: pass at least one of --name/--topic/--members/--rounds/--max-messages")
+		return fmt.Errorf("nothing to change: pass at least one of --name/--topic/--members/--rounds/--max-messages/--history-cap")
 	}
 
 	mgr, err := newRoomsManager()
@@ -263,6 +265,9 @@ func runRoomsEdit(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("max-messages") {
 			r.MaxMessages = roomsFlagMaxMessages
 		}
+		if cmd.Flags().Changed("history-cap") {
+			r.HistoryCap = roomsFlagHistoryCap
+		}
 	})
 	if err != nil {
 		return err
@@ -270,7 +275,7 @@ func runRoomsEdit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("✅ Room %q updated (%s)\n", room.Name, room.ID)
 	fmt.Printf("   Members: @%s\n", strings.Join(room.Members, ", @"))
 	fmt.Printf("   Topic:   %s\n", room.Topic)
-	fmt.Printf("   Rounds:  %d, context: last %d messages\n", room.Rounds(), room.MessagesCap())
+	fmt.Printf("   Rounds:  %d, context: last %d messages, history kept: %d\n", room.Rounds(), room.MessagesCap(), room.History())
 	return nil
 }
 

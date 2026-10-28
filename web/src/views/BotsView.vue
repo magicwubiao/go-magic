@@ -505,7 +505,7 @@
             <div class="chat-title-text">
               <n-text strong style="font-size: 16px;">{{ activeRoom.name || activeRoom.id }}</n-text>
               <n-text depth="3" style="font-size: 12px;">
-                {{ activeRoom.max_rounds }} {{ t('rooms.rounds') }} · {{ activeRoom.max_messages }} {{ t('rooms.msgsCap') }}
+                {{ activeRoom.max_rounds }} {{ t('rooms.rounds') }} · {{ activeRoom.history_cap }} {{ t('rooms.historyCap') }}
               </n-text>
             </div>
           </div>
@@ -957,6 +957,12 @@
               <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
                 <n-slider v-model:value="roomForm.max_messages" :min="4" :max="40" :step="2" style="flex: 1;" />
                 <n-text style="min-width: 24px;">{{ roomForm.max_messages }}</n-text>
+              </div>
+            </n-form-item-gi>
+            <n-form-item-gi :label="t('rooms.maxHistory')">
+              <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                <n-slider v-model:value="roomForm.history_cap" :min="50" :max="2000" :step="50" style="flex: 1;" />
+                <n-text style="min-width: 36px;">{{ roomForm.history_cap }}</n-text>
               </div>
             </n-form-item-gi>
           </n-grid>
@@ -1861,9 +1867,11 @@ const showRoomEditor = ref(false)
 const editingRoomId = ref<string | null>(null)
 const roomSaving = ref(false)
 
-// Room limit defaults — must match backend DefaultRoomMaxRounds/MaxMessages.
+// Room limit defaults — must match backend DefaultRoomMaxRounds/MaxMessages/
+// DefaultRoomHistoryCap.
 const DEFAULT_MAX_ROUNDS = 3
 const DEFAULT_MAX_MESSAGES = 10
+const DEFAULT_HISTORY_CAP = 500
 
 /** Clamp a room limit into its valid range; fall back to the default when 0/NaN. */
 function normRounds(v: number | undefined): number {
@@ -1874,6 +1882,10 @@ function normMessages(v: number | undefined): number {
   const n = Number.isFinite(v) && (v as number) > 0 ? (v as number) : DEFAULT_MAX_MESSAGES
   return Math.min(40, Math.max(4, Math.round(n)))
 }
+function normHistory(v: number | undefined): number {
+  const n = Number.isFinite(v) && (v as number) > 0 ? (v as number) : DEFAULT_HISTORY_CAP
+  return Math.min(2000, Math.max(50, Math.round(n)))
+}
 
 const roomForm = reactive({
   name: '',
@@ -1881,6 +1893,7 @@ const roomForm = reactive({
   members: [] as string[],
   max_rounds: DEFAULT_MAX_ROUNDS,
   max_messages: DEFAULT_MAX_MESSAGES,
+  history_cap: DEFAULT_HISTORY_CAP,
 })
 
 function openRoomCreate() {
@@ -1890,6 +1903,7 @@ function openRoomCreate() {
   roomForm.members = []
   roomForm.max_rounds = DEFAULT_MAX_ROUNDS
   roomForm.max_messages = DEFAULT_MAX_MESSAGES
+  roomForm.history_cap = DEFAULT_HISTORY_CAP
   showRoomEditor.value = true
   if (botsStore.bots.length === 0) {
     void botsStore.loadBots()
@@ -1906,6 +1920,7 @@ function openRoomEdit() {
   // sliders never show an out-of-range thumb (0 on a min=1 slider).
   roomForm.max_rounds = normRounds(activeRoom.value.max_rounds)
   roomForm.max_messages = normMessages(activeRoom.value.max_messages)
+  roomForm.history_cap = normHistory(activeRoom.value.history_cap)
   showRoomEditor.value = true
   if (botsStore.bots.length === 0) {
     void botsStore.loadBots()
@@ -1949,6 +1964,7 @@ async function saveRoomEditor() {
     members: [...roomForm.members],
     max_rounds: normRounds(roomForm.max_rounds),
     max_messages: normMessages(roomForm.max_messages),
+    history_cap: normHistory(roomForm.history_cap),
   }
   try {
     if (editingRoomId.value) {

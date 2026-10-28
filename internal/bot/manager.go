@@ -133,7 +133,17 @@ type Manager struct {
 	// Lock order: cfgMu is acquired BEFORE m.mu and never while m.mu is held.
 	cfgMu     sync.Mutex
 	queueCond *sync.Cond
-	stopCh    chan struct{}
+	// roomCond wakes the per-bot ROOM worker (see roomWorkerLoop). Rooms get
+	// their own queue and worker so a coordinated round — minutes of serial
+	// member turns — can no longer park a user's direct message behind it.
+	roomCond *sync.Cond
+	// roomMu serializes read-modify-write cycles over room config files
+	// (CreateRoom/UpdateRoom/DeleteRoom). Two concurrent PATCHes both loaded
+	// the same snapshot and saved it back, dropping one update.
+	//
+	// Lock order: roomMu is acquired BEFORE m.mu and never while m.mu is held.
+	roomMu sync.Mutex
+	stopCh chan struct{}
 	rootCtx   context.Context // lifecycle context passed to Start(); used by late-joined workers
 	wg        sync.WaitGroup
 	// stopping is set by Stop() before it waits for the worker WaitGroup. Once
@@ -171,6 +181,13 @@ type botRuntime struct {
 	ag    *agent.Agent
 	queue []pendingMessage
 
+	// roomQueue holds group-chat member turns. It is drained by a SEPARATE
+	// worker (roomWorkerLoop) so a room round — which can take minutes — never
+	// blocks the bot's direct chat. Both workers run the same processMessage;
+	// the agents are distinct (ag vs roomAgents[room]), so the two histories
+	// stay independent. Guarded by m.mu.
+	roomQueue []pendingMessage
+
 	// lastActive is the Unix-seconds timestamp of the bot's most recent
 	// completed turn (chat, DM, or routine). Guarded by m.mu. 0 = never.
 	lastActive int64
@@ -188,6 +205,13 @@ type botRuntime struct {
 	turnRunning bool
 	turnCancel  context.CancelFunc
 	turnRoomID  string
+
+	// roomTurnRunning/roomTurnCancel mirror the pair above for the room
+	// worker. Kept separate from turnRunning so CancelTurn (the direct-chat
+	// stop button) can no longer kill a group-chat member turn, and so
+	// GuideBot keeps seeing "no steerable canonical turn". Guarded by m.mu.
+	roomTurnRunning bool
+	roomTurnCancel  context.CancelFunc
 
 	// workerWaiting is true while the queue worker is parked in queueCond.Wait()
 	// — i.e. it has already seen the current queue contents. Guarded by m.mu.
@@ -231,6 +255,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		stopCh:   make(chan struct{}),
 	}
 	m.queueCond = sync.NewCond(&m.mu)
+	m.roomCond = sync.NewCond(&m.mu)
 
 	// Follow the same approval policy as web/CLI sessions (config approval
 	// section). Nil on init failure → agents keep the builtin default hook.
@@ -291,9 +316,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Launch one worker per bot so messages within a bot are serialized
 	// (canonical chat is single-threaded), while different bots run concurrently.
 	// wg.Add happens while mu is held so it can never race Stop()'s wg.Wait().
+	// Room turns get a second, independent worker per bot: they must not
+	// serialize behind (or block) the direct chat.
 	for name := range m.bots {
-		m.wg.Add(1)
+		m.wg.Add(2)
 		go m.workerLoop(ctx, name)
+		go m.roomWorkerLoop(ctx, name)
 	}
 	m.mu.Unlock()
 
@@ -331,6 +359,9 @@ func (m *Manager) Stop() {
 	close(m.stopCh)
 	m.mu.Lock()
 	m.queueCond.Broadcast()
+	// Room workers park on their own condition variable; waking only the
+	// direct-chat ones left them asleep forever and Stop() blocked in wg.Wait.
+	m.roomCond.Broadcast()
 	// Snapshot under the lock: UpdateBot/SetBotActive/DeleteBot may still be
 	// running from an API handler and mutate this map concurrently.
 	schedulers := make([]*RoutineScheduler, 0, len(m.routines))
@@ -377,9 +408,28 @@ func (m *Manager) ReloadConfig(cfg *config.Config) {
 	log.Infof("[BotMode] Config reloaded (history_window=%d)", m.historyWindow())
 }
 
-// workerLoop drains one bot's queue sequentially.
+// workerLoop drains one bot's direct-chat queue sequentially.
 func (m *Manager) workerLoop(ctx context.Context, key string) {
+	m.queueLoop(ctx, key, false)
+}
+
+// roomWorkerLoop drains one bot's group-chat queue. Rooms used to share the
+// direct-chat queue, so a multi-minute coordinated round parked every DM and
+// web-chat message behind it with no visible reason.
+func (m *Manager) roomWorkerLoop(ctx context.Context, key string) {
+	m.queueLoop(ctx, key, true)
+}
+
+// queueLoop is the shared drain loop for both queues. room selects which one.
+// The two loops are deliberately separate: the agents they touch are
+// different instances (canonical vs per-room), so their histories cannot
+// interleave.
+func (m *Manager) queueLoop(ctx context.Context, key string, room bool) {
 	defer m.wg.Done()
+	cond := m.queueCond
+	if room {
+		cond = m.roomCond
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -396,7 +446,11 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 				m.mu.Unlock()
 				return
 			}
-			if len(rt.queue) > 0 {
+			q := rt.queue
+			if room {
+				q = rt.roomQueue
+			}
+			if len(q) > 0 {
 				break
 			}
 			// Re-check stop before sleeping again: Broadcast wakes us here
@@ -411,21 +465,30 @@ func (m *Manager) workerLoop(ctx context.Context, key string) {
 				return
 			default:
 			}
-			m.bots[key].workerWaiting = true
-			m.queueCond.Wait()
+			if !room {
+				m.bots[key].workerWaiting = true
+			}
+			cond.Wait()
 			// Wait may return after DeleteBot removed the runtime; the map
 			// lookup is then nil and a bare field write would panic.
-			if rt := m.bots[key]; rt != nil {
+			if rt := m.bots[key]; rt != nil && !room {
 				rt.workerWaiting = false
 			}
 		}
-		msg := m.bots[key].queue[0]
-		m.bots[key].queue = m.bots[key].queue[1:]
+		rt := m.bots[key]
+		var msg pendingMessage
+		if room {
+			msg = rt.roomQueue[0]
+			rt.roomQueue = rt.roomQueue[1:]
+		} else {
+			msg = rt.queue[0]
+			rt.queue = rt.queue[1:]
+		}
 		// If the bot was paused (deactivated) while this message sat in the
 		// queue, drop it rather than process it: a paused bot must not act on
 		// new input. Notify a synchronous caller so it doesn't hang forever.
-		if !m.bots[key].cfg.IsActive() {
-			pausedName := m.bots[key].cfg.Name
+		if !rt.cfg.IsActive() {
+			pausedName := rt.cfg.Name
 			m.mu.Unlock()
 			// Log it: dropping silently made "pause, resume" look like the bot
 			// had swallowed every message it received while paused.
@@ -455,7 +518,7 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime, roomID string) (*agent.
 		if a, ok := rt.roomAgents[roomID]; ok {
 			return a, nil
 		}
-		ag, err := m.buildAgent(rt.cfg, RoomSessionID(rt.cfg.Name, roomID))
+		ag, err := m.buildAgent(rt.cfg, RoomSessionID(rt.cfg.Name, roomID), roomID)
 		if err != nil {
 			return nil, err
 		}
@@ -466,7 +529,7 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime, roomID string) (*agent.
 	if rt.ag != nil {
 		return rt.ag, nil
 	}
-	ag, err := m.buildAgent(rt.cfg, CanonicalSessionID(rt.cfg.Name))
+	ag, err := m.buildAgent(rt.cfg, CanonicalSessionID(rt.cfg.Name), "")
 	if err != nil {
 		return nil, err
 	}
@@ -475,17 +538,26 @@ func (m *Manager) getOrCreateAgentLocked(rt *botRuntime, roomID string) (*agent.
 }
 
 // buildAgent constructs a fresh agent for one bot session, restoring its
-// persisted history. Caller must hold m.mu (buildBotSystemPrompt reads cfg).
-func (m *Manager) buildAgent(bc *Config, sessionID string) (*agent.Agent, error) {
+// persisted history. roomID is empty for the canonical chat and the room ID
+// for a group-chat agent. Caller must hold m.mu (buildBotSystemPrompt reads cfg).
+func (m *Manager) buildAgent(bc *Config, sessionID, roomID string) (*agent.Agent, error) {
 	prov, registry, err := buildBotDeps(m.cfg, bc, m.skillMgr)
 	if err != nil {
 		return nil, err
 	}
 
-	// Register the bot-to-bot messaging tool (message_agent), Hermes-style.
-	registry.Register(newMessageAgentTool(m, bc.MentionTag()))
-	// Register the bot-to-bot delegation tool for synchronous subtask hand-off.
-	registry.Register(newDelegateTaskTool(m, bc.MentionTag()))
+	// Fleet messaging is a DIRECT-CHAT capability. Inside a room it is
+	// actively harmful: the room log is the broadcast surface every member and
+	// the human read, while message_agent/delegate_task move the conversation
+	// into someone's private queue where nobody else can follow it (and
+	// delegate_task blocks the target's queue, which may be running its own
+	// room round). Rooms speak in the room.
+	if roomID == "" {
+		// Register the bot-to-bot messaging tool (message_agent), Hermes-style.
+		registry.Register(newMessageAgentTool(m, bc.MentionTag()))
+		// Register the bot-to-bot delegation tool for synchronous subtask hand-off.
+		registry.Register(newDelegateTaskTool(m, bc.MentionTag()))
+	}
 	// Register the per-bot long-term memory tool so the bot can persist what
 	// it learns into its own Memory block (Hermes' runtime MEMORY.md writes).
 	registry.Register(newBotMemoryTool(m, bc.Name))
@@ -649,17 +721,42 @@ func (m *Manager) processMessage(ctx context.Context, key string, msg pendingMes
 		}
 		return
 	}
-	rt.turnRunning = true
-	rt.turnCancel = cancel
-	rt.turnRoomID = msg.RoomID
+	// Room turns and direct-chat turns now run on separate workers, so their
+	// in-flight state must not share one slot: a room member turn overwriting
+	// rt.turnCancel is what let a DM's "stop" button cancel a group chat (and
+	// what made CancelTurn see the wrong turn).
+	if msg.RoomID != "" {
+		rt.roomTurnRunning = true
+		rt.roomTurnCancel = cancel
+	} else {
+		rt.turnRunning = true
+		rt.turnCancel = cancel
+		rt.turnRoomID = ""
+	}
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
-		rt.turnRunning = false
-		rt.turnCancel = nil
-		rt.turnRoomID = ""
+		if msg.RoomID != "" {
+			rt.roomTurnRunning = false
+			rt.roomTurnCancel = nil
+		} else {
+			rt.turnRunning = false
+			rt.turnCancel = nil
+			rt.turnRoomID = ""
+		}
 		m.mu.Unlock()
 	}()
+
+	// Room turns are stateless by design: a member's context for one turn is
+	// the room log inside buildRoomPrompt plus its persona — exactly what the
+	// coordinator hands it. Accumulating the log in the member's own session
+	// made context grow as O(rounds²) (round 3's history carried three
+	// increasingly long snapshots of the same log) and duplicated what the
+	// next prompt already contains. The room log IS the group memory; the
+	// member session keeps just this turn for debuggability.
+	if msg.RoomID != "" {
+		ag.SetHistory(nil)
+	}
 
 	// runTurn executes one agent turn (streaming or blocking) and returns the
 	// full assistant text. Deltas are forwarded to msg.onDelta when set, and
@@ -926,6 +1023,10 @@ func (m *Manager) runtimeByRefLocked(ref string) (*botRuntime, string) {
 
 // EnqueueMsg appends a pre-built message to a bot's queue. botName may be a bot
 // name or its @mention tag.
+//
+// Room turns (msg.RoomID != "") go to the room queue, which a dedicated worker
+// drains; everything else stays on the direct-chat queue. Same per-queue
+// serialization, but a room round no longer blocks the human's DM.
 func (m *Manager) EnqueueMsg(botName string, msg pendingMessage) error {
 	m.mu.Lock()
 	rt, _ := m.runtimeByRefLocked(botName)
@@ -933,10 +1034,19 @@ func (m *Manager) EnqueueMsg(botName string, msg pendingMessage) error {
 		m.mu.Unlock()
 		return fmt.Errorf("bot not found: %s", botName)
 	}
-	rt.queue = append(rt.queue, msg)
+	room := msg.RoomID != ""
+	if room {
+		rt.roomQueue = append(rt.roomQueue, msg)
+	} else {
+		rt.queue = append(rt.queue, msg)
+	}
 	m.mu.Unlock()
 
-	m.queueCond.Broadcast()
+	if room {
+		m.roomCond.Broadcast()
+	} else {
+		m.queueCond.Broadcast()
+	}
 	return nil
 }
 
@@ -1113,7 +1223,7 @@ func (m *Manager) IsBusy(botName string) bool {
 	if rt == nil {
 		return false
 	}
-	return rt.turnRunning || len(rt.queue) > 0
+	return rt.turnRunning || len(rt.queue) > 0 || rt.roomTurnRunning || len(rt.roomQueue) > 0
 }
 
 // GuideBot injects a steering message into the bot's in-flight canonical-chat
@@ -1149,9 +1259,14 @@ func (m *Manager) GuideBot(botName, text string) (bool, error) {
 	return true, nil
 }
 
-// CancelTurn cancels the bot's in-flight turn, if any. Returns true when a
-// running turn was actually canceled. Queued (not yet started) messages are
-// not affected — they have no cancellable context yet.
+// CancelTurn cancels the bot's in-flight DIRECT-CHAT turn, if any. Returns
+// true when a running turn was actually canceled. Queued (not yet started)
+// messages are not affected — they have no cancellable context yet.
+//
+// Room turns are deliberately out of reach: their lifetime is owned by the
+// room's StopRoomRound (rt.roomTurnCancel), and a DM stop button killing a
+// group-chat member turn used to leave the room waiting on a reply that was
+// cancelled elsewhere.
 func (m *Manager) CancelTurn(botName string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1704,6 +1819,7 @@ func (m *Manager) SetBotActive(name string, active bool) (*Config, error) {
 	m.mu.Unlock()
 
 	m.queueCond.Broadcast() // wake worker so it re-checks active state
+	m.roomCond.Broadcast()
 	log.Infof("[BotMode] Bot %q %s", name, map[bool]string{true: "activated", false: "paused"}[active])
 	return cfg, nil
 }
@@ -1731,14 +1847,22 @@ func (m *Manager) DeleteBot(name string) error {
 		// Drop any pending messages so the worker exits promptly, and abort the
 		// turn that is currently in flight. Without the cancel the deleted bot
 		// kept running to completion — burning tokens and writing history for a
-		// bot that no longer exists.
+		// bot that no longer exists. Both queues and both turn slots are
+		// drained: room turns run on their own worker now.
 		dropped = rt.queue
+		dropped = append(dropped, rt.roomQueue...)
 		rt.queue = nil
+		rt.roomQueue = nil
 		if rt.turnCancel != nil {
 			rt.turnCancel()
 			rt.turnCancel = nil
 		}
+		if rt.roomTurnCancel != nil {
+			rt.roomTurnCancel()
+			rt.roomTurnCancel = nil
+		}
 		rt.turnRunning = false
+		rt.roomTurnRunning = false
 		delete(m.bots, key)
 	}
 	m.mu.Unlock()
@@ -1759,6 +1883,7 @@ func (m *Manager) DeleteBot(name string) error {
 	}
 
 	m.queueCond.Broadcast()
+	m.roomCond.Broadcast()
 
 	if err := m.store.Delete(cfg.Name); err != nil {
 		return fmt.Errorf("failed to delete bot: %w", err)
@@ -1979,8 +2104,11 @@ func (m *Manager) startBotLocked(cfg *Config) {
 	// Registered while mu is held: a concurrent Stop() either sees the bot
 	// before starting its Wait (and the worker exits on stopCh/ctx), or sets
 	// stopping first and this whole call bails out above.
-	m.wg.Add(1)
+	// Two workers: direct chat and group-chat turns (see queueLoop). A bot
+	// created at runtime must get both, otherwise its room turns queue forever.
+	m.wg.Add(2)
 	go m.workerLoop(ctx, key)
+	go m.roomWorkerLoop(ctx, key)
 	m.mu.Unlock()
 
 	log.Infof("[BotMode] Bot %q is now online (%s)", cfg.Name, cfg.Title)

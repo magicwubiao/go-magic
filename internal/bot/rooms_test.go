@@ -206,12 +206,14 @@ func TestDeleteRoomRemovesSessionsAndCoordinator(t *testing.T) {
 	}
 }
 
-// TestRoomMessageHistoryIsCapped: the shared room log keeps only the most recent
-// MessagesCap entries.
-func TestRoomMessageHistoryIsCapped(t *testing.T) {
+// TestRoomHistoryAndPromptWindowAreSeparate: MaxMessages is the PROMPT window
+// (token cost), HistoryCap is what is persisted and shown to the human. They
+// used to be the same number, so tuning the prompt window silently deleted the
+// user's chat history after 10 messages.
+func TestRoomHistoryAndPromptWindowAreSeparate(t *testing.T) {
 	mgr := newTestManager(t, "alice", "bob")
 
-	room := &RoomConfig{Name: "r", Members: []string{"alice", "bob"}, MaxMessages: 3}
+	room := &RoomConfig{Name: "r", Members: []string{"alice", "bob"}, MaxMessages: 3, HistoryCap: 5}
 	if err := mgr.CreateRoom(room); err != nil {
 		t.Fatal(err)
 	}
@@ -219,15 +221,41 @@ func TestRoomMessageHistoryIsCapped(t *testing.T) {
 		mgr.appendRoomMessage(room, "user", fmt.Sprintf("m%d", i), nil)
 	}
 
+	// Persisted/visible history keeps HistoryCap entries, not the prompt cap.
 	msgs, err := mgr.RoomMessages(room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 3 {
-		t.Fatalf("history length = %d, want the 3-message cap", len(msgs))
+	if len(msgs) != 5 {
+		t.Fatalf("history length = %d, want the 5-message history cap", len(msgs))
 	}
-	if msgs[0].Content != "m3" || msgs[2].Content != "m5" {
-		t.Errorf("cap kept the wrong window: %s..%s", msgs[0].Content, msgs[2].Content)
+	if msgs[0].Content != "m1" || msgs[4].Content != "m5" {
+		t.Errorf("history cap kept the wrong window: %s..%s", msgs[0].Content, msgs[4].Content)
+	}
+
+	// The prompt still carries only the last MaxMessages entries.
+	prompt := mgr.buildRoomPrompt(room, "alice", msgs, 0, 1)
+	if !strings.Contains(prompt, "m5") || !strings.Contains(prompt, "m3") {
+		t.Errorf("prompt window dropped recent messages:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "m1") || strings.Contains(prompt, "m2") {
+		t.Errorf("prompt carried more than the MaxMessages window:\n%s", prompt)
+	}
+}
+
+// TestRoomRoundsAreClamped keeps a hand-written max_rounds=1000 from turning
+// one user message into an unbounded run of member turns.
+func TestRoomRoundsAreClamped(t *testing.T) {
+	mgr := newTestManager(t, "alice", "bob")
+	room := &RoomConfig{Name: "r", Members: []string{"alice", "bob"}, MaxRounds: 1000}
+	if err := mgr.CreateRoom(room); err != nil {
+		t.Fatal(err)
+	}
+	if got := room.Rounds(); got != MaxRoomRounds {
+		t.Errorf("Rounds() = %d, want the %d ceiling", got, MaxRoomRounds)
+	}
+	if room.MaxRounds != MaxRoomRounds {
+		t.Errorf("persisted MaxRounds = %d, want it clamped to %d", room.MaxRounds, MaxRoomRounds)
 	}
 }
 
@@ -246,7 +274,14 @@ func TestRoomHelpers(t *testing.T) {
 			t.Errorf("needsHuman(%q) = false, want true", s)
 		}
 	}
-	normal := []string{"@alice what do you think", "looks good to me", ""}
+	normal := []string{
+		"@alice what do you think",
+		"looks good to me",
+		"",
+		// 正文里提到协议不算升级：旧实现用全串 Contains，成员只要复述一句
+		// "然后升级给 user" 就会把整轮提前终止。
+		"if the plan is unclear we could escalate to user later",
+	}
 	for _, s := range normal {
 		if needsHuman(s) {
 			t.Errorf("needsHuman(%q) = true, want false", s)

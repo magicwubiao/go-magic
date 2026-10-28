@@ -7,8 +7,12 @@ export interface Room {
   name: string
   topic: string
   members: string[]
+  /** Speaking rounds per user message (server clamps to 10). */
   max_rounds: number
+  /** How many recent messages each member sees in its prompt (token window). */
   max_messages: number
+  /** How many messages are persisted and shown in the room (default 500). */
+  history_cap: number
   created_at: number
   updated_at: number
 }
@@ -118,7 +122,10 @@ export async function sendRoomMessage(
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30 * 60 * 1000)
+  // Slightly above the backend's 30-minute round budget: the server ends the
+  // round on its own first, and the client then sees a normal response instead
+  // of racing an abort against it.
+  const timeoutId = setTimeout(() => controller.abort(), 35 * 60 * 1000)
   const onOuterAbort = () => controller.abort()
   signal?.addEventListener('abort', onOuterAbort)
 
