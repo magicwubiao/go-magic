@@ -1331,6 +1331,7 @@ export default {
     filterFailed: '失败',
     noMatchedRuns: '没有匹配的运行记录',
     selectRunHint: '从左侧选择一次运行，查看完整输出',
+    backToRuns: '运行记录',
     noOutput: '本次运行没有输出内容',
     errorTitle: '错误详情',
     copyOutput: '复制',

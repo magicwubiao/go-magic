@@ -1329,6 +1329,7 @@ export default {
     filterFailed: 'Failed',
     noMatchedRuns: 'No matching runs',
     selectRunHint: 'Pick a run on the left to see its full output',
+    backToRuns: 'Runs',
     noOutput: 'This run produced no output',
     errorTitle: 'Error details',
     copyOutput: 'Copy',

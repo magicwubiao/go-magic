@@ -731,7 +731,7 @@ const viewportWidth = ref(window.innerWidth)
 function onResize() { viewportWidth.value = window.innerWidth }
 // 断点与 App.vue 的移动端规范保持一致（768px）
 const isNarrow = computed(() => viewportWidth.value <= 768)
-const drawerWidth = computed(() => (viewportWidth.value <= 768 ? '100%' : viewportWidth.value < 880 ? '100%' : '1000px'))
+const drawerWidth = computed(() => (viewportWidth.value <= 880 ? '100%' : '1000px'))
 
 // 手机端抽屉只有一列：默认看运行历史，点某次运行切到详情，
 // 详情顶部给返回按钮。桌面端两栏并存，这个标记不起作用。
@@ -1409,8 +1409,16 @@ onMounted(() => cronStore.loadJobs())
 
 /* ===== 执行记录抽屉 ===== */
 .logs-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.logs-head-title { font-size: 15px; font-weight: 600; color: #1f2329; }
-.logs-head-sub { font-size: 12px; color: #9aa1ab; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logs-head-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.logs-head-sub { font-size: 12px; color: #9aa1ab; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
 
 .logs-layout {
   display: flex;
@@ -1518,6 +1526,12 @@ onMounted(() => cronStore.loadJobs())
   white-space: nowrap;
 }
 
+.run-item-chevron {
+  color: #c3c8d1;
+  align-self: center;
+  flex-shrink: 0;
+}
+
 .run-list-empty {
   padding: 32px 12px;
   text-align: center;
@@ -1543,6 +1557,29 @@ onMounted(() => cronStore.loadJobs())
   border-bottom: 1px solid #f0f2f5;
   flex-wrap: wrap;
 }
+
+/* 手机端详情顶部的返回条（桌面端不渲染） */
+.mobile-detail-nav {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f2f5;
+  background: #fafbfc;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 13px;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+.back-btn:active { opacity: 0.6; }
+
+/* 手机端单列切换用：谁不参与当前视图谁隐藏 */
+.is-hidden { display: none !important; }
 
 .detail-badges {
   display: flex;
@@ -1664,6 +1701,53 @@ onMounted(() => cronStore.loadJobs())
   .detail-workdir { padding: 7px 16px; }
 }
 
+/* ===== 手机端（断点与 App.vue 的 768 一致） =====
+   页面本身有 24px 内边距，小屏上太浪费宽度：这里收回一半，
+   并让任务卡片的操作按钮单独占一行，避免把标题挤成一列字。 */
+@media (max-width: 768px) {
+  .cron-page { margin: 0 -12px; }
+
+  .cron-head { margin-bottom: 12px; gap: 10px; }
+  .cron-title { font-size: 18px; }
+  .cron-subtitle { font-size: 12px; line-height: 1.5; }
+
+  .cron-empty { padding: 40px 16px; }
+
+  .job-card { padding: 12px 12px 11px 16px; border-radius: 9px; }
+  .job-top { flex-direction: column; align-items: stretch; gap: 9px; }
+  .job-name { font-size: 14px; }
+  .job-schedule-row { margin-top: 6px; font-size: 12px; }
+
+  .job-actions { width: 100%; gap: 6px; flex-wrap: wrap; }
+  /* tiny 按钮默认 22px，手指点不准：抬到 30px */
+  .job-actions :deep(.n-button) { height: 30px; padding: 0 10px; }
+  .job-actions :deep(.n-button .n-button__icon) { margin-right: 3px; }
+
+  .job-prompt { margin-top: 7px; font-size: 12px; }
+  .job-meta { margin-top: 9px; padding-top: 9px; gap: 7px 14px; font-size: 11.5px; }
+  .meta-value.mono { max-width: 150px; }
+  .job-error { font-size: 11.5px; }
+
+  /* 抽屉单列：列表与详情互斥显示，各自占满可用高度 */
+  .logs-layout { flex-direction: column; }
+  .run-list { width: 100%; flex: 1; min-height: 0; border-right: none; }
+  .run-detail { flex: 1; min-height: 0; }
+
+  .run-list-tools { padding: 10px 12px 8px; }
+  .run-item { padding: 11px 12px; }
+  .run-item-time { font-size: 12.5px; }
+  .run-item-preview { font-size: 12px; }
+
+  .logs-head-title { font-size: 14px; }
+  .logs-head-sub { font-size: 11.5px; }
+
+  .detail-head { padding: 10px 14px; gap: 8px; }
+  .detail-badges { gap: 6px 10px; font-size: 11.5px; }
+  .detail-workdir { padding: 7px 14px; }
+  .detail-scroll { padding: 14px 14px 28px; }
+  .detail-error pre { font-size: 11.5px; }
+}
+
 @media (prefers-color-scheme: dark) {
   .cron-title { color: #eceef1; }
   .job-card { background: #1f2126; border-color: #2e3138; }
@@ -1775,5 +1859,19 @@ onMounted(() => cronStore.loadJobs())
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+</style>
+
+<style>
+/* 抽屉被 naive-ui teleport 到 body：根元素上没有本组件的 data-v 属性，
+   scoped 里的 .cron-logs-drawer 选择器会失效，所以这几条放全局块。
+   手机上默认的 24px 头部留白太占地方，收紧到 14px。 */
+@media (max-width: 768px) {
+  .cron-logs-drawer .n-drawer-header {
+    padding: 12px 14px;
+  }
+  .cron-logs-drawer .n-drawer-body-content-wrapper {
+    overscroll-behavior: contain;
+  }
 }
 </style>

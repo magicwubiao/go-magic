@@ -214,6 +214,17 @@ async function handleClick(e: MouseEvent) {
 }
 .md-block :deep(.md-code:hover .md-code-copy) { opacity: 1; }
 
+@media (max-width: 768px) {
+  .md-block { font-size: 13px; line-height: 1.7; }
+  .md-block :deep(h1) { font-size: 17px; }
+  .md-block :deep(h2) { font-size: 15.5px; }
+  .md-block :deep(h3) { font-size: 14px; }
+  .md-block :deep(.md-code pre) { padding: 28px 11px 10px; }
+  .md-block :deep(.md-code code) { font-size: 11.5px; }
+  .md-block :deep(th),
+  .md-block :deep(td) { padding: 5px 8px; }
+}
+
 @media (prefers-color-scheme: dark) {
   .md-block { color: #d8dbe0; }
   .md-block :deep(h1),
