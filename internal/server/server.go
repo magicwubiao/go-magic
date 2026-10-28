@@ -1693,6 +1693,8 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// Agent Plugins (OpenAI Agent Plugins 1.0.0 spec):list & reload
 	mux.HandleFunc("/api/agent-plugins", withCORS(requireAuth(s.handleAgentPlugins)))
 	mux.HandleFunc("/api/agent-plugins/", withCORS(requireAuth(s.handleAgentPlugins)))
+	// 插件图标:给 <img> 用,带不上认证头,故不套 requireAuth(见 handlePluginIcon)。
+	mux.HandleFunc("/api/agent-plugins-icon/", withCORS(s.handlePluginIcon))
 	// Plugin providers
 	mux.HandleFunc("/api/dashboard/plugin-providers", withCORS(requireAuth(s.handlePluginProviders)))
 

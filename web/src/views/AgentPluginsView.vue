@@ -105,7 +105,16 @@
             <!-- Header -->
             <template #header>
               <n-space align="center" :size="8">
-                <n-icon size="18"><component :is="ExtensionPuzzleOutline" /></n-icon>
+                <n-avatar
+                  v-if="plugin.icon"
+                  :src="`/api/agent-plugins-icon/${encodeURIComponent(plugin.name)}`"
+                  :size="22"
+                  object-fit="contain"
+                  round
+                >
+                  <n-icon size="16"><component :is="ExtensionPuzzleOutline" /></n-icon>
+                </n-avatar>
+                <n-icon v-else size="18"><component :is="ExtensionPuzzleOutline" /></n-icon>
                 <span style="font-weight: 600;">{{ plugin.name }}</span>
                 <n-tag v-if="plugin.version" size="small" type="default">v{{ plugin.version }}</n-tag>
                 <n-tag v-if="plugin.rejected" size="small" type="error">{{ t('agentplugins.rejected') }}</n-tag>
@@ -157,6 +166,21 @@
 
             <!-- Description -->
             <n-text depth="3" v-if="plugin.description">{{ plugin.description }}</n-text>
+
+            <!-- Example Prompts ("你可以这样问") -->
+            <div
+              v-if="plugin.examples && plugin.examples.length"
+              class="ap-examples"
+            >
+              <div class="ap-examples-title">{{ t('agentplugins.examplesTitle') }}</div>
+              <div
+                v-for="(ex, i) in plugin.examples"
+                :key="i"
+                class="ap-example-item"
+              >
+                <n-text depth="2" style="font-size: 13px;">{{ ex }}</n-text>
+              </div>
+            </div>
 
             <!-- Disabled Hint -->
             <n-alert
@@ -232,6 +256,14 @@
                               {{ m.type }}
                             </n-tag>
                             <n-tag
+                              v-if="m.error_kind === 'auth'"
+                              size="tiny"
+                              type="warning"
+                            >
+                              {{ t('agentplugins.unauthorized') }}
+                            </n-tag>
+                            <n-tag
+                              v-else
                               size="tiny"
                               :type="m.error ? 'error' : (m.connected ? 'success' : 'default')"
                             >
@@ -239,10 +271,40 @@
                             </n-tag>
                           </n-space>
                         </template>
+                        <template #header-extra>
+                          <n-space :size="8">
+                            <n-button
+                              v-if="m.error_kind === 'auth' || (m.required_env && m.required_env.length && !m.connected)"
+                              size="tiny"
+                              type="primary"
+                              secondary
+                              :loading="!!store.pending[plugin.name]"
+                              @click="openCredentials(plugin.name)"
+                            >
+                              {{ t('agentplugins.authorize') }}
+                            </n-button>
+                            <n-button
+                              v-else-if="m.error"
+                              size="tiny"
+                              secondary
+                              :loading="!!store.pending[plugin.name]"
+                              @click="handleConnect(plugin.name, m.name)"
+                            >
+                              {{ t('agentplugins.retry') }}
+                            </n-button>
+                          </n-space>
+                        </template>
                         <template #description>
                           <n-space vertical :size="4">
                             <n-text depth="3" style="font-size: 12px;">
                               {{ t('agentplugins.toolCount') }}: {{ m.tools }}
+                            </n-text>
+                            <n-text
+                              v-if="m.required_env && m.required_env.length && !m.connected"
+                              type="warning"
+                              style="font-size: 12px;"
+                            >
+                              {{ t('agentplugins.needCredentials', { keys: m.required_env.join(', ') }) }}
                             </n-text>
                             <n-text v-if="m.error" type="error" style="font-size: 12px;">
                               {{ m.error }}
@@ -277,6 +339,50 @@
           </n-card>
         </n-gi>
       </n-grid>
+
+      <!-- Credentials Modal(授权表单) -->
+      <n-modal
+        v-model:show="credModal.show"
+        preset="card"
+        :title="t('agentplugins.credentialsTitle', { name: credModal.plugin })"
+        style="max-width: 520px;"
+      >
+        <n-spin v-if="credModal.loading" />
+        <template v-else>
+          <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 12px;">
+            {{ t('agentplugins.credentialsHint') }}
+          </n-text>
+          <n-form label-placement="top" size="small">
+            <n-form-item
+              v-for="key in credModal.keys"
+              :key="key"
+              :label="key"
+              required
+            >
+              <n-input
+                v-model:value="credModal.values[key]"
+                :placeholder="credModal.masked[key] === '***'
+                  ? t('agentplugins.credentialsKeep')
+                  : t('agentplugins.credentialsInput')"
+                type="password"
+                show-password-on="click"
+                clearable
+              />
+            </n-form-item>
+          </n-form>
+          <n-space justify="end" style="margin-top: 8px;">
+            <n-button size="small" @click="credModal.show = false">{{ t('common.cancel') }}</n-button>
+            <n-button
+              size="small"
+              type="primary"
+              :loading="!!store.pending[credModal.plugin]"
+              @click="handleSaveCredentials"
+            >
+              {{ t('agentplugins.authorizeSave') }}
+            </n-button>
+          </n-space>
+        </template>
+      </n-modal>
     </template>
   </div>
 </template>
@@ -284,7 +390,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NCollapseTransition, NDescriptions, NDescriptionsItem, NEmpty, NGi, NGrid, NIcon, NList, NListItem, NPopconfirm, NSpace, NSpin, NStatistic, NSwitch, NTag, NText, NThing, NTooltip } from 'naive-ui'
+import { NAlert, NAvatar, NButton, NCard, NCollapseTransition, NDescriptions, NDescriptionsItem, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NList, NListItem, NModal, NPopconfirm, NSpace, NSpin, NStatistic, NSwitch, NTag, NText, NThing, NTooltip } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   RefreshOutline,
@@ -417,6 +523,91 @@ async function handleUninstall(name: string) {
   }
 }
 
+// === 凭据授权 ===
+
+const credModal = reactive<{
+  show: boolean
+  loading: boolean
+  plugin: string
+  keys: string[]
+  values: Record<string, string>
+  masked: Record<string, string>
+}>({
+  show: false,
+  loading: false,
+  plugin: '',
+  keys: [],
+  values: {},
+  masked: {},
+})
+
+/** 打开授权表单:拉掩码视图,值为空 = 待填,*** = 已设置(留空即保持)。 */
+async function openCredentials(name: string) {
+  credModal.plugin = name
+  credModal.show = true
+  credModal.loading = true
+  credModal.keys = []
+  credModal.values = {}
+  credModal.masked = {}
+  try {
+    const cred = await store.loadCredentials(name)
+    const keys = Object.keys(cred.env || {}).sort()
+    credModal.keys = keys
+    credModal.masked = { ...(cred.env || {}) }
+    const values: Record<string, string> = {}
+    for (const k of keys) values[k] = ''
+    credModal.values = values
+  } catch (e: any) {
+    message.error(e.message || t('agentplugins.credentialsLoadFailed'))
+    credModal.show = false
+  } finally {
+    credModal.loading = false
+  }
+}
+
+/** 保存凭据:*** 原样回传(=保持原值),空串删除,其余为新值。 */
+async function handleSaveCredentials() {
+  const name = credModal.plugin
+  const env: Record<string, string> = {}
+  for (const k of credModal.keys) {
+    const v = credModal.values[k] ?? ''
+    env[k] = v === '' ? (credModal.masked[k] ?? '') : v
+  }
+  try {
+    const res = await store.saveCredentials(name, env)
+    credModal.show = false
+    const failed = (res.entries || []).filter((e) => !e.ok)
+    if (failed.length === 0) {
+      message.success(t('agentplugins.credentialsSaved', { name }))
+    } else {
+      // 部分条目仍连不上:把第一类错误亮出来,用户可据此改凭据或查网络。
+      const first = failed[0]
+      if (first.error_kind === 'auth') {
+        message.warning(t('agentplugins.credentialsRejected', { name }))
+      } else {
+        message.warning(t('agentplugins.credentialsPartial', { name, count: failed.length }))
+      }
+    }
+  } catch (e: any) {
+    message.error(e.message || t('agentplugins.credentialsSaveFailed'))
+  }
+}
+
+// === 单条目重试 ===
+
+async function handleConnect(name: string, server: string) {
+  try {
+    const res = await store.connectServer(name, server)
+    if (res.ok) {
+      message.success(t('agentplugins.connectOK', { name: server }))
+    } else {
+      message.error(res.error || t('agentplugins.connectFailed', { name: server }))
+    }
+  } catch (e: any) {
+    message.error(e.message || t('agentplugins.connectFailed', { name: server }))
+  }
+}
+
 onMounted(async () => {
   await store.loadPlugins()
   if (store.plugins.length > 0) {
@@ -442,5 +633,26 @@ onMounted(async () => {
 .drop-zone--active {
   border-color: #2080f0;
   background: #e8f4ff;
+}
+/* 示例问法("你可以这样问")区块 */
+.ap-examples {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(32, 128, 240, 0.08), rgba(32, 128, 240, 0.03));
+  border: 1px solid rgba(32, 128, 240, 0.15);
+}
+.ap-examples-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2080f0;
+  margin-bottom: 8px;
+}
+.ap-example-item {
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(32, 128, 240, 0.12);
+}
+.ap-example-item:last-child {
+  border-bottom: none;
 }
 </style>

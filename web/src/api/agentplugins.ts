@@ -7,6 +7,10 @@ export interface AgentPluginMCPEntry {
   connected: boolean
   tools: number
   error?: string
+  // 错误分类(auth/network/protocol/…),auth 时 UI 亮"授权"按钮。
+  error_kind?: string
+  // mcp.json 里值为空的 env key,即需要用户填写的凭据占位。
+  required_env?: string[]
 }
 
 export interface AgentPlugin {
@@ -22,6 +26,16 @@ export interface AgentPlugin {
   warnings: string[]
   skills: string[]
   mcp_servers: AgentPluginMCPEntry[]
+  // manifest 可选字段:图标(插件内相对路径)与示例问法。
+  icon?: string
+  examples?: string[]
+}
+
+// 插件凭据掩码视图:GET 返回值一律 ***(已设置)或 ''(待填)。
+export interface AgentPluginCredentials {
+  plugin: string
+  env: Record<string, string>
+  required_env: Record<string, string[]>
 }
 
 export interface AgentPluginsReloadResult {
@@ -83,4 +97,29 @@ export async function enableAgentPlugin(name: string): Promise<{ ok: boolean; na
 // 禁用插件。
 export async function disableAgentPlugin(name: string): Promise<{ ok: boolean; name: string; disabled: boolean }> {
   return request(`/agent-plugins/${encodeURIComponent(name)}/disable`, { method: 'POST' })
+}
+
+// 获取插件凭据掩码视图(值一律 *** 或 '',拿不到真实值)。
+export async function getPluginCredentials(name: string): Promise<AgentPluginCredentials> {
+  return request(`/agent-plugins/${encodeURIComponent(name)}/credentials`)
+}
+
+// 保存插件凭据并触发重连。值为 *** 表示保持原值,空串表示删除该 key。
+// 返回每个 MCP 条目的重连结果(含分类错误)。
+export async function setPluginCredentials(
+  name: string,
+  env: Record<string, string>,
+): Promise<{ ok: boolean; plugin: string; entries: { name: string; ok: boolean; connected: boolean; error?: string; error_kind?: string }[] }> {
+  return request(`/agent-plugins/${encodeURIComponent(name)}/credentials`, {
+    method: 'POST',
+    body: JSON.stringify({ env }),
+  })
+}
+
+// 重连插件的单个 MCP 条目(凭据之外的"重试"入口)。
+export async function connectPluginServer(name: string, server: string): Promise<{ ok: boolean; error?: string }> {
+  return request(
+    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/connect`,
+    { method: 'POST' },
+  )
 }

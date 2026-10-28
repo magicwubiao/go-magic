@@ -32,6 +32,15 @@ type Runtime struct {
 	// 供 UnregisterTools 在 reload/uninstall/disable 时清理,避免僵尸工具。
 	registered []string
 
+	// reg/pluginName 记录最近一次 RegisterTools 的注册表与插件名,
+	// 供 ReconnectEntry 在重连后"先注销旧工具再重注册新工具"。
+	reg        ToolRegistrar
+	pluginName string
+
+	// credentials 是用户为该插件填写的凭据(env key → value)。连接时合并进
+	// stdio 子进程环境(覆盖 mcp.json 的同名气)。由 server 层注入,读写走 mu。
+	credentials map[string]string
+
 	// reqID 为 CallTool 等请求生成自增 JSON-RPC id。
 	// 必须显式带 id:无 id 的报文是通知,transport 不等响应;
 	// 自增保证并发调用在同一 stdio 流上不撞 id。
@@ -78,14 +87,55 @@ func (r *Runtime) Start() error {
 		if err := r.connectEntry(entry); err != nil {
 			entry.Connected = false
 			entry.Error = err.Error()
+			entry.ErrorKind = mcp.KindOf(err).String()
 		}
 	}
 	return nil
 }
 
+// SetCredentials 注入/更新用户凭据(env key → value)。幂等;nil 表示清空。
+func (r *Runtime) SetCredentials(creds map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.credentials = creds
+}
+
+// credentialsSnapshot 返回当前凭据的拷贝,供连接时合并。
+func (r *Runtime) credentialsSnapshot() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.credentials) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(r.credentials))
+	for k, v := range r.credentials {
+		out[k] = v
+	}
+	return out
+}
+
+// withCredentials 返回叠加了用户凭据的 spec 拷贝(凭据覆盖 mcp.json 同名 env)。
+// 不改原 spec:重连/重载都以 mcp.json 为基准重新合并。
+func withCredentials(spec MCPServerSpec, creds map[string]string) MCPServerSpec {
+	if len(creds) == 0 || len(spec.Env) == 0 {
+		return spec
+	}
+	out := spec
+	env := make(map[string]string, len(spec.Env)+len(creds))
+	for k, v := range spec.Env {
+		env[k] = v
+	}
+	for k, v := range creds {
+		env[k] = v
+	}
+	out.Env = env
+	return out
+}
+
 // connectEntry 连接单个 MCP server 并发现工具。
 func (r *Runtime) connectEntry(entry *MCPEntryStatus) error {
-	tr, err := buildTransport(entry.Spec)
+	// 用户凭据最后合并(覆盖 mcp.json 同名 env),凭据改了无需重新 Load。
+	tr, err := buildTransport(withCredentials(entry.Spec, r.credentialsSnapshot()))
 	if err != nil {
 		return err
 	}
@@ -130,6 +180,63 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) error {
 	r.mu.Unlock()
 	entry.Connected = true
 	entry.ToolCount = len(res.Tools)
+	entry.Error = ""
+	entry.ErrorKind = ""
+	return nil
+}
+
+// ReconnectEntry 断开并重连单个 MCP server 条目,成功后用新工具列表重注册。
+//
+// 用于"补完凭据立即生效"的场景:server 层更新凭据后调用本方法,不必整包
+// reload(那会杀掉其它 server 的子进程、重注入全部 skills)。失败时保留旧连接
+// 已不可能(先关再连),但条目状态会带上分类错误供 UI 展示。
+func (r *Runtime) ReconnectEntry(serverName string) error {
+	// 先摘旧连接并停掉子进程:无论后面成败,旧 transport 都不能复用。
+	r.mu.Lock()
+	c, ok := r.conns[serverName]
+	if ok {
+		delete(r.conns, serverName)
+	}
+	reg, pluginName := r.reg, r.pluginName
+	r.mu.Unlock()
+	if ok && c != nil {
+		_ = c.transport.Close()
+	}
+
+	// 找到条目(静态校验失败/不存在的条目直接报错)。
+	var entry *MCPEntryStatus
+	for i := range r.plugin.MCPServers {
+		if r.plugin.MCPServers[i].Name == serverName {
+			entry = &r.plugin.MCPServers[i]
+			break
+		}
+	}
+	if entry == nil {
+		return fmt.Errorf("MCP server %q not found in plugin", serverName)
+	}
+	// 静态校验失败的条目(mcp.json 配置本身不合法):没有可运行的 spec,
+	// 重连没有意义。区分依据:连接失败会带 ErrorKind 分类,静态错误不会。
+	if entry.Error != "" && entry.ErrorKind == "" && !entry.Connected {
+		return fmt.Errorf("entry %q failed static validation: %s", serverName, entry.Error)
+	}
+
+	// 重连前先注销旧工具:重连后 tools/list 可能返回不同集合,
+	// 不注销会留下指向已关 transport 的僵尸工具。
+	if reg != nil {
+		r.UnregisterTools(reg)
+	}
+
+	if err := r.connectEntry(entry); err != nil {
+		entry.Connected = false
+		entry.Error = err.Error()
+		entry.ErrorKind = mcp.KindOf(err).String()
+		return err
+	}
+
+	// 用新工具列表重注册(ReconnectEntry 只在 server 层的注册表上调用)。
+	if reg != nil {
+		r.RegisterTools(reg, pluginName)
+	}
 	return nil
 }
 
@@ -266,6 +373,9 @@ func (r *Runtime) RegisterTools(reg ToolRegistrar, pluginName string) {
 
 	r.mu.Lock()
 	r.registered = append(r.registered, names...)
+	// 记住注册表与插件名,ReconnectEntry 重连后要用同一注册表重注册。
+	r.reg = reg
+	r.pluginName = pluginName
 	r.mu.Unlock()
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -180,6 +181,8 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		if p.Manifest != nil {
 			entry["version"] = p.Manifest.Version
 			entry["description"] = p.Manifest.Description
+			entry["icon"] = p.Manifest.Icon
+			entry["examples"] = p.Manifest.Examples
 		}
 		skillNames := make([]string, 0, len(p.Skills))
 		for _, s := range p.Skills {
@@ -191,11 +194,14 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		mcpEntries := make([]map[string]any, 0, len(p.MCPServers))
 		for _, ms := range p.MCPServers {
 			mcpEntries = append(mcpEntries, map[string]any{
-				"name":      ms.Name,
-				"type":      ms.Spec.Type,
-				"connected": ms.Connected,
-				"tools":     ms.ToolCount,
-				"error":     ms.Error,
+				"name":       ms.Name,
+				"type":       ms.Spec.Type,
+				"connected":  ms.Connected,
+				"tools":      ms.ToolCount,
+				"error":      ms.Error,
+				"error_kind": ms.ErrorKind,
+				// env 值为空的 key = 需要用户填写的凭据占位(mcp.json 约定)。
+				"required_env": emptyEnvKeys(ms.Spec.Env),
 			})
 		}
 		entry["mcp_servers"] = mcpEntries
@@ -205,4 +211,18 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		return out[i]["name"].(string) < out[j]["name"].(string)
 	})
 	return out
+}
+
+// emptyEnvKeys 返回 env 中值为空的 key 集合(排序保证稳定)。
+// 约定:mcp.json 里值为 "" 的 env key 是"需要用户填写的凭据占位",
+// 用户在授权表单里补值后经凭据合并生效。
+func emptyEnvKeys(env map[string]string) []string {
+	var keys []string
+	for k, v := range env {
+		if strings.TrimSpace(v) == "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }

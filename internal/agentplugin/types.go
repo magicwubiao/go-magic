@@ -43,17 +43,22 @@ const (
 // Manifest 描述 plugin.json 清单。
 // schema 为闭包:未知顶层字段须报告并忽略(非致命),其他 schema 违反为致命。
 type Manifest struct {
-	Schema      string         `json:"$schema"`           // 必须,选择规范校验契约
-	Name        string         `json:"name"`              // 必须,1-64 字符,小写字母/数字/连字符/点
-	Version     string         `json:"version,omitempty"` // 可选,推荐 SemVer
-	Description string         `json:"description,omitempty"`
-	Author      *Author        `json:"author,omitempty"`
-	Homepage    string         `json:"homepage,omitempty"`
-	Repository  string         `json:"repository,omitempty"`
-	License     string         `json:"license,omitempty"`
-	Keywords    []string       `json:"keywords,omitempty"`
-	Extensions  map[string]any `json:"extensions,omitempty"` // 反向域名命名空间,客户端按需消费
-	Unknown     []string       `json:"-"`                    // 加载时检测到的未知顶层字段(报告用)
+	Schema      string   `json:"$schema"`           // 必须,选择规范校验契约
+	Name        string   `json:"name"`              // 必须,1-64 字符,小写字母/数字/连字符/点
+	Version     string   `json:"version,omitempty"` // 可选,推荐 SemVer
+	Description string   `json:"description,omitempty"`
+	Author      *Author  `json:"author,omitempty"`
+	Homepage    string   `json:"homepage,omitempty"`
+	Repository  string   `json:"repository,omitempty"`
+	License     string   `json:"license,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
+	// Icon 是插件图标的插件内相对路径(如 "assets/icon.png"),纯展示用。
+	Icon string `json:"icon,omitempty"`
+	// Examples 是产品层"你可以这样问"的示例问法(纯展示,不参与协议)。
+	// 放在清单而不是 SKILL.md,是因为它描述的是插件整体而不是单个技能。
+	Examples   []string       `json:"examples,omitempty"`
+	Extensions map[string]any `json:"extensions,omitempty"` // 反向域名命名空间,客户端按需消费
+	Unknown    []string       `json:"-"`                    // 加载时检测到的未知顶层字段(报告用)
 }
 
 // Author 清单中的作者信息。
@@ -95,6 +100,9 @@ type MCPEntryStatus struct {
 	Connected bool          // 是否已连接
 	ToolCount int           // 已发现的工具数
 	Error     string        // 连接/校验失败原因(空表示成功)
+	// ErrorKind 是错误的可行动分类(auth/network/protocol/…,见 mcp.ErrorKind)。
+	// UI 据此决定亮"去授权"还是"查网络";空 = 无错误或无法归类。
+	ErrorKind string
 }
 
 // Plugin 表示一个已加载的 Agent Plugin。

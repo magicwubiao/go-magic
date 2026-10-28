@@ -373,10 +373,14 @@ type SkillsConfig struct {
 	UserDir    string   `json:"user_dir,omitempty"`    // Path to user-installed skills
 }
 
-// AgentPluginsConfig 管理 OpenAI Agent Plugins 1.0.0 插件的禁用列表。
+// AgentPluginsConfig 管理 OpenAI Agent Plugins 1.0.0 插件的禁用列表与用户凭据。
 // 启用为默认状态,仅记录被显式禁用的插件名(即 plugin.json 的 name 字段)。
 type AgentPluginsConfig struct {
 	Disabled []string `json:"disabled"`
+	// Credentials 存插件连接器的用户凭据:插件名 → env key → 值。
+	// 与 mcp_servers 的 env 同一套约定:只落盘供连接时合并进子进程环境,
+	// API 层一律按 *** 掩码,*** 回传时还原为磁盘真值。
+	Credentials map[string]map[string]string `json:"credentials,omitempty"`
 }
 
 // GatewayConfig represents gateway configuration

@@ -1,12 +1,14 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
@@ -24,6 +26,16 @@ func (s *Server) loadAgentPlugins() (*agentplugin.Manager, map[string]*agentplug
 	disabled := s.disabledAgentPlugins()
 	mgr := agentplugin.NewManager([]string{agentplugin.DefaultScanDir()}, disabled)
 	plugins := mgr.LoadAll()
+
+	// 注入用户凭据(必须在 StartAll 之前:连接时要把凭据合并进子进程环境)。
+	for name, mp := range plugins {
+		if mp.Runtime == nil {
+			continue
+		}
+		if creds := s.agentPluginCredentials(name); len(creds) > 0 {
+			mp.Runtime.SetCredentials(creds)
+		}
+	}
 
 	// 启动 MCP 连接(单 server 失败仅记录,不阻塞;禁用插件跳过)。
 	agentplugin.StartAll(plugins)
@@ -61,6 +73,16 @@ func (s *Server) disabledAgentPlugins() map[string]bool {
 		out[n] = true
 	}
 	return out
+}
+
+// agentPluginCredentials 读取指定插件的用户凭据(env key → value)。
+// 只在连接路径使用,永远不要把返回值直接序列化给前端。
+func (s *Server) agentPluginCredentials(name string) map[string]string {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return nil
+	}
+	return cfg.AgentPlugins.Credentials[name]
 }
 
 // setPluginDisabled 更新配置中的禁用状态并持久化。
@@ -200,6 +222,18 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 			return
 		case "disable":
 			s.toggleAgentPlugin(w, r, name, true)
+			return
+		case "credentials":
+			s.handlePluginCredentials(w, r, name)
+			return
+		case "mcp":
+			// 形如 {name}/mcp/{server}/connect:重连插件的单个 MCP 条目。
+			segs := strings.Split(rest, "/")
+			if len(segs) == 4 && segs[3] == "connect" && r.Method == http.MethodPost {
+				s.handlePluginServerConnect(w, r, segs[0], segs[2])
+				return
+			}
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 	}
@@ -382,4 +416,229 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 		"name":     name,
 		"disabled": disabled,
 	})
+}
+
+// handlePluginCredentials 查看与保存插件的用户凭据(env key → value)。
+//
+//	GET  /api/agent-plugins/{name}/credentials — 掩码视图(值一律 ***)+
+//	       required_env(每个 MCP 条目 mcp.json 里值为空的 key,即待填占位)。
+//	POST /api/agent-plugins/{name}/credentials — body {"env":{KEY:VALUE}}。
+//	       保存后立即合并进运行时并重连该插件所有条目,凭据补齐即刻生效。
+//
+// 掩码约定与 mcp_servers 的 env 一致:值只以 *** 回显,回传 *** 视为
+// "保持原值",空串表示删除该 key。
+func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request, name string) {
+	s.acquireServerMu("")
+	plugins := s.agentPlugins
+	s.releaseServerMu()
+	mp, ok := plugins[name]
+	if !ok || mp == nil || mp.Plugin == nil {
+		http.Error(w, "plugin not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		stored := s.agentPluginCredentials(name)
+		env := map[string]string{}
+		for k := range stored {
+			env[k] = maskedEnvValue
+		}
+		// 待填占位:值为空的 key 也要出现在表单里(即使已存了值,回显 *** 即可)。
+		required := map[string][]string{}
+		for _, ms := range mp.Plugin.MCPServers {
+			keys := make([]string, 0, len(ms.Spec.Env))
+			for k, v := range ms.Spec.Env {
+				keys = append(keys, k)
+				if _, seen := env[k]; !seen && strings.TrimSpace(v) == "" {
+					env[k] = ""
+				}
+			}
+			sort.Strings(keys)
+			required[ms.Name] = keys
+		}
+		jsonResponse(w, map[string]any{
+			"plugin":       name,
+			"env":          env,
+			"required_env": required,
+		})
+		return
+
+	case http.MethodPost:
+		var body struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+			http.Error(w, "invalid json body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// 掩码还原 + 空值删除,得到最终落盘的 key→value。
+		stored := s.agentPluginCredentials(name)
+		merged := map[string]string{}
+		for k, v := range stored {
+			merged[k] = v
+		}
+		for k, v := range body.Env {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if v == maskedEnvValue {
+				continue // *** = 保持原值
+			}
+			if strings.TrimSpace(v) == "" {
+				delete(merged, k) // 空串 = 清除
+				continue
+			}
+			merged[k] = v
+		}
+
+		// 持久化:与 setPluginDisabled 同一把写锁路径。
+		if err := s.setPluginCredentials(name, merged); err != nil {
+			http.Error(w, "persist credentials: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// 注入运行时并重连全部条目:单条目失败不阻断其它条目,
+		// 结果(含分类错误)在刷新后的 Summary 里可见。
+		if mp.Runtime != nil {
+			mp.Runtime.SetCredentials(merged)
+		}
+		results := s.reconnectPluginEntries(mp)
+
+		jsonResponse(w, map[string]any{
+			"ok":      true,
+			"plugin":  name,
+			"entries": results,
+		})
+		return
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handlePluginServerConnect 重连插件的单个 MCP 条目(凭据之外的"重试"入口)。
+func (s *Server) handlePluginServerConnect(w http.ResponseWriter, r *http.Request, name, server string) {
+	s.acquireServerMu("")
+	plugins := s.agentPlugins
+	s.releaseServerMu()
+	mp, ok := plugins[name]
+	if !ok || mp == nil || mp.Plugin == nil {
+		http.Error(w, "plugin not found", http.StatusNotFound)
+		return
+	}
+	if mp.Runtime == nil {
+		http.Error(w, "plugin has no MCP runtime (disabled or no mcp.json)", http.StatusConflict)
+		return
+	}
+	if err := mp.Runtime.ReconnectEntry(server); err != nil {
+		jsonResponse(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	jsonResponse(w, map[string]any{"ok": true, "plugin": name, "server": server})
+}
+
+// setPluginCredentials 把插件凭据写进配置并持久化。
+// 与 setPluginDisabled 相同的锁路径:全程 s.mu + cfgMu,原地改写 s.cfg。
+func (s *Server) setPluginCredentials(name string, creds map[string]string) error {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	s.lockCfgForWrite()
+	defer s.unlockCfgForWrite()
+	if s.cfg.AgentPlugins.Credentials == nil {
+		s.cfg.AgentPlugins.Credentials = map[string]map[string]string{}
+	}
+	if len(creds) == 0 {
+		delete(s.cfg.AgentPlugins.Credentials, name)
+	} else {
+		s.cfg.AgentPlugins.Credentials[name] = creds
+	}
+	return s.persistConfig(true)
+}
+
+// reconnectPluginEntries 重连插件的所有 MCP 条目,返回逐条目结果。
+// 不持锁:ReconnectEntry 内部自管并发,且 stdio Close 可能等子进程退出,
+// 攥着 server 锁做会挡住全部 API。
+func (s *Server) reconnectPluginEntries(mp *agentplugin.ManagedPlugin) []map[string]any {
+	if mp.Runtime == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(mp.Plugin.MCPServers))
+	for _, ms := range mp.Plugin.MCPServers {
+		err := mp.Runtime.ReconnectEntry(ms.Name)
+		item := map[string]any{"name": ms.Name, "ok": err == nil, "connected": ms.Connected}
+		if err != nil {
+			item["error"] = err.Error()
+			item["error_kind"] = ms.ErrorKind
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// allowedIconExts 是可作插件图标的扩展名白名单:严格限定,防止借 icon 路径
+// 读到凭据文件或任意文件。
+var allowedIconExts = map[string]string{
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+	".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+}
+
+// handlePluginIcon 服务插件清单声明的图标文件。
+//
+//	GET /api/agent-plugins-icon/{name}
+//
+// 刻意不套 requireAuth:<img> 标签带不上 Authorization 头(与 /api/fs/serve
+// 同理)。风险可控:路径必须落在该插件根目录内、扩展名在图片白名单内、
+// 响应限流 4MB,最坏也只是泄露一张插件作者自己打包进去的图片。
+func (s *Server) handlePluginIcon(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/agent-plugins-icon/")
+	name = strings.Trim(name, "/")
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		http.Error(w, "invalid plugin name", http.StatusBadRequest)
+		return
+	}
+
+	s.acquireServerMu("")
+	plugins := s.agentPlugins
+	s.releaseServerMu()
+	mp, ok := plugins[name]
+	if !ok || mp == nil || mp.Plugin == nil || mp.Plugin.Manifest == nil || mp.Plugin.Manifest.Icon == "" {
+		http.Error(w, "icon not found", http.StatusNotFound)
+		return
+	}
+
+	icon := filepath.Clean(mp.Plugin.Manifest.Icon)
+	if filepath.IsAbs(icon) || strings.HasPrefix(icon, "..") {
+		http.Error(w, "invalid icon path", http.StatusBadRequest)
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(icon))
+	ct, ok := allowedIconExts[ext]
+	if !ok {
+		http.Error(w, "icon must be an image file (png/jpg/jpeg/gif/webp/svg)", http.StatusBadRequest)
+		return
+	}
+	full := filepath.Join(mp.Plugin.Root, icon)
+	// 最终校验:解析后必须仍在插件根内(防符号链接/.. 变体逃逸)。
+	if !strings.HasPrefix(full, filepath.Clean(mp.Plugin.Root)+string(filepath.Separator)) {
+		http.Error(w, "icon escapes plugin root", http.StatusBadRequest)
+		return
+	}
+
+	f, err := os.Open(full)
+	if err != nil {
+		http.Error(w, "icon not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Size() > 4<<20 {
+		http.Error(w, "icon unreadable or too large", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, filepath.Base(full), st.ModTime(), f)
 }

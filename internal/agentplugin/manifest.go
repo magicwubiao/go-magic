@@ -12,7 +12,7 @@ import (
 var knownManifestFields = map[string]bool{
 	"$schema": true, "name": true, "version": true, "description": true,
 	"author": true, "homepage": true, "repository": true, "license": true,
-	"keywords": true, "extensions": true,
+	"keywords": true, "extensions": true, "icon": true, "examples": true,
 }
 
 // loadManifest 从 pluginRoot/plugin.json 加载并校验清单。
@@ -68,6 +68,8 @@ func loadManifest(pluginRoot string) (*Manifest, []string, error) {
 		Repository  string          `json:"repository,omitempty"`
 		License     string          `json:"license,omitempty"`
 		Keywords    []string        `json:"keywords,omitempty"`
+		Icon        string          `json:"icon,omitempty"`
+		Examples    []string        `json:"examples,omitempty"`
 		Extensions  json.RawMessage `json:"extensions,omitempty"`
 	}
 	var mr manifestRaw
@@ -85,6 +87,8 @@ func loadManifest(pluginRoot string) (*Manifest, []string, error) {
 		Repository:  mr.Repository,
 		License:     mr.License,
 		Keywords:    mr.Keywords,
+		Icon:        mr.Icon,
+		Examples:    mr.Examples,
 	}
 
 	// name 必须存在且合法(致命)。

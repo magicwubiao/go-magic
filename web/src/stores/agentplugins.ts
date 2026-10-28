@@ -85,6 +85,35 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     }
   }
 
+  // 拉取插件凭据掩码视图(授权表单数据源)。
+  async function loadCredentials(name: string) {
+    return agentPluginsApi.getPluginCredentials(name)
+  }
+
+  // 保存插件凭据并重连,成功后刷新插件列表(连接状态/错误分类会变)。
+  async function saveCredentials(name: string, env: Record<string, string>) {
+    pending.value[name] = true
+    try {
+      const res = await agentPluginsApi.setPluginCredentials(name, env)
+      plugins.value = await agentPluginsApi.getAgentPlugins()
+      return res
+    } finally {
+      pending.value[name] = false
+    }
+  }
+
+  // 重连插件的单个 MCP 条目,完成后刷新列表。
+  async function connectServer(name: string, server: string) {
+    pending.value[name] = true
+    try {
+      const res = await agentPluginsApi.connectPluginServer(name, server)
+      plugins.value = await agentPluginsApi.getAgentPlugins()
+      return res
+    } finally {
+      pending.value[name] = false
+    }
+  }
+
   return {
     plugins,
     loading,
@@ -100,5 +129,8 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     install,
     uninstall,
     setEnabled,
+    loadCredentials,
+    saveCredentials,
+    connectServer,
   }
 })
