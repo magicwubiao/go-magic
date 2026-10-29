@@ -599,9 +599,8 @@
         </div>
 
         <div class="input-area">
-          <div class="input-hint">
-            {{ t('rooms.inputHint') }}
-            <span v-if="roomActiveTarget" class="target-chip">→ {{ roomActiveTarget }}</span>
+          <div v-if="roomActiveTarget" class="input-hint">
+            <span class="target-chip">→ {{ roomActiveTarget }}</span>
           </div>
           <div v-if="roomSelectedFiles.length" class="attach-chips">
             <div v-for="(sel, i) in roomSelectedFiles" :key="sel.key" class="attach-chip">
