@@ -1371,7 +1371,7 @@ export default {
     historyCap: 'messages kept',
     empty: 'No bot rooms yet, click + to create',
     selectRoom: 'Select or create a room',
-    typeMessage: 'Type a message… Enter to send · Shift+Enter for newline · @ mentions a bot',
+    typeMessage: "Type a message… Enter to send · Shift+Enter for newline · {'@'} mentions a bot",
     send: 'Send',
     sendFailed: 'Send failed, please retry',
     botsReplying: 'Bots are discussing…',
