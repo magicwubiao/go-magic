@@ -50,8 +50,9 @@ interface Chip {
   avatar: string
   /**
    * 胶囊种类：directive = 斜杠指令（发送时序列化成指令行）；
-   * file = 上传的文件附件（只做行内呈现，不进指令序列化——文件本身走
-   * 发送请求的 files/images 通道，见 ChatView.send）。缺省按 directive 处理。
+   * file = 上传的文件附件（发送时在原位置留下 [[att:file:<id>]] 占位标记，
+   * 由 ChatView.send 改写成最终下标——文件本体仍走 files/images 通道）。
+   * 缺省按 directive 处理。
    */
   kind?: 'directive' | 'file'
   /** 文件胶囊附带的大小文案（如 "1.2 MB"），只用于展示与 title */
@@ -423,6 +424,14 @@ function getPayload(): string {
     if (node.nodeType !== Node.ELEMENT_NODE) return
     const el = node as HTMLElement
     if (el.dataset.chipId) {
+      // 文件附件胶囊：不序列化成指令，但在**原位置**留下一个占位标记。
+      // 发送端（ChatView.send）把它改写成 `[[att:<n>]]`（n = 附件在最终附件
+      // 列表里的下标），渲染端据此把附件胶囊画回文字流原位置——否则输入框里
+      // "文字A 图片 文字B" 到了对话气泡里会退化成"附件块 + 文字A 文字B"。
+      if (el.dataset.chipKind === 'file') {
+        out += `[[att:${el.dataset.chipId}]]`
+        return
+      }
       const directive = el.dataset.directive || ''
       if (!directive) return
       if (out && !out.endsWith('\n')) out += '\n'

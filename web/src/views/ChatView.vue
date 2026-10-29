@@ -249,10 +249,12 @@
                 <!-- File attachments in message：统一渲染成「图标 + 文件名」小 chip。
                      图片不再画大图缩略——气泡宽度有限，img 被 max-width/max-height
                      两头钳制后纵横比失真（用户截图报过），缩略图换弹窗原比例看。
-                     点击任意附件打开预览弹窗（FilePreviewDialog）。 -->
-                <div v-if="msg.files?.length" class="message-files">
+                     点击任意附件打开预览弹窗（FilePreviewDialog）。
+                     正文里带 [[att:n]] 占位标记的附件已在下方文字流原位置渲染，
+                     这里只兜底显示没被标记引用到的附件（老消息 / 标记残缺）。 -->
+                <div v-if="msgFilesWithoutMarker(msg).length" class="message-files">
                   <div
-                    v-for="(file, idx) in msg.files"
+                    v-for="(file, idx) in msgFilesWithoutMarker(msg)"
                     :key="idx"
                     class="message-file-item"
                     :class="{ 'message-file-item--clickable': !!file.url }"
@@ -266,20 +268,34 @@
                     <span class="message-file-name">{{ attachmentLabel(file) }}</span>
                   </div>
                 </div>
-                <!-- 指令消息：按消息里 token 的原始顺序渲染——胶囊和正文交替出现，
+                <!-- 指令消息：按消息里 token 的原始顺序渲染——胶囊、附件和正文交替出现，
                      和输入框里看到的一致（不是把所有胶囊挤到最前面）。
-                     多技能时逐条渲染，服务端按位置把正文绑到前面的胶囊上。 -->
+                     多技能时逐条渲染，服务端按位置把正文绑到前面的胶囊上；
+                     [[att:n]] 标记位置渲染出行内附件胶囊（可点开预览）。 -->
                 <div v-if="msg.content && userDirectiveRefs(msg.content)" class="user-directive-block">
                   <template v-for="(tk, ti) in userDirectiveRefs(msg.content)!" :key="ti">
                     <span v-if="tk.kind === 'chip'" class="user-skill-chip">
                       <n-icon size="13" aria-hidden="true"><ExtensionPuzzleOutline /></n-icon>
                       <span class="user-skill-chip-name">{{ tk.name }}</span>
                     </span>
+                    <span
+                      v-else-if="tk.kind === 'att' && msgAttFile(msg, tk.attIndex!)"
+                      class="user-att-chip"
+                      :class="{ 'user-att-chip--clickable': !!msgAttFile(msg, tk.attIndex!)?.url }"
+                      :title="attachmentLabel(msgAttFile(msg, tk.attIndex!)!)"
+                      @click="msgAttFile(msg, tk.attIndex!)?.url && openAttachmentPreview(msgAttFile(msg, tk.attIndex!)!)"
+                    >
+                      <n-icon size="13" aria-hidden="true">
+                        <ImageOutline v-if="isImageAttachment(msgAttFile(msg, tk.attIndex!)!)" />
+                        <DocumentOutline v-else />
+                      </n-icon>
+                      <span class="user-skill-chip-name">{{ attachmentLabel(msgAttFile(msg, tk.attIndex!)!) }}</span>
+                    </span>
                     <span v-else class="user-skill-rest">{{ tk.text }}</span>
                   </template>
                 </div>
                 <div v-else-if="msg.content" v-html="renderMarkdown(msg.content)"></div>
-                <div v-else-if="!msg.files?.length" class="empty-content">{{ t('chat.fileBtn') }}</div>
+                <div v-else-if="!msgFilesWithoutMarker(msg).length" class="empty-content">{{ t('chat.fileBtn') }}</div>
               </div>
               <div v-if="formatTime(msg.timestamp)" class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
@@ -439,7 +455,7 @@
               <span class="queue-handle-dots" aria-hidden="true"></span>
             </button>
             <div class="queue-row-main">
-              <div class="queue-row-text">{{ q.content }}</div>
+              <div class="queue-row-text">{{ queueContentPreview(q.content) }}</div>
               <div v-if="queuedFilesFor(q.turnId).length" class="queue-row-files">
                 <span
                   v-for="(f, fi) in queuedFilesFor(q.turnId)"
@@ -461,7 +477,7 @@
                 class="queue-row-btn queue-row-btn-guide"
                 :title="t('chat.guideSendHint')"
                 :disabled="!chatStore.busy"
-                @click="handleGuide(q.turnId, q.content)"
+                @click="handleGuide(q.turnId, queueContentPreview(q.content))"
               >
                 <n-icon size="15"><FlashOutline /></n-icon>
               </button>
@@ -1699,7 +1715,9 @@ async function editQueued(turnId: string) {
   }
   // 回填时把 `/skill x`、`/mcp srv tool` 前缀还原成行内胶囊，正文回到输入框，
   // 而不是让用户对着一段指令文本改。
-  const parsed = parseDirectivesFromContent(picked.content)
+  // 附件占位标记（[[att:n]]）一并摘掉：编辑器暂不支持把胶囊插回原位置，
+  // 附件统一回到胶囊列表，重发时按新位置重新生成标记。
+  const parsed = parseDirectivesFromContent(queueContentPreview(picked.content))
   inputValue.value = parsed.text
   pendingDirectives.value = parsed.chips
   if (picked.attachments.length) {
@@ -1946,14 +1964,21 @@ const USER_SKILL_LINE_RE = /^\/skills?\s+(\S+)(?:\s+([\s\S]*))?$/
 const USER_MCP_LINE_RE = /^\/mcp\s+(\S+)(?:\s+(\S+))?(?:\s+([\s\S]*))?$/
 
 interface UserDirectiveToken {
-  kind: 'chip' | 'text'
+  kind: 'chip' | 'att' | 'text'
   /** kind === 'chip' 时的胶囊名字 */
   name?: string
   /** kind === 'chip' 时的分组（只用于样式） */
   group?: 'skills' | 'mcp'
   /** kind === 'text' 时的正文片段 */
   text?: string
+  /** kind === 'att' 时的附件下标（msg.files 的索引，发送端按最终顺序写入） */
+  attIndex?: number
 }
+
+// 附件占位标记：发送时由编辑器的文件胶囊原位置生成（ComposerEditor.getPayload
+// → ChatView.send 改写下标）。渲染时把标记拆成独立 token，附件以行内胶囊的
+// 形态回到文字流原位置，而不是整块堆在气泡顶部。
+const USER_ATT_RE = /\[\[att:(\d+)\]\]/g
 
 // 同一内容在 v-for 重渲染时会被模板调用多次，用和 mdCache 一样的思路
 // 按内容缓存，避免每条消息每帧都重跑一遍解析。
@@ -1973,7 +1998,17 @@ function userDirectiveRefs(content: string): UserDirectiveToken[] | null {
     // 去掉它们，气泡里才能像输入框那样把胶囊和文字排在同一行。
     if (tokens.length && tokens[tokens.length - 1].kind === 'chip') text = text.replace(/^\n+/, '')
     text = text.replace(/\n+$/, '')
-    if (text) tokens.push({ kind: 'text', text })
+    if (!text) return
+    // 正文里的附件占位标记拆成独立 token（标记外的文字保持原样）。
+    USER_ATT_RE.lastIndex = 0
+    let last = 0
+    let m: RegExpExecArray | null
+    while ((m = USER_ATT_RE.exec(text)) !== null) {
+      if (m.index > last) tokens.push({ kind: 'text', text: text.slice(last, m.index) })
+      tokens.push({ kind: 'att', attIndex: Number(m[1]) })
+      last = m.index + m[0].length
+    }
+    if (last < text.length) tokens.push({ kind: 'text', text: text.slice(last) })
   }
 
   for (const rawLine of key.split('\n')) {
@@ -2000,10 +2035,38 @@ function userDirectiveRefs(content: string): UserDirectiveToken[] | null {
   }
   flush()
 
-  const refs = tokens.some((t) => t.kind === 'chip') ? tokens : null
+  // 有胶囊（指令或附件）才走 token 渲染；纯文本消息仍走整段 markdown。
+  const refs = tokens.some((t) => t.kind !== 'text') ? tokens : null
   if (directiveRefCache.size >= MD_CACHE_LIMIT) directiveRefCache.clear()
   directiveRefCache.set(key, refs)
   return refs
+}
+
+// 没有被正文里的 [[att:n]] 占位标记引用到的附件，继续走独立的附件块渲染。
+// 老消息没有标记 → 全部留在块里（行为不变）；新消息标记齐全时块为空，
+// 附件只在文字流原位置出现，不再重复显示一份。
+function msgFilesWithoutMarker(msg: sessionsApi.Message): Partial<sessionsApi.UploadedFile>[] {
+  const files = msg.files || []
+  if (!msg.content || !files.length) return files
+  const used = new Set<number>()
+  const re = /\[\[att:(\d+)\]\]/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(stripZeroWidth(msg.content))) !== null) {
+    const i = Number(m[1])
+    if (Number.isInteger(i) && i >= 0 && i < files.length) used.add(i)
+  }
+  return files.filter((_, i) => !used.has(i))
+}
+
+// 按 token 的 attIndex 取对应附件（越界/缺文件时返回 undefined，模板据此兜底）。
+function msgAttFile(msg: sessionsApi.Message, idx: number): Partial<sessionsApi.UploadedFile> | undefined {
+  return msg.files?.[idx]
+}
+
+// 排队气泡预览 / 引导注入用的正文：摘掉附件占位标记。附件已由 queue-row-files
+// 单独展示，`[[att:n]]` 对用户没有意义；引导注入是纯文本通道，也不能带着标记。
+function queueContentPreview(content: string): string {
+  return stripZeroWidth(content).replace(/\s*\[\[att:(?:file:[^\]\s]+|\d+)\]\]/g, '').trim()
 }
 
 // 把一段"指令行 + 正文"的消息还原成胶囊 + 正文（编辑排队消息时回填输入框用）。
@@ -2668,8 +2731,9 @@ function removePendingDirective(id: string) {
 //
 // 上传的文件与技能胶囊一样嵌进输入框的文字流（WorkBuddy 的 mention 交互）：
 // 可与正文穿插、随光标位置插入、随换行折行，点 × 或退格整颗摘掉。
-// 文件本体仍走发送请求的 files/images 通道（见 send），ComposerEditor 的
-// getPayload 会跳过 kind=file 的胶囊，绝不会把文件名序列化成指令行。
+// 文件本体仍走发送请求的 files/images 通道（见 send）；getPayload 会在胶囊
+// 原位置留下 [[att:file:<uid>]] 占位标记，发送时改写成最终下标，渲染端据此
+// 把附件画回文字流原位置（绝不会把文件名序列化成指令行）。
 //
 // _uid 是"DOM 胶囊 ↔ selectedFiles 条目"的对账键：上传响应里没有稳定 id，
 // 自己发一个会话内唯一的即可。
@@ -3753,6 +3817,10 @@ async function send() {
   const imageDataUrls: string[] = []
   const imageUrlRefs: string[] = []
   const imageNames: string[] = []
+  // 图片条目本身（保持 selectedFiles 顺序）：最终附件列表 = 图片在前 + 非图片
+  // 在后，与后端落库的 content parts 顺序一致（parseChatPayload 先处理 images
+  // 再处理 files），这样本端乐观消息与刷新后的历史回放渲染顺序才能对上。
+  const imageFileEntries: sessionsApi.UploadedFile[] = []
   const nonImageFiles: sessionsApi.UploadedFile[] = []
 
   function readAsDataURL(blob: Blob): Promise<string> {
@@ -3819,6 +3887,7 @@ async function send() {
       try {
         const dataUrl = await toImageDataUrl(file)
         imageDataUrls.push(dataUrl)
+        imageFileEntries.push(file)
         // Remember the uploaded path + original name so the backend can
         // persist a small reference (instead of megabytes of base64) that the
         // session replay can turn back into a thumbnail with a readable label.
@@ -3835,6 +3904,25 @@ async function send() {
     nonImageFiles.push(file)
   }
 
+  // 编辑器在文件胶囊原位置留下的 `[[att:file:<uid>]]` 占位标记，这里改写成
+  // `[[att:<n>]]`：n 是该附件在最终附件列表（图片在前、非图片在后）里的下标。
+  // 标记随正文一起落库，渲染端（含刷新后的历史回放）据此把附件胶囊画回
+  // 文字流原位置——否则"文字A 图片 文字B"会退化成"附件块 + 文字A 文字B"。
+  const orderedFiles = [...imageFileEntries, ...nonImageFiles]
+  let payloadContent = finalContent
+  if (payloadContent.includes('[[att:file:')) {
+    const orderedIndexByChipId = new Map<string, number>()
+    orderedFiles.forEach((f, i) => {
+      const chipId = `file:${(f as { _uid?: string })._uid || f.name || f.filename || ''}`
+      orderedIndexByChipId.set(chipId, i)
+    })
+    payloadContent = payloadContent.replace(/\[\[att:(file:[^\]\s]+)\]\]/g, (_raw, id: string) => {
+      const idx = orderedIndexByChipId.get(id)
+      // 找不到对应附件（胶囊已被摘掉但标记残留）时把标记删干净，别让占位符漏到正文里
+      return idx === undefined ? '' : `[[att:${idx}]]`
+    })
+  }
+
   // Drop references to uploaded files so the GC can reclaim the base64
   // data and uploaded URL closures as soon as the store has its own copy.
   composerRef.value?.clear()
@@ -3842,12 +3930,12 @@ async function send() {
   selectedFiles.value = []
   commandSuggestions.value = []
   await chatStore.sendMessage(
-    finalContent,
+    payloadContent,
     imageDataUrls.length ? imageDataUrls : undefined,
     nonImageFiles.length ? nonImageFiles : undefined,
     imageUrlRefs.length ? imageUrlRefs : undefined,
     imageNames.length ? imageNames : undefined,
-    allFiles.length ? allFiles : undefined,
+    orderedFiles.length ? orderedFiles : undefined,
   )
 }
 
@@ -4708,6 +4796,26 @@ onActivated(() => {
 .user-skill-rest {
   min-width: 0;
   white-space: pre-wrap;
+}
+/* 行内附件胶囊（[[att:n]] 标记位置）：与指令胶囊同一条文字流，
+   外观沿用 message-file-item 的「图标 + 文件名」语言但收窄成行内尺寸。 */
+.user-att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+  margin: 0 6px 2px 0;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  padding: 2px 10px 2px 8px;
+  max-width: 100%;
+  cursor: default;
+}
+.user-att-chip--clickable {
+  cursor: pointer;
+}
+.user-skill-rest + .user-att-chip {
+  margin-left: 6px;
 }
 
 /* ========== Queue dock（排队区）==========
