@@ -250,7 +250,7 @@ magic config reset     # restore defaults
     "enabled": false,
     "inject_bot_protocol": true,   // runtime defaults to on when nil
     "history_window": 200,         // history messages kept per bot, 0 = 200
-    "turn_timeout_minutes": 5,     // per-round timeout, 0 = 5 min
+    "turn_timeout_minutes": 30,    // per-round timeout, 0 = 30 min (same default as agent.turn_timeout_minutes)
     "relay_token": ""              // shared secret for cross-machine relay; empty = localhost (127.0.0.1) callers only
   },
 

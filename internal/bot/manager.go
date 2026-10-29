@@ -1465,8 +1465,14 @@ func sanitizeBotHistory(history []provider.Message) []provider.Message {
 const defaultHistoryWindow = 200
 
 // defaultTurnTimeout bounds a single bot turn when bot_mode.turn_timeout_minutes
-// is unset, mirroring the agent package's own default.
-const defaultTurnTimeout = 5 * time.Minute
+// is unset.
+//
+// 它必须与 agent（web 聊天）的回合时限是**同一个数**：同一个 agent 在
+// Telegram 与网页里跑，凭什么因为入口不同就被提前 6 倍时间截断？此前这里是
+// 硬编码的 5 分钟，而 pkg/config / server 兜底都是 30 分钟，于是 bot 侧的长任务
+// 总在 5 分钟处收到 "deadline approaching"，与网页端表现不一致且没有任何解释。
+// 群聊整轮另有 roomRoundBudget（30 分钟）兜住成员之和，不会被这次放宽拖长。
+const defaultTurnTimeout = time.Duration(config.DefaultTurnTimeoutMinutes) * time.Minute
 
 // historyWindow returns the configured canonical-chat message cap (min 20).
 //

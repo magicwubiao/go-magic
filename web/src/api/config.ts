@@ -26,7 +26,7 @@ export interface BotModeConfig {
   inject_bot_protocol?: boolean
   /** Cap on messages kept in each bot's canonical chat. 0 = default (200). */
   history_window?: number
-  /** Cap on how long a single bot turn may run (minutes). 0 = default (5). */
+  /** Cap on how long a single bot turn may run (minutes). 0 = default (30), same as agent.turn_timeout_minutes. */
   turn_timeout_minutes?: number
   /** Shared secret remote instances must present when DMing bots via /api/relay/v1/dm. */
   relay_token?: string

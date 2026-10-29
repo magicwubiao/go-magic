@@ -248,7 +248,7 @@ magic config reset     # 恢复默认
     "enabled": false,
     "inject_bot_protocol": true,   // nil 时运行时默认开启
     "history_window": 200,         // 每个 Bot 保留的历史消息数，0 = 200
-    "turn_timeout_minutes": 5,     // 单回合超时，0 = 5 分钟
+    "turn_timeout_minutes": 30,    // 单回合超时，0 = 30 分钟（与 agent.turn_timeout_minutes 同一个默认值）
     "relay_token": ""              // 跨机器 relay 共享密钥；空 = 只接受本机（127.0.0.1）请求
   },
 

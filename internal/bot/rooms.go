@@ -98,8 +98,8 @@ type roomRuntime struct {
 
 // roomRoundBudget bounds one whole coordinated round (all members, all
 // rounds). Per-member turns are capped by bot_mode.turn_timeout_minutes, but
-// nothing bounded their sum: 6 members × 3 rounds × 5min could hold a room for
-// an hour and a half. Members keep their own budget (whichever fires first
+// nothing bounded their sum: 6 members × 3 rounds could hold a room for hours.
+// Members keep their own budget (whichever fires first
 // wins); the round budget exists so a stuck provider cannot pin the room
 // forever after the user walked away.
 const roomRoundBudget = 30 * time.Minute

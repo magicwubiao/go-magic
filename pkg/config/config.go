@@ -41,6 +41,11 @@ const (
 	// 的闸门——max_turns 限的是"工具循环迭代几次"，本项限的是"总共跑多久"，
 	// 谁先到谁生效。因此任务确实需要更长时间时，该调的是本项，而不是
 	// max_turns（后者调多大都会被时间墙挡住）。
+	//
+	// **唯一真值来源**：agent.turn_timeout_minutes 的默认值、server 的兜底
+	// （sessionTurnTimeout）、bot_mode.turn_timeout_minutes 的兜底
+	// （bot.defaultTurnTimeout）都必须引用它。三处各自写死数字曾导致 bot 侧
+	// 一轮只有 5 分钟、网页端 30 分钟，同一个任务在两个入口表现不同。
 	DefaultTurnTimeoutMinutes = 30
 )
 
@@ -474,7 +479,11 @@ type BotModeConfig struct {
 	// so a turn's tool calls/results never get separated from its prompt.
 	HistoryWindow int `json:"history_window,omitempty"`
 	// TurnTimeoutMinutes caps how long a single agent turn (all LLM calls and
-	// tool executions for one inbound message) may run. 0 = default (5 min).
+	// tool executions for one inbound message) may run. 0 = default, which is
+	// config.DefaultTurnTimeoutMinutes — the same value used by agent turns in
+	// the web chat. One turn used to be capped at 5 minutes for bots and 30 for
+	// the web, so the same task finished in the browser but timed out on
+	// Telegram with no explanation.
 	// When the deadline hits, the turn is aborted gracefully: progress made so
 	// far is persisted and the user gets a friendly timeout notice instead of
 	// a raw "context deadline exceeded" error.

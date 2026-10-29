@@ -94,3 +94,12 @@ func TestTurnTimeoutDefaultConfigIs30Minutes(t *testing.T) {
 		t.Fatalf("default config: got %v, want 30m", got)
 	}
 }
+
+// 兜底常量必须与 pkg/config 的默认值同源：三处（config 默认 / server 兜底 /
+// bot 兜底）各自写死数字曾经散成 30/30/5，bot 侧的长任务因此被提前截断。
+func TestSessionTurnTimeoutMatchesConfigDefault(t *testing.T) {
+	want := time.Duration(appconfig.DefaultTurnTimeoutMinutes) * time.Minute
+	if sessionTurnTimeout != want {
+		t.Fatalf("sessionTurnTimeout = %v, want %v (config.DefaultTurnTimeoutMinutes)", sessionTurnTimeout, want)
+	}
+}

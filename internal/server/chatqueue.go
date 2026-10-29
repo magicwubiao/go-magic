@@ -20,6 +20,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/session"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 	"github.com/magicwubiao/go-magic/pkg/types"
 	"github.com/magicwubiao/go-magic/pkg/utils"
@@ -60,7 +61,11 @@ const (
 	// sessionTurnTimeout 是单个回合的**兜底**执行上限：当配置缺失或为 0 时
 	// 使用。正常路径取 config.Agent.TurnTimeoutMinutes（见 Server.turnTimeout），
 	// 因此用户可以在配置页调整。超时会被取消，回合按"被中断"处理并照常落库。
-	sessionTurnTimeout = 30 * time.Minute
+	//
+	// 它引用 config.DefaultTurnTimeoutMinutes 而不是自己写一个数字：同一个
+	// "一轮对话能跑多久"曾经在三处各写一份（server 兜底 30 / bot 兜底 5 /
+	// config 默认 30），bot 侧的长任务因此被 5 分钟截断，与 web 端表现不一致。
+	sessionTurnTimeout = time.Duration(config.DefaultTurnTimeoutMinutes) * time.Minute
 	// turnEventBuffer 是单个 sink 的事件缓冲。一个 30 分钟的长回合会产生
 	// 成百上千条 delta，加上工具事件与心跳，1024 与 sseWriter 的缓冲同量级。
 	turnEventBuffer = 1024
