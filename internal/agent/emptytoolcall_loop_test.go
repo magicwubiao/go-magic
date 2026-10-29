@@ -125,8 +125,10 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 		if toolTurns >= emptyToolCallTestMaxTurns {
 			t.Fatalf("did not conclude early: ran %d calls (maxTurns=%d)", toolTurns, emptyToolCallTestMaxTurns)
 		}
-		if toolTurns > ag.sameToolLimit {
-			t.Fatalf("should conclude at identical-signature call #%d, got %d calls", ag.sameToolLimit, toolTurns)
+		// +1：首次触发只注入"换方法"提示，重复不变才收口。
+		if toolTurns > ag.sameToolLimit+1 {
+			t.Fatalf("should nudge at #%d and conclude at #%d, got %d calls",
+				ag.sameToolLimit, ag.sameToolLimit+1, toolTurns)
 		}
 	})
 
@@ -137,9 +139,9 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 		run(t, ag, func(ctx context.Context, ag *Agent) (string, error) {
 			return ag.RunConversationWithMedia(ctx, "keep going", parts)
 		})
-		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit {
-			t.Fatalf("should conclude at identical-signature call #%d, got %d calls (maxTurns=%d)",
-				ag.sameToolLimit, toolTurns, emptyToolCallTestMaxTurns)
+		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit+1 {
+			t.Fatalf("should nudge at #%d and conclude at #%d, got %d calls (maxTurns=%d)",
+				ag.sameToolLimit, ag.sameToolLimit+1, toolTurns, emptyToolCallTestMaxTurns)
 		}
 	})
 
@@ -153,9 +155,9 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 			})
 			return out.String(), err
 		})
-		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit {
-			t.Fatalf("should conclude at identical-signature call #%d, got %d calls (maxTurns=%d)",
-				ag.sameToolLimit, toolTurns, emptyToolCallTestMaxTurns)
+		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit+1 {
+			t.Fatalf("should nudge at #%d and conclude at #%d, got %d calls (maxTurns=%d)",
+				ag.sameToolLimit, ag.sameToolLimit+1, toolTurns, emptyToolCallTestMaxTurns)
 		}
 	})
 
@@ -177,7 +179,8 @@ func TestEmptyToolCallLoopEndsTurnGracefully(t *testing.T) {
 		// +1 是给 cortex 规划的余量（复杂度达 medium 时先问一次 LLMPlanner，
 		// mock 对它同样回工具调用、解析失败后回落）——见
 		// TestCortexLoopDetectionAndGuideDrain 的同款容差。
-		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit+1 {
+		// +2：一次"换方法"提示 + 一次 LLM 规划余量。
+		if toolTurns := prov.snapshot(); toolTurns > ag.sameToolLimit+2 {
 			t.Fatalf("cortex path should conclude at the loop limit: ran %d calls (limit %d, maxTurns=%d)",
 				toolTurns, ag.sameToolLimit, emptyToolCallTestMaxTurns)
 		}

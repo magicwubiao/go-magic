@@ -120,8 +120,12 @@ type Agent struct {
 	// 互不干扰，历史里的块顺序因而保持稳定（技能块在前、目标块在后）。
 	goalCtx string
 	// Steering settings
-	maxIterations  int
-	maxTokenBudget int64
+	maxIterations int
+	// maxIterationsExplicit 记录 maxIterations 是否由 steering 显式配置。未显式
+	// 配置时它跟随 maxTurns 联动（见 syncMaxIterationsToTurns），避免两个计数
+	// 数同一个 iterationCount 却互相截断。
+	maxIterationsExplicit bool
+	maxTokenBudget        int64
 
 	// Tool call loop detection (protected by mu)
 	//
@@ -145,10 +149,20 @@ type Agent struct {
 	// 修改性调用**为分界，只统计其后的资源访问次数。改后验证（读 1~2 次）、分段读
 	// 大文件（offset 进了资源键）都不会触发。
 	repeatedResourceLimit int
+	// readOnlyResourceLimit 是**纯只读**工具（从未出现过修改性调用）的资源重复访问上限。
+	//
+	// 纯分析/调研/代码审查任务天然需要反复读取同一批文件，用修改类的阈值（5）会把
+	// 它们误杀；但完全豁免又会让 2026-10-08 那种"0 写入、80 余次只读"的空转重新
+	// 出现。因此只读任务用独立、更宽松的阈值：空转仍会被拦截，只是给正常分析留足空间。
+	readOnlyResourceLimit int
 
 	// todoNudgeUsed 标记"回合末待办对账提醒"是否已注入（每回合最多一次），
 	// 由 resetToolLoopCounters 随工具循环计数一起按回合清零。
 	todoNudgeUsed bool
+	// loopNudgeUsed 标记"循环换方法提示"是否已注入。循环首次触发时先给模型一次
+	// 换方法的机会（注入具体原因与指引）而不是立刻收口；同一回合再次触发才收口。
+	// 与 todoNudgeUsed 同构，由 resetToolLoopCounters 按回合清零。
+	loopNudgeUsed bool
 	// todoPendingTitles 是可注入的待办查询（测试用）；nil 时用全局 TodoTool 单例。
 	todoPendingTitles func(sessionID string) []string
 	// todoPlanSnapshot 是可注入的"在案计划"查询（测试用）；nil 时用全局 TodoTool 单例。
@@ -473,6 +487,8 @@ func NewAIAgent(prov provider.Provider, registry ToolRegistry, tools []map[strin
 		// 取 5 而不是更小：改完之后"为了确认再读一两次"是正常行为，读到第 5 次
 		// 且期间一次都没改，才只能是空转。
 		repeatedResourceLimit: 5,
+		// 纯只读（整个回合无任何修改性调用）时使用的更宽松阈值，见 readOnlyResourceLimit。
+		readOnlyResourceLimit: 12,
 		maxParallelTools:      defaultMaxParallelTools,
 		subTaskEnabled:        true,
 		hooks:                 hooks.NewHookManager(),
@@ -588,6 +604,7 @@ func NewEnhancedAgent(prov provider.Provider, registry ToolRegistry, tools []map
 	// 选项全部应用后再决定回合上限：显式配置优先，缺省时按回合时限折算
 	// （见 deriveMaxTurnsFromTurnTimeout 的说明）。
 	agent.deriveMaxTurnsFromTurnTimeout()
+	agent.syncMaxIterationsToTurns()
 
 	return agent
 }
@@ -597,6 +614,7 @@ func WithSteering(cfg SteeringConfig) AgentOption {
 	return func(a *Agent) {
 		if cfg.MaxIterations > 0 {
 			a.maxIterations = cfg.MaxIterations
+			a.maxIterationsExplicit = true
 		}
 		if cfg.MaxTokenBudget > 0 {
 			a.maxTokenBudget = cfg.MaxTokenBudget
@@ -689,6 +707,23 @@ func (a *Agent) deriveMaxTurnsFromTurnTimeout() {
 		log.Infof("[Agent] maxTurns raised %d -> %d to fit turn timeout %s (config agent.max_turns is unset; set it to pin an explicit cap)",
 			a.maxTurns, derived, a.turnTimeout)
 		a.maxTurns = derived
+	}
+}
+
+// syncMaxIterationsToTurns 让 maxIterations 与 maxTurns 保持联动。
+//
+// maxIterations 与 maxTurns 数的是同一个 iterationCount。若只放大 maxTurns，
+// 固定的 maxIterations(200) 会在第 200 轮先行截断，推导出的上限形同虚设。
+// 因此只要 maxIterations 没有被 steering 显式设置，它就不低于 maxTurns；
+// 显式设置的值则原样保留（调用方的意图优先）。
+//
+// 必须在 deriveMaxTurnsFromTurnTimeout 之后调用。
+func (a *Agent) syncMaxIterationsToTurns() {
+	if a.maxIterationsExplicit {
+		return
+	}
+	if a.maxIterations < a.maxTurns {
+		a.maxIterations = a.maxTurns
 	}
 }
 
@@ -1228,6 +1263,10 @@ type toolLoopRecord struct {
 	Name string
 	Sig  string
 	Key  string
+	// StatusProbe 标记这次调用是"只读状态探测"（docker ps / git status / kubectl get
+	// 这类只看不改的命令，见 isStatusProbeCommand）。这类调用允许比普通调用重复
+	// 更多次：等部署/等构建的常规做法就是每隔几十秒重跑同一条只读命令。
+	StatusProbe bool
 }
 
 // toolCallSignature 生成循环检测用的调用签名：工具名 + 参数指纹。
@@ -1316,6 +1355,7 @@ func (a *Agent) resetToolLoopCounters() {
 	defer a.mu.Unlock()
 	a.toolCallHistory = nil
 	a.todoNudgeUsed = false
+	a.loopNudgeUsed = false
 }
 
 // recordToolCall 记录一次工具调用（无参数变体，供只关心工具名的调用方使用）。
@@ -1346,6 +1386,145 @@ func isLoopExemptCall(name, args string) bool {
 	return processPollingActions[action]
 }
 
+// statusProbeLoopLimit 是"只读状态探测"命令的重复上限，比 sameToolLimit 宽松。
+//
+// 部署、构建、CI 这类长任务的常规做法就是每隔几十秒重跑**同一条**只读命令看结果：
+// `docker ps`、`git status`、`kubectl get pods`。同一个(工具+参数)重复 3 次对它们
+// 属于正常工作方式，按死循环收口会让用户在"等部署起来"时被无端打断。但完全豁免
+// 又会让"命令永远没结果、却一直问"的空转无限跑，所以给一个更宽但仍有限的上限。
+const statusProbeLoopLimit = 8
+
+// statusProbeCommands 是一组**只读取状态、不改动任何东西**的命令首词。
+// 只有整条命令的每一段都在这里（且没有任何重定向/写文件）才算状态探测。
+var statusProbeCommands = map[string]bool{
+	// 进程 / 系统状态
+	"ps": true, "pgrep": true, "pstree": true, "uptime": true, "free": true,
+	"df": true, "du": true, "stat": true, "uname": true, "hostname": true,
+	"whoami": true, "id": true, "date": true, "ss": true, "netstat": true,
+	"lsof": true, "service": true, "journalctl": true, "dmesg": true,
+	// 查看文件（重复读同一段是排查常态）
+	"ls": true, "cat": true, "head": true, "tail": true, "wc": true,
+	"grep": true, "egrep": true, "rg": true, "find": true, "which": true,
+	"whereis": true, "file": true, "md5sum": true, "sha256sum": true,
+	// 轮询循环里常见的无害动作
+	"sleep": true, "echo": true, "true": true, "cd": true, "pwd": true,
+	"test": true, "[": true,
+}
+
+// statusProbeSubcommands 是那些"首词本身可写、只有特定子命令才只读"的命令。
+var statusProbeSubcommands = map[string]map[string]bool{
+	"docker": {
+		"ps": true, "logs": true, "inspect": true, "images": true, "version": true,
+		"info": true, "stats": true, "port": true, "diff": true, "top": true,
+		"compose": true, // 由后续段再判：compose ps / compose logs
+	},
+	"docker-compose": {"ps": true, "logs": true, "version": true},
+	"kubectl": {
+		"get": true, "describe": true, "logs": true, "top": true, "version": true,
+		"explain": true, "api-resources": true,
+	},
+	"git": {
+		"status": true, "log": true, "diff": true, "show": true, "branch": true,
+		"remote": true, "describe": true, "rev-parse": true, "ls-files": true,
+		"blame": true, "shortlog": true,
+	},
+	"systemctl": {
+		"status": true, "is-active": true, "is-enabled": true, "is-failed": true,
+		"list-units": true, "list-timers": true, "show": true,
+	},
+	"npm": {"ls": true, "list": true, "view": true, "outdated": true, "why": true},
+	"go":  {"version": true, "env": true, "list": true},
+}
+
+// statusProbeFlags 是一旦出现就说明命令在**写**东西的片段：重定向、curl 的写方法等。
+var statusProbeWriteMarkers = []string{
+	">", ">>", "-o ", "-O ", "-X ", "-d ", "--data", "-F ", "-T ", "tee ",
+}
+
+// isStatusProbeCommand 判断一条 shell 命令是否"只读状态探测"。
+//
+// 判定刻意保守：按 `&& || ; |` 切段后，**每一段**的首词都必须是只读命令（或可写的
+// 命令 + 只读子命令），且整条命令不含重定向/写文件的痕迹。任何一段拿不准就算
+// "非探测"，沿用 sameToolLimit —— 宁可少豁免，也不给真正的死循环开口子。
+func isStatusProbeCommand(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return false
+	}
+	lower := strings.ToLower(cmd)
+	for _, marker := range statusProbeWriteMarkers {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	segments := splitShellSegments(cmd)
+	if len(segments) == 0 {
+		return false
+	}
+	for _, seg := range segments {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		// 跳过 sudo / env var=value 这类前缀，看真正的命令词。
+		for len(fields) > 0 && (fields[0] == "sudo" || strings.Contains(fields[0], "=")) {
+			fields = fields[1:]
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		head := strings.ToLower(fields[0])
+		if statusProbeCommands[head] {
+			continue
+		}
+		subs, ok := statusProbeSubcommands[head]
+		if !ok || len(fields) < 2 {
+			return false
+		}
+		sub := strings.ToLower(fields[1])
+		// `docker compose ps` / `docker compose logs` 这类再看一层。
+		if head == "docker" && sub == "compose" {
+			if len(fields) < 3 || !statusProbeSubcommands["docker-compose"][strings.ToLower(fields[2])] {
+				return false
+			}
+			continue
+		}
+		if !subs[sub] {
+			return false
+		}
+	}
+	return true
+}
+
+// splitShellSegments 按 `&&`、`||`、`;`、`|`、换行把命令切成独立段。
+func splitShellSegments(cmd string) []string {
+	replacer := strings.NewReplacer("&&", "\n", "||", "\n", ";", "\n", "|", "\n")
+	var out []string
+	for _, seg := range strings.Split(replacer.Replace(cmd), "\n") {
+		if seg = strings.TrimSpace(seg); seg != "" {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
+// isStatusProbeCall 判断一次工具调用是否属于"只读状态探测"。
+// 目前只认 execute_command / terminal 里的只读状态命令。
+func isStatusProbeCall(name, args string) bool {
+	if name != "execute_command" && name != "terminal" {
+		return false
+	}
+	if args == "" {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return false
+	}
+	cmd, _ := m["command"].(string)
+	return isStatusProbeCommand(cmd)
+}
+
 // recordToolCallSig 记录一次工具调用（带参数指纹）。
 func (a *Agent) recordToolCallSig(name, args string) {
 	if name == "" {
@@ -1357,9 +1536,10 @@ func (a *Agent) recordToolCallSig(name, args string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toolCallHistory = append(a.toolCallHistory, toolLoopRecord{
-		Name: name,
-		Sig:  toolCallSignature(name, args),
-		Key:  toolCallResourceKey(name, args),
+		Name:        name,
+		Sig:         toolCallSignature(name, args),
+		Key:         toolCallResourceKey(name, args),
+		StatusProbe: isStatusProbeCall(name, args),
 	})
 }
 
@@ -1467,7 +1647,13 @@ func (a *Agent) detectToolLoop() (bool, string) {
 		} else {
 			streak = 1
 		}
-		if streak >= a.sameToolLimit {
+		// 只读状态探测（docker ps / git status 这类）用更宽松的上限：等部署、
+		// 等构建时反复问同一个问题是正常工作方式，按 sameToolLimit 收口只是打断。
+		limit := a.sameToolLimit
+		if rec.StatusProbe {
+			limit = statusProbeLoopLimit
+		}
+		if streak >= limit {
 			return true, fmt.Sprintf("tool %s called %d times in a row with identical arguments", rec.Name, streak)
 		}
 		prevSig = rec.Sig
@@ -1514,6 +1700,12 @@ func (a *Agent) detectToolLoop() (bool, string) {
 				lastMutation = i
 			}
 		}
+		// 纯只读回合（从未出现修改性调用）使用更宽松的 readOnlyResourceLimit；
+		// 出现过修改之后的空转仍按 repeatedResourceLimit 判定。
+		limit := a.repeatedResourceLimit
+		if lastMutation < 0 && a.readOnlyResourceLimit > limit {
+			limit = a.readOnlyResourceLimit
+		}
 		counts := make(map[string]int)
 		for _, rec := range history[lastMutation+1:] {
 			if isMutatingToolCall(rec.Name) {
@@ -1526,12 +1718,48 @@ func (a *Agent) detectToolLoop() (bool, string) {
 				continue
 			}
 			counts[rec.Key]++
-			if counts[rec.Key] >= a.repeatedResourceLimit {
+			if counts[rec.Key] >= limit {
 				return true, fmt.Sprintf("resource %q accessed %d times since the last modification without making any change", rec.Key, counts[rec.Key])
 			}
 		}
 	}
 	return false, ""
+}
+
+// loopChangeApproachNudge 生成"循环换方法"提示：把具体的循环原因告诉模型，
+// 并明确要求它换一种做法，而不是重复同一个调用。原因也会在最终收口时回传给用户。
+func loopChangeApproachNudge(reason string) string {
+	return "Tool loop detected: " + reason + ". " +
+		"Your recent tool calls are not making progress. Do NOT repeat the same call. " +
+		"Change approach: use a different tool or different arguments, read a different part of the problem, " +
+		"or if the task is already done, say so and stop calling tools."
+}
+
+// tryLoopNudge 在循环首次触发时注入"换方法"提示，返回 true 表示已注入、应继续循环；
+// 同一回合再次触发（loopNudgeUsed 已置位）返回 false，调用方应收口。
+//
+// 设计动机：此前循环一触发就强制收口，模型没有任何机会换个思路，用户看到的是
+// 一个没做完的任务被包装成总结。先给一次纠正机会，只有纠正无效才收口。
+func (a *Agent) tryLoopNudge(reason string) bool {
+	a.mu.Lock()
+	if a.loopNudgeUsed {
+		a.mu.Unlock()
+		return false
+	}
+	a.loopNudgeUsed = true
+	a.mu.Unlock()
+	a.history = append(a.history, provider.Message{
+		Role:      "user",
+		Content:   loopChangeApproachNudge(reason),
+		Timestamp: time.Now(),
+	})
+	log.Infof("[Agent] loop nudge injected (%s): giving the model one chance to change approach", reason)
+	return true
+}
+
+// loopStopNotice 生成收口时附在用户可见回复前的说明，告诉用户为什么停下。
+func loopStopNotice(reason string) string {
+	return "(⚠ 已自动停止：" + reason + "。以下是目前的进展，任务可能未完全完成，可以告诉我换个方向或继续。)\n\n"
 }
 
 // concludeAfterToolLoop 是循环触发后的共用收口动作：把模型已经产出的内容
@@ -1877,8 +2105,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Deadline 感知（Hermes-style）：剩余 ctx 寿命不足以再跑一轮完整迭代
 		// （LLM 调用 + 工具执行）时，优雅收尾并落盘 checkpoint，而不是让最后
 		// 一轮死在半路、以 opaque 的 "context deadline exceeded" 告终。
+		// 返回 ErrTurnIncomplete：收尾不是完成，调用方必须能区分。
 		if !a.canStartAnotherTurn(ctx) {
-			return a.gracefulDeadlineFinish(input), nil
+			return a.deadlineStop(input)
 		}
 		a.beginTurnTiming()
 
@@ -2062,6 +2291,10 @@ Please provide a comprehensive, well-structured final response based on these su
 		a.recordToolCallsForLoop(resp.ToolCalls)
 		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
 			log.Warnf("[Agent] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			// 先给模型一次换方法的机会；仅在纠正无效（同回合再次触发）时才收口。
+			if a.tryLoopNudge(loopReason) {
+				continue
+			}
 			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
@@ -2069,7 +2302,7 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 			a.endCortexTurn()
-			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
+			return redact.RedactIfEnabled(loopStopNotice(loopReason)+summaryText, a.secretRedaction), nil
 		}
 	}
 
@@ -2407,8 +2640,9 @@ Please provide a comprehensive, well-structured final response based on these su
 		}
 
 		// Deadline 感知：剩余时间不足以再完成一轮完整迭代时优雅收尾 + checkpoint。
+		// 返回 ErrTurnIncomplete，与正常完成区分。
 		if !a.canStartAnotherTurn(ctx) {
-			return a.gracefulDeadlineFinish(input), nil
+			return a.deadlineStop(input)
 		}
 		a.beginTurnTiming()
 
@@ -2632,6 +2866,10 @@ Please provide a comprehensive, well-structured final response based on these su
 		// 工具循环判定走共用实现（四条入口同一套阈值，见 detectToolLoop）。
 		if loopDetected {
 			log.Warnf("[Agent] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			// 先给模型一次换方法的机会；仅在纠正无效（同回合再次触发）时才收口。
+			if a.tryLoopNudge(loopReason) {
+				continue
+			}
 			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
@@ -2639,7 +2877,8 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.Emit(bus.EventKindTurnEnd, nil)
 			a.Emit(bus.EventKindAgentEnd, nil)
 			a.endCortexTurn()
-			return redact.RedactIfEnabled(summaryText, a.secretRedaction), nil
+			// 收口前先告诉用户为什么停下（而不是静默收尾当成功）。
+			return redact.RedactIfEnabled(loopStopNotice(loopReason)+summaryText, a.secretRedaction), nil
 		}
 
 		// Execute tools and add results to history
@@ -2916,9 +3155,11 @@ Please provide a comprehensive, well-structured final response based on these su
 		// Deadline 感知：剩余时间不足以再完成一轮完整迭代时优雅收尾，
 		// 进度 checkpoint 落盘后经 handler 呈现给用户。
 		if !a.canStartAnotherTurn(ctx) {
-			handler("\n"+a.gracefulDeadlineFinish(input)+"\n", false)
+			msg, stopErr := a.deadlineStop(input)
+			handler("\n"+msg+"\n", false)
 			handler("", true)
-			return nil
+			// 流式回合同样要把"未完成"如实交给调用方，而不是返回 nil 伪装成功。
+			return stopErr
 		}
 		a.beginTurnTiming()
 
@@ -3473,6 +3714,10 @@ Please provide a comprehensive, well-structured final response based on these su
 		a.recordToolCallsForLoop(toolCalls)
 		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
 			log.Warnf("[Agent:Stream] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			// 先给模型一次换方法的机会；仅在纠正无效（同回合再次触发）时才收口。
+			if a.tryLoopNudge(loopReason) {
+				continue
+			}
 			summaryText, finalErr := a.concludeAfterToolLoop(ctx, fullContent)
 			if finalErr != nil {
 				a.sanitizeHistory()
@@ -3487,7 +3732,8 @@ Please provide a comprehensive, well-structured final response based on these su
 			a.endCortexTurn()
 
 			// 客户端已经看过本轮的流式增量，收口文本必须再推一次才会显示；
-			// 沿用增量语义（done 由 runQueue 收尾广播）。
+			// 沿用增量语义（done 由 runQueue 收尾广播）。收口前先告诉用户原因。
+			handler(loopStopNotice(loopReason), false)
 			handler(redact.RedactIfEnabled(summaryText, a.secretRedaction), false)
 			return nil
 		}
@@ -3961,8 +4207,21 @@ func (a *Agent) endTurnTiming() {
 	a.mu.Unlock()
 }
 
+// turnEstimateOutlierFactor 限制单次异常慢轮次对"下一轮耗时估计"的抬升幅度。
+//
+// 直接用 P90 有一个致命弱点：样本少时 P90 就是最大值，于是**一次**异常慢调用
+// （网络抖动、一次大构建、provider 排队）会把阈值顶到几十倍，之后剩余时间明明
+// 还够跑好几轮，canStartAnotherTurn 也会立刻判定"时间不够"、提前收尾——用户
+// 看到的是任务莫名其妙在很早处停下，日志里只有一句 deadline approaching。
+// 因此以中位数（抗离群）为基准设上限：估计值不得超过 中位数 × 本系数。
+const turnEstimateOutlierFactor = 2.0
+
 // estimateTurnDuration 预估下一轮完整耗时（LLM + 工具执行）：
-// 取最近样本的 P90（保守估计），无样本时用默认值 30s。
+// 取最近样本的 P90（保守估计）并做抗离群夹取，无样本时用默认值 30s。
+//
+// 夹取规则见 turnEstimateOutlierFactor：P90 最多到中位数的 2 倍。这样
+//   - 稳定的慢调用（样本本身就慢）仍然是 P90，保守性不丢；
+//   - 孤立的离群样本（1 次 60s 夹在 9 次 3s 里）不会把阈值抬到 60s。
 func (a *Agent) estimateTurnDuration() time.Duration {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -3978,7 +4237,17 @@ func (a *Agent) estimateTurnDuration() time.Duration {
 		}
 	}
 	idx := (n*90 + 99) / 100 // ceil(0.9*n), 范围 [1, n]
-	return sorted[idx-1]
+	p90 := sorted[idx-1]
+
+	// 中位数：偶数个样本取中间两个的平均（避免偏向任一侧）。
+	median := sorted[n/2]
+	if n%2 == 0 {
+		median = (sorted[n/2-1] + sorted[n/2]) / 2
+	}
+	if ceiling := time.Duration(float64(median) * turnEstimateOutlierFactor); p90 > ceiling {
+		return ceiling
+	}
+	return p90
 }
 
 // canStartAnotherTurn 判断是否还能安全启动一轮新的完整迭代：
@@ -4098,10 +4367,55 @@ func SanitizeAgentSlug(s string) string {
 	return out
 }
 
+// ErrTurnIncomplete 表示回合因时限不足而**中途收尾、任务并未完成**。
+//
+// 优雅收尾不是成功：它只保证不在半路被硬截断、进度已落盘。调用方必须能把它与
+// "正常完成"区分开（否则用户会把没做完的任务当成已完成）。用 errors.Is 判断。
+var ErrTurnIncomplete = errors.New("turn incomplete: stopped before the task finished")
+
+// IncompleteError 携带未完成回合的进度信息，并能 Unwrap 到 ErrTurnIncomplete。
+type IncompleteError struct {
+	Reason         string // 收尾原因（人类可读）
+	CheckpointPath string // 进度 checkpoint 路径；落盘失败时为空
+	CompletedTurns int    // 已完成的迭代轮数
+	ToolCalls      int    // 本回合已发起的工具调用数
+}
+
+func (e *IncompleteError) Error() string {
+	return fmt.Sprintf("turn incomplete after %d turn(s), %d tool call(s): %s", e.CompletedTurns, e.ToolCalls, e.Reason)
+}
+
+// Unwrap 使 errors.Is(err, ErrTurnIncomplete) 成立。
+func (e *IncompleteError) Unwrap() error { return ErrTurnIncomplete }
+
+// deadlineStop 是 deadline 收尾的**带状态**版本：返回用户可见的说明文本，
+// 同时返回 *IncompleteError，让调用方能明确判定"未完成"。文本与
+// gracefulDeadlineFinish 保持一致，不改变用户侧呈现。
+func (a *Agent) deadlineStop(task string) (string, error) {
+	msg, path := a.gracefulDeadlineFinishWithPath(task)
+	a.mu.RLock()
+	completed := a.iterationCount
+	toolCalls := len(a.toolCallHistory)
+	a.mu.RUnlock()
+	return msg, &IncompleteError{
+		Reason:         "deadline imminent: remaining time below estimated per-turn duration",
+		CheckpointPath: path,
+		CompletedTurns: completed,
+		ToolCalls:      toolCalls,
+	}
+}
+
 // gracefulDeadlineFinish deadline 不足时的优雅收尾：
 // 不再发起 LLM 请求（时间已不够完成一轮），写入 checkpoint 并返回
 // 结构化的进度说明，调用方可据此向用户呈现或续跑。
 func (a *Agent) gracefulDeadlineFinish(task string) string {
+	msg, _ := a.gracefulDeadlineFinishWithPath(task)
+	return msg
+}
+
+// gracefulDeadlineFinishWithPath 是 gracefulDeadlineFinish 的实现，同时返回
+// checkpoint 路径（落盘失败时为空），供 deadlineStop 组装 IncompleteError。
+func (a *Agent) gracefulDeadlineFinishWithPath(task string) (string, string) {
 	path := a.writeDeadlineCheckpoint(task, "deadline imminent: remaining time below estimated per-turn duration")
 	est := a.estimateTurnDuration()
 	a.mu.RLock()
@@ -4125,7 +4439,7 @@ func (a *Agent) gracefulDeadlineFinish(task string) string {
 		"completed":     completed,
 		"turn_estimate": est.String(),
 	})
-	return msg
+	return msg, path
 }
 
 // Reset clears the conversation history
@@ -5296,6 +5610,7 @@ func (a *Agent) sanitizeHistory() {
 func (a *Agent) SetMaxIterations(max int) {
 	if max > 0 {
 		a.maxIterations = max
+		a.maxIterationsExplicit = true
 	}
 }
 

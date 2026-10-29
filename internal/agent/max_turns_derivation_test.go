@@ -74,3 +74,38 @@ func TestMaxTurnsExhaustedErrorNamesConfigKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestMaxIterationsFollowsDerivedMaxTurns 锁死 maxIterations 与 maxTurns 的联动。
+// 此前只放大 maxTurns、固定 maxIterations(200)，第 200 轮就会先行截断，
+// 2h 时限推导出的 240 轮形同虚设。
+func TestMaxIterationsFollowsDerivedMaxTurns(t *testing.T) {
+	// 2h 时限 ⇒ maxTurns=240，maxIterations 必须跟上，否则第 200 轮被截断。
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{}, WithTurnTimeout(2*time.Hour))
+	if ag.maxTurns != 240 {
+		t.Fatalf("maxTurns = %d, want 240", ag.maxTurns)
+	}
+	if ag.maxIterations < ag.maxTurns {
+		t.Fatalf("maxIterations = %d lags maxTurns = %d; the derived cap would be cut at iteration %d",
+			ag.maxIterations, ag.maxTurns, ag.maxIterations)
+	}
+}
+
+// TestExplicitMaxTurnsAlsoLiftsMaxIterations 显式 max_turns 高于 200 时，
+// 同样不能被固定的 maxIterations(200) 截断。
+func TestExplicitMaxTurnsAlsoLiftsMaxIterations(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{}, WithMaxTurns(500))
+	if ag.maxIterations < 500 {
+		t.Fatalf("maxIterations = %d, want >= 500 (explicit max_turns=500)", ag.maxIterations)
+	}
+}
+
+// TestExplicitMaxIterationsIsRespected steering 显式配置的 maxIterations 原样保留，
+// 不被 maxTurns 联动覆盖。
+func TestExplicitMaxIterationsIsRespected(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{},
+		WithSteering(SteeringConfig{MaxIterations: 50}),
+		WithTurnTimeout(2*time.Hour))
+	if ag.maxIterations != 50 {
+		t.Fatalf("maxIterations = %d, want explicit 50", ag.maxIterations)
+	}
+}

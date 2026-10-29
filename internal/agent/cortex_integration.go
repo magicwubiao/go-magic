@@ -307,6 +307,10 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		a.recordToolCallsForLoop(resp.ToolCalls)
 		if loopDetected, loopReason := a.detectToolLoop(); loopDetected {
 			log.Warnf("[Agent:Cortex] tool call loop detected: %s (turn %d)", loopReason, a.iterationCount)
+			// 先给模型一次换方法的机会；仅在纠正无效（同回合再次触发）时才收口。
+			if a.tryLoopNudge(loopReason) {
+				continue
+			}
 			summaryText, finalErr := a.concludeAfterToolLoop(ctx, resp.Content)
 
 			if checkpoint != nil {
@@ -327,7 +331,8 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 			if finalErr != nil {
 				return "", fmt.Errorf("exceeded maximum iterations (%d): tool call loop detected", a.maxIterations)
 			}
-			return summaryText, nil
+			// 收口前先告诉用户为什么停下（而不是静默收尾当成功）。
+			return loopStopNotice(loopReason) + summaryText, nil
 		}
 
 		a.history = append(a.history, provider.Message{

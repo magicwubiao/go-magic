@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -99,14 +100,20 @@ func TestRepeatedSignatureStillStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a dead loop should end with a gentle summary instead of an error: %v", err)
 	}
-	if resp != testSummaryMarker {
+	// 收口文本必须带上"为什么停下"，否则用户只会看到一个被包装成总结的半成品。
+	if !strings.Contains(resp, testSummaryMarker) {
 		t.Fatalf("a dead loop should conclude with a summary, got %q", resp)
 	}
+	if !strings.Contains(resp, "已自动停止") {
+		t.Fatalf("the conclusion must tell the user why it stopped, got %q", resp)
+	}
 
+	// 首次触发只注入"换方法"提示（不消耗一次工具执行），模型仍然重复同一个
+	// 调用才会收口 —— 所以总调用数是 sameToolLimit + 1。
 	toolTurns, _, _ := prov.snapshot()
-	if toolTurns != ag.sameToolLimit {
-		t.Fatalf("should conclude at identical-signature call #%d, got %d calls (maxTurns=%d)",
-			ag.sameToolLimit, toolTurns, ag.maxTurns)
+	if toolTurns != ag.sameToolLimit+1 {
+		t.Fatalf("should nudge at call #%d and conclude at #%d, got %d calls (maxTurns=%d)",
+			ag.sameToolLimit, ag.sameToolLimit+1, toolTurns, ag.maxTurns)
 	}
 }
 
@@ -161,9 +168,10 @@ func TestInterleavedRepeatIsNotALoop(t *testing.T) {
 // 在加入 repeatedResourceLimit 之前，这里会一直读到 maxTurns / 回合超时。
 func TestRepeatedResourceReadsWithoutModificationStop(t *testing.T) {
 	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
-	limit := ag.repeatedResourceLimit
-	if limit <= 1 {
-		t.Fatalf("precondition failed: repeatedResourceLimit=%d", limit)
+	// 整个回合都是只读，适用的是只读阈值（比修改类阈值宽松）。
+	limit := ag.readOnlyResourceLimit
+	if limit <= ag.repeatedResourceLimit {
+		t.Fatalf("precondition failed: readOnlyResourceLimit=%d should exceed repeatedResourceLimit=%d", limit, ag.repeatedResourceLimit)
 	}
 
 	detected, reason := false, ""
@@ -218,6 +226,27 @@ func TestResourceLessToolsAreNotCounted(t *testing.T) {
 		ag.recordToolCallSig("kanban_create", fmt.Sprintf(`{"title":"task %d"}`, i))
 		if detected, reason := ag.detectToolLoop(); detected {
 			t.Fatalf("tools without a resource key must not count towards repetition: %q", reason)
+		}
+	}
+}
+
+// TestReadOnlyAnalysisBeyondMutationLimitIsNotKilled：纯分析任务（只读、无修改）
+// 反复读同一批文件，次数超过修改类阈值但未达只读阈值时，不得被误杀。
+// 这是 readOnlyResourceLimit 存在的理由——代码审查、排查、调研天然需要重读。
+func TestReadOnlyAnalysisBeyondMutationLimitIsNotKilled(t *testing.T) {
+	ag := newLoopTestAgent(t, &scriptedLoopProvider{})
+	reads := ag.repeatedResourceLimit + 3
+	if reads >= ag.readOnlyResourceLimit {
+		t.Fatalf("precondition failed: need %d < readOnlyResourceLimit=%d", reads, ag.readOnlyResourceLimit)
+	}
+	// 交替读两个文件并穿插不同的 offset：签名各不相同，避开 sameToolLimit 与
+	// consecutiveLimit，只检验资源级（readOnlyResourceLimit）这一道判据。
+	// 每个文件被访问 reads 次（远低于只读阈值之上），应当放行。
+	for i := 0; i < reads; i++ {
+		ag.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"index.html","offset":%d}`, i*10))
+		ag.recordToolCallSig("read_file", fmt.Sprintf(`{"path":"docs.html","offset":%d}`, i*10))
+		if detected, reason := ag.detectToolLoop(); detected {
+			t.Fatalf("read-only analysis round %d was misjudged as spinning: %q", i+1, reason)
 		}
 	}
 }

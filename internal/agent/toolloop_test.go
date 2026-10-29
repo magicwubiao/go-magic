@@ -122,10 +122,16 @@ func TestStreamLoopDetectionEndsTurnGracefully(t *testing.T) {
 		t.Fatalf("stream path should end with a graceful summary, got error: %v", err)
 	}
 
+	// 首次触发先注入"换方法"提示，重复不变才收口：总调用数 = 阈值 + 1。
 	toolTurns, _, _ := prov.snapshot()
-	if toolTurns != ag.sameToolLimit {
-		t.Fatalf("loop detection should conclude at same-tool call #%d, but ran %d calls (maxTurns=%d)",
-			ag.sameToolLimit, toolTurns, ag.maxTurns)
+	if toolTurns != ag.sameToolLimit+1 {
+		t.Fatalf("loop detection should nudge at call #%d and conclude at #%d, but ran %d calls (maxTurns=%d)",
+			ag.sameToolLimit, ag.sameToolLimit+1, toolTurns, ag.maxTurns)
+	}
+
+	// 收口原因必须推给客户端：只推总结等于静默失败。
+	if !strings.Contains(out.String(), "已自动停止") {
+		t.Fatalf("the client was not told why the turn stopped, output: %q", out.String())
 	}
 
 	// 收口文本必须被推给客户端：流式增量已在前面推过，客户端的最终
@@ -280,8 +286,10 @@ func TestLoopCountersResetBetweenTurns(t *testing.T) {
 	}}
 	ag := NewEnhancedAgent(prov, registry, nil, "You are a helpful assistant.")
 
-	// 第 1 轮：同一工具连续 sameToolLimit 次 → 本轮内收口（这道保护本身是对的）。
-	script := make([]string, ag.sameToolLimit)
+	// 第 1 轮：同一工具连续重复 → 先给一次换方法提示，重复不变才收口
+	// （这道保护本身是对的）。所以脚本要比阈值多一轮，否则"提示后模型恰好
+	// 没东西可调"会让本轮以正常回答结束，测不到收口。
+	script := make([]string, ag.sameToolLimit+1)
 	for i := range script {
 		script[i] = "first_turn_tool"
 	}
@@ -291,8 +299,8 @@ func TestLoopCountersResetBetweenTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("turn 1 should not return an error: %v", err)
 	}
-	if resp != testSummaryMarker {
-		t.Fatalf("turn 1 should conclude at same-tool call #%d, got: %q", ag.sameToolLimit, resp)
+	if !strings.Contains(resp, testSummaryMarker) {
+		t.Fatalf("turn 1 should conclude at same-tool call #%d, got: %q", ag.sameToolLimit+1, resp)
 	}
 	if got := hits["first_turn_tool"]; got != ag.sameToolLimit-1 {
 		t.Fatalf("turn 1 should execute the first %d calls (the last one is blocked by the check), executed %d",
@@ -353,14 +361,15 @@ func TestCortexLoopDetectionAndGuideDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cortex path should end with a graceful summary, got error: %v", err)
 	}
-	if resp != testSummaryMarker {
+	if !strings.Contains(resp, testSummaryMarker) {
 		t.Fatalf("expected the loop-conclusion summary, got %q", resp)
 	}
 
 	toolTurns, sawGuide, _ := prov.snapshot()
 	// +1 是给 LLM 规划的余量（复杂度判定为 medium 以上时 cortex 会问一次
 	// "LLMPlanner"，mock 对它的答复同样是工具调用、解析失败后回落）。
-	if toolTurns > ag.sameToolLimit+1 {
+	// +2 = 一次"换方法"提示 + 一次 LLM 规划余量。
+	if toolTurns > ag.sameToolLimit+2 {
 		t.Fatalf("cortex path did not conclude at the loop limit: ran %d tool calls (limit %d, maxTurns=%d)",
 			toolTurns, ag.sameToolLimit, ag.maxTurns)
 	}

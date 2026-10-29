@@ -44,13 +44,40 @@ func TestEstimateTurnDuration_P90(t *testing.T) {
 		t.Fatalf("expected P90=9s (rank9/10), got %v", got)
 	}
 
-	// N=4 小样本含离群值 [1ms,1ms,1ms,5s] → rank ceil(3.6)=4 → 最大值 5s
+	// N=4 小样本含离群值 [1ms,1ms,1ms,5s]：P90 的最近邻秩是 ceil(3.6)=4 → 最大值 5s，
+	// 但那 5s 是孤立离群样本，直接用会让阈值顶到 5s。抗离群夹取把它压到
+	// 中位数(1ms) × turnEstimateOutlierFactor(2) = 2ms。
 	b := newDeadlineTestAgent()
 	b.turnDurations = []time.Duration{
 		time.Millisecond, time.Millisecond, time.Millisecond, 5 * time.Second,
 	}
-	if got := b.estimateTurnDuration(); got != 5*time.Second {
-		t.Fatalf("expected P90=5s (small-n outlier), got %v", got)
+	if got := b.estimateTurnDuration(); got != 2*time.Millisecond {
+		t.Fatalf("expected outlier-clamped 2ms (median×%.1f), got %v", turnEstimateOutlierFactor, got)
+	}
+}
+
+// TestEstimateTurnDuration_SingleSlowTurnDoesNotSpike 锁死"单次慢调用不抬高收尾阈值"。
+//
+// 这是 todo "deadline 的 P90 估计改为抗离群值"的回归点：小样本下 P90 等于最大值，
+// 一次 provider 排队/大构建就能让估计值飙到几分钟，于是剩余时间还够跑好几轮时
+// canStartAnotherTurn 就判定"来不及"，任务被提前收尾。
+func TestEstimateTurnDuration_SingleSlowTurnDoesNotSpike(t *testing.T) {
+	a := newDeadlineTestAgent()
+	a.turnDurations = []time.Duration{2 * time.Second, 2 * time.Second, 5 * time.Minute}
+	// P90 = 5min，但中位数是 2s，夹取后是 4s。
+	if got := a.estimateTurnDuration(); got != 4*time.Second {
+		t.Fatalf("a single slow turn must not spike the estimate: got %v, want 4s (median 2s × %.1f)",
+			got, turnEstimateOutlierFactor)
+	}
+
+	// 真的整体变慢时必须保持保守：9 个 2s 里夹 1 个 5min 仍是 P90=2s，
+	// 而全部样本都是 20s 时估计值就该是 20s 附近，不能被中位数压扁。
+	b := newDeadlineTestAgent()
+	for i := 0; i < 10; i++ {
+		b.turnDurations = append(b.turnDurations, 20*time.Second)
+	}
+	if got := b.estimateTurnDuration(); got != 20*time.Second {
+		t.Fatalf("uniformly slow turns must keep the conservative estimate: got %v, want 20s", got)
 	}
 }
 
