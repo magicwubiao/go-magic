@@ -1683,6 +1683,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// CLI 连接器（把外部命令行程序暴露成工具）
 	mux.HandleFunc("/api/cli/connectors", withCORS(requireAuth(s.handleCLIConnectors)))
 	mux.HandleFunc("/api/cli/connectors/", withCORS(requireAuth(s.handleCLIConnectorByID)))
+	mux.HandleFunc("/api/cli/parse", withCORS(requireAuth(s.handleCLIParse)))
 	mux.HandleFunc("/api/cli/test", withCORS(requireAuth(s.handleCLITest)))
 
 	// Skills

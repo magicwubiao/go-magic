@@ -77,6 +77,24 @@ export interface CLITestResult {
   }
 }
 
+/** 命令行解析结果：连接器命令 + 工具草稿。 */
+export interface CLIParseResult {
+  command: string
+  tool: CLIToolSpec
+  warnings?: string[]
+}
+
+/**
+ * 把一条完整命令行解析成工具草稿（后端无状态，不落盘）。
+ * 这是「快速导入」的后端：用户粘贴 gh pr list --repo o/r --limit 20 即得表单草稿。
+ */
+export async function parseCLICommand(input: string): Promise<CLIParseResult> {
+  return request<CLIParseResult>('/cli/parse', {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  })
+}
+
 export async function listCLIConnectors(): Promise<CLIConnectorView[]> {
   return request<CLIConnectorView[]>('/cli/connectors')
 }

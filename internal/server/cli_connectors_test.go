@@ -58,6 +58,8 @@ func doCLIRequest(t *testing.T, s *Server, method, path, body string) *httptest.
 		s.handleCLIConnectors(rec, req)
 	case path == "/api/cli/test":
 		s.handleCLITest(rec, req)
+	case path == "/api/cli/parse":
+		s.handleCLIParse(rec, req)
 	case strings.HasPrefix(path, "/api/cli/connectors/"):
 		s.handleCLIConnectorByID(rec, req)
 	default:
@@ -197,6 +199,41 @@ func TestCLIConnectorListSortedAndActive(t *testing.T) {
 	}
 	if !views[0].Active {
 		t.Fatal("connector without profiles/enabled=false should be active")
+	}
+}
+
+// 快速导入：命令行 → 工具草稿。无状态，不落盘。
+func TestCLIParseEndpoint(t *testing.T) {
+	s, _ := newCLITestServer(t)
+
+	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/parse",
+		`{"input": "gh pr list --repo owner/repo --limit 20 --json"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Command string `json:"command"`
+		Tool    struct {
+			Name string   `json:"name"`
+			Args []string `json:"args"`
+		} `json:"tool"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	if resp.Command != "gh" || resp.Tool.Name != "pr_list" {
+		t.Fatalf("got command=%q tool=%q", resp.Command, resp.Tool.Name)
+	}
+	if len(resp.Tool.Args) == 0 || resp.Tool.Args[0] != "pr" {
+		t.Fatalf("args = %v", resp.Tool.Args)
+	}
+
+	// 非法输入要 4xx，且不能落任何配置。
+	if rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/parse", `{"input": "   "}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty input: status = %d", rec.Code)
+	}
+	if s.cfg.Cli != nil {
+		t.Fatal("parse must not persist anything")
 	}
 }
 

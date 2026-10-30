@@ -22,6 +22,7 @@ import (
 //	GET    /api/cli/connectors/{name}         单个连接器
 //	PUT    /api/cli/connectors/{name}         upsert
 //	DELETE /api/cli/connectors/{name}         删除
+//	POST   /api/cli/parse                     把一条命令行解析成工具草稿（不保存）
 //	POST   /api/cli/test                      按提交的定义试跑一次（不保存）
 //
 // 与 /api/mcp/servers 的三条约定保持一致：
@@ -94,6 +95,31 @@ func (s *Server) handleCLIConnectorByID(w http.ResponseWriter, r *http.Request) 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleCLIParse 把一条完整命令行解析成工具草稿（无状态，不落盘、不进注册表）。
+//
+// 使用门槛的入口：用户粘贴 `gh pr list --repo owner/repo --limit 20`，
+// 后端生成 command + ToolSpec，前端把草稿填进表单让用户确认/微调。
+// 解析规则见 cliconn.ParseCommand。
+func (s *Server) handleCLIParse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Input string `json:"input"`
+	}
+	if err := decodeCLIBody(r, &body); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := cliconn.ParseCommand(body.Input)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	jsonResponse(w, res)
 }
 
 // handleCLITest 按提交的定义试跑一次，不改配置、不进注册表。

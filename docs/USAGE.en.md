@@ -1270,6 +1270,8 @@ Plenty of tools only ship a command line and no MCP server (`gh`, `kubectl`, `ff
 }
 ```
 
+**The low-friction entry — "quick import"**: in the Connectors → CLI add dialog, paste a full command (`gh pr list --repo owner/repo --limit 20 --json`) and the backend turns it into a tool draft — first word is the command, subcommands form the tool name (`pr_list`), value-taking options become parameters (type inferred from the example value), standalone switch options become boolean conditional parameters. The draft lands in the form for review/tweaks; no need to write templates by hand. Backed by `POST /api/cli/parse` (stateless, nothing persisted).
+
 Two template forms:
 
 | Template | Meaning |

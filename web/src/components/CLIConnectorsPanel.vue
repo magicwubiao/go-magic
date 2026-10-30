@@ -151,6 +151,24 @@
     <!-- 新建 / 编辑 -->
     <n-modal v-model:show="showForm" preset="card" :title="editingName ? t('cli.editConnector') : t('cli.addConnector')" style="width: 760px;">
       <n-space vertical size="small">
+        <!-- 快速导入：粘贴一条完整命令自动生成草稿。
+             这是主要入口，手写模板降级为"微调"。 -->
+        <div class="cli-quick">
+          <n-input
+            v-model:value="quickCmd"
+            :placeholder="t('cli.quickImportHint')"
+            @keydown.enter="applyQuickImport"
+          >
+            <template #prefix><component :is="SparklesOutline" /></template>
+          </n-input>
+          <n-button :loading="parsing" @click="applyQuickImport">
+            {{ t('cli.quickParse') }}
+          </n-button>
+        </div>
+        <n-text depth="3" style="font-size: 12px; margin-bottom: 4px;">
+          {{ t('cli.quickImportNote') }}
+        </n-text>
+
         <n-form-item :label="t('cli.name')" required>
           <n-input
             v-model:value="form.name"
@@ -347,9 +365,10 @@ import {
   useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { AddOutline, CreateOutline, EllipsisHorizontalOutline, PlayOutline, RefreshOutline, SearchOutline, TrashOutline } from '@vicons/ionicons5'
+import { AddOutline, CreateOutline, EllipsisHorizontalOutline, PlayOutline, RefreshOutline, SearchOutline, SparklesOutline, TrashOutline } from '@vicons/ionicons5'
 import {
   listCLIConnectors,
+  parseCLICommand,
   removeCLIConnector,
   saveCLIConnector,
   testCLIConnector,
@@ -472,6 +491,55 @@ const form = reactive({
 })
 const formTools = ref<ToolForm[]>([])
 
+// ---- 快速导入：粘贴一条命令 → 后端解析 → 草稿填进表单 ----
+const quickCmd = ref('')
+const parsing = ref(false)
+
+/**
+ * 解析结果填表。工具草稿进 formTools：
+ * 默认的空工具槽被替换，否则追加（编辑已有连接器时不动原有工具）。
+ */
+async function applyQuickImport() {
+  const input = quickCmd.value.trim()
+  if (!input) {
+    message.warning(t('cli.quickImportEmpty'))
+    return
+  }
+  parsing.value = true
+  try {
+    const res = await parseCLICommand(input)
+    form.command = res.command
+    if (!form.name) {
+      // 连接器名取命令基础名：去掉路径和 .exe，再清掉不合法字符。
+      const base = res.command.split(/[\\/]/).pop() || res.command
+      form.name = base.replace(/\.exe$/i, '').replace(/[^A-Za-z0-9_.-]/g, '') || 'cli'
+    }
+    const draft: ToolForm = {
+      name: res.tool.name,
+      description: res.tool.description,
+      argsStr: (res.tool.args || []).join('\n'),
+      readOnly: false,
+      stdinParam: '',
+      timeoutSeconds: 0,
+      paramsJson: res.tool.params?.length ? JSON.stringify(res.tool.params) : '',
+    }
+    const first = formTools.value[0]
+    if (formTools.value.length === 1 && !first.name && !first.argsStr && !first.paramsJson) {
+      formTools.value = [draft]
+    } else {
+      formTools.value.push(draft)
+    }
+    for (const w of res.warnings || []) {
+      message.warning(w, { duration: 6000 })
+    }
+    message.success(t('cli.quickParsed'))
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    parsing.value = false
+  }
+}
+
 const showTest = ref(false)
 const testTarget = ref<CLIConnectorView | null>(null)
 const testTool = ref<string | null>(null)
@@ -535,6 +603,7 @@ function resetForm() {
   form.approvalMode = 'inherit'
   form.profilesStr = ''
   formTools.value = [emptyTool()]
+  quickCmd.value = ''
 }
 
 function openAdd() {
@@ -778,6 +847,16 @@ onMounted(handleRefresh)
   （data-v-xxx 匹配不上，naive-ui 的 preset card 更是整块隔开）。
   项目约定：弹窗内部的样式写在全局 style 块里，类名带前缀避免撞车。
 */
+.cli-quick {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cli-quick .n-input {
+  flex: 1;
+}
+
 .cli-tool-editor {
   border: 1px solid #ebedf0;
   border-radius: 8px;
