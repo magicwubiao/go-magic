@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "github",
+  "version": "1.0.0",
+  "description": "通过 GitHub 官方 CLI（gh）查看仓库、PR 与 Issue，并在确认后创建它们。需要授权：填入一个 GitHub Personal Access Token，或在终端执行 gh auth login。",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["github", "gh", "devtools"],
+  "examples": [
+    "看看 facebook/react 最近有哪些 open 的 PR",
+    "把我们仓库里带 bug 标签的 issue 列出来",
+    "帮我在当前仓库建一个 issue，标题写“首页加载慢”",
+    "这个仓库的 star 数和简介是什么？"
+  ]
+}

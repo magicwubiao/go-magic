@@ -1,0 +1,119 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "connectors": {
+    "gh": {
+      "command": "gh",
+      "description": "GitHub official CLI. Authentication comes from the GH_TOKEN environment variable (user-provided) or a prior `gh auth login` on this machine.",
+      "timeout_seconds": 60,
+      "env": ["GH_TOKEN="],
+      "tools": [
+        {
+          "name": "repo_view",
+          "description": "Show a GitHub repository's description, default branch, language, stars and more (gh repo view).",
+          "args": ["repo", "view", "{{repo}}"],
+          "params": [
+            {
+              "name": "repo",
+              "type": "string",
+              "description": "Repository as OWNER/REPO, or a full https URL.",
+              "required": true
+            }
+          ],
+          "read_only": true
+        },
+        {
+          "name": "pr_list",
+          "description": "List pull requests in a repository (gh pr list), one line each with number, state, title and branch.",
+          "args": ["pr", "list", "-R", "{{repo}}", "--limit", "{{limit}}"],
+          "params": [
+            {
+              "name": "repo",
+              "type": "string",
+              "description": "Repository as OWNER/REPO. May be omitted by the caller in favor of the current directory's remote, but passing it explicitly is preferred.",
+              "required": true
+            },
+            {
+              "name": "limit",
+              "type": "integer",
+              "description": "Maximum number of PRs to list. Defaults to 30.",
+              "required": false,
+              "default": 30
+            }
+          ],
+          "read_only": true
+        },
+        {
+          "name": "issue_list",
+          "description": "List issues in a repository (gh issue list), one line each with number, state and title.",
+          "args": ["issue", "list", "-R", "{{repo}}", "--limit", "{{limit}}"],
+          "params": [
+            {
+              "name": "repo",
+              "type": "string",
+              "description": "Repository as OWNER/REPO.",
+              "required": true
+            },
+            {
+              "name": "limit",
+              "type": "integer",
+              "description": "Maximum number of issues to list. Defaults to 30.",
+              "required": false,
+              "default": 30
+            }
+          ],
+          "read_only": true
+        },
+        {
+          "name": "pr_create",
+          "description": "Create a pull request in a repository (gh pr create). Requires user approval; the user must review title and body first.",
+          "args": ["pr", "create", "-R", "{{repo}}", "--title", "{{title}}", "--body", "{{body}}"],
+          "params": [
+            {
+              "name": "repo",
+              "type": "string",
+              "description": "Repository as OWNER/REPO.",
+              "required": true
+            },
+            {
+              "name": "title",
+              "type": "string",
+              "description": "PR title.",
+              "required": true
+            },
+            {
+              "name": "body",
+              "type": "string",
+              "description": "PR body in Markdown.",
+              "required": true
+            }
+          ]
+        },
+        {
+          "name": "issue_create",
+          "description": "Create an issue in a repository (gh issue create). Requires user approval; the user must review title and body first.",
+          "args": ["issue", "create", "-R", "{{repo}}", "--title", "{{title}}", "--body", "{{body}}"],
+          "params": [
+            {
+              "name": "repo",
+              "type": "string",
+              "description": "Repository as OWNER/REPO.",
+              "required": true
+            },
+            {
+              "name": "title",
+              "type": "string",
+              "description": "Issue title.",
+              "required": true
+            },
+            {
+              "name": "body",
+              "type": "string",
+              "description": "Issue body in Markdown.",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

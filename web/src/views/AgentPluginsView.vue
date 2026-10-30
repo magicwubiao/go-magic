@@ -23,6 +23,67 @@
       </n-space>
     </n-space>
 
+    <!-- 官方技能包:内嵌"技能+连接器"组合,一键安装、授权即可用,无需手写配置 -->
+    <n-card style="margin-bottom: 24px;" size="small">
+      <template #header>
+        <n-space align="center" :size="8">
+          <n-icon size="18"><component :is="RocketOutline" /></n-icon>
+          <span>{{ t('agentplugins.officialTitle') }}</span>
+        </n-space>
+      </template>
+      <template #header-extra>
+        <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.officialSubtitle') }}</n-text>
+      </template>
+      <n-grid
+        v-if="store.officialPacks.length"
+        cols="1 s:2 l:3"
+        responsive="screen"
+        :x-gap="12"
+        :y-gap="12"
+      >
+        <n-gi v-for="pack in store.officialPacks" :key="pack.name">
+          <div class="official-pack">
+            <div class="official-pack-head">
+              <span class="official-pack-name">{{ pack.name }}</span>
+              <n-tag v-if="pack.version" size="tiny" type="default">v{{ pack.version }}</n-tag>
+              <n-tag v-if="pack.installed" size="tiny" type="success">
+                {{ t('agentplugins.officialInstalled') }}
+              </n-tag>
+            </div>
+            <n-text depth="3" style="font-size: 12px; display: block; margin-top: 4px;">
+              {{ pack.description }}
+            </n-text>
+            <div v-if="pack.examples && pack.examples.length" class="official-pack-examples">
+              <div v-for="(ex, i) in pack.examples.slice(0, 2)" :key="i" class="official-pack-example">
+                {{ ex }}
+              </div>
+            </div>
+            <div class="official-pack-foot">
+              <n-text
+                v-if="pack.required_env && pack.required_env.length"
+                type="warning"
+                style="font-size: 12px;"
+              >
+                {{ t('agentplugins.officialNeedCreds', { keys: pack.required_env.join(', ') }) }}
+              </n-text>
+              <span v-else />
+              <n-button
+                v-if="!pack.installed"
+                size="tiny"
+                type="primary"
+                secondary
+                :loading="!!store.pending[pack.name]"
+                @click="handleInstallOfficial(pack.name)"
+              >
+                {{ t('agentplugins.officialInstall') }}
+              </n-button>
+            </div>
+          </div>
+        </n-gi>
+      </n-grid>
+      <n-empty v-else :description="t('agentplugins.noPlugins')" style="padding: 16px 0;" />
+    </n-card>
+
     <n-spin v-if="store.loading && !store.plugins.length" />
     <template v-else>
       <!-- Overview Statistics -->
@@ -458,6 +519,7 @@ import {
   ChevronUpOutline,
   CloudUploadOutline,
   TrashOutline,
+  RocketOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
 
@@ -556,6 +618,17 @@ async function handleInstall(file: File) {
     }
   } catch (e: any) {
     message.error(e.message || t('agentplugins.installFailed'))
+  }
+}
+
+// === 官方技能包一键安装 ===
+
+async function handleInstallOfficial(name: string) {
+  try {
+    await store.installOfficial(name)
+    message.success(t('agentplugins.installed', { name }))
+  } catch (e: any) {
+    message.error(e.message || t('agentplugins.officialInstallFailed'))
   }
 }
 
@@ -675,6 +748,49 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 官方技能包卡片 */
+.official-pack {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  background: #fafafa;
+  transition: border-color 0.2s;
+}
+.official-pack:hover {
+  border-color: #2080f0;
+}
+.official-pack-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.official-pack-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.official-pack-examples {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(32, 128, 240, 0.06);
+}
+.official-pack-example {
+  font-size: 12px;
+  color: #5a6b8a;
+  padding: 3px 0;
+}
+.official-pack-foot {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
 .drop-zone {
   border: 2px dashed #d0d0d0;
   border-radius: 8px;

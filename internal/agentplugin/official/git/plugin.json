@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "git",
+  "version": "1.0.0",
+  "description": "通过 git 命令查看仓库状态、提交历史、变更差异并创建提交。安装即用，无需任何凭据。",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["git", "vcs", "devtools"],
+  "examples": [
+    "看看当前仓库改了哪些文件",
+    "总结一下最近 20 条提交都做了什么",
+    "帮我提交当前所有改动，提交信息写“修复登录超时”",
+    "现在在哪个分支上？远程还有哪些分支？"
+  ]
+}

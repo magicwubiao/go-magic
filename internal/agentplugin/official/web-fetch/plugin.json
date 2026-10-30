@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "web-fetch",
+  "version": "1.0.0",
+  "description": "通过 curl 发起 HTTP 请求：抓取网页、调用 REST API、下载文本内容。安装即用，无需任何凭据。",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["http", "curl", "web", "api"],
+  "examples": [
+    "抓一下这个页面的内容：https://example.com",
+    "用 GET 请求 http://localhost:8080/api/health 看服务是否正常",
+    "向这个接口 POST 一段 JSON 并把响应给我",
+    "帮我看看这个 API 返回的数据长什么样"
+  ]
+}
