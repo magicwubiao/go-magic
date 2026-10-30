@@ -114,28 +114,15 @@ func (r *Runtime) credentialsSnapshot() map[string]string {
 	return out
 }
 
-// withCredentials 返回叠加了用户凭据的 spec 拷贝(凭据覆盖 mcp.json 同名 env)。
-// 不改原 spec:重连/重载都以 mcp.json 为基准重新合并。
-func withCredentials(spec MCPServerSpec, creds map[string]string) MCPServerSpec {
-	if len(creds) == 0 || len(spec.Env) == 0 {
-		return spec
-	}
-	out := spec
-	env := make(map[string]string, len(spec.Env)+len(creds))
-	for k, v := range spec.Env {
-		env[k] = v
-	}
-	for k, v := range creds {
-		env[k] = v
-	}
-	out.Env = env
-	return out
-}
-
 // connectEntry 连接单个 MCP server 并发现工具。
 func (r *Runtime) connectEntry(entry *MCPEntryStatus) error {
-	// 用户凭据最后合并(覆盖 mcp.json 同名 env),凭据改了无需重新 Load。
-	tr, err := buildTransport(withCredentials(entry.Spec, r.credentialsSnapshot()))
+	// 用户凭据最后合并(覆盖 mcp.json 同名 env / 替换 ${CRED:NAME}),凭据改了无需重新 Load。
+	spec, missing := applyCredentials(entry.Spec, r.credentialsSnapshot())
+	if len(missing) > 0 {
+		// 缺凭据属于 auth 类失败:UI 据此亮"去授权",而不是让用户去查网络。
+		return missingCredsError(missing)
+	}
+	tr, err := buildTransport(spec)
 	if err != nil {
 		return err
 	}

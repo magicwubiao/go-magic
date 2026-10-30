@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
@@ -190,6 +189,8 @@ func (s *Server) unregisterAgentPluginArtifacts(plugins map[string]*agentplugin.
 //	POST   /api/agent-plugins/reload       — 重新扫描并加载(先停旧的 MCP)
 //	GET    /api/agent-plugins/official     — 官方技能包列表(含 installed 状态)
 //	POST   /api/agent-plugins/official/install — 一键安装官方技能包(body {"name"})
+//	GET    /api/agent-plugins/catalog      — 目录插件包列表(kind=mcp|cli,含 installed)
+//	POST   /api/agent-plugins/catalog/install — 目录条目物化成插件(body {"kind","id","args"})
 //	POST   /api/agent-plugins/install      — 上传 zip 安装插件(multipart "file" + "name")
 //	POST   /api/agent-plugins/{name}/uninstall  — 卸载并删除插件目录
 //	POST   /api/agent-plugins/{name}/enable     — 启用插件
@@ -218,6 +219,12 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 		return
 	case rest == "official/install" && r.Method == http.MethodPost:
 		s.installOfficialPack(w, r)
+		return
+	case rest == "catalog" && r.Method == http.MethodGet:
+		s.listAgentPluginCatalog(w, r)
+		return
+	case rest == "catalog/install" && r.Method == http.MethodPost:
+		s.installAgentPluginFromCatalog(w, r)
 		return
 	case rest == "install" && r.Method == http.MethodPost:
 		s.installAgentPlugin(w, r)
@@ -509,17 +516,15 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 		for k := range stored {
 			env[k] = maskedEnvValue
 		}
-		// 待填占位:值为空的 key 也要出现在表单里(即使已存了值,回显 *** 即可)。
+		// 待填占位:值为空的 env 与 args/headers 里的 ${CRED:NAME} 都要出现在表单里。
 		required := map[string][]string{}
 		for _, ms := range mp.Plugin.MCPServers {
-			keys := make([]string, 0, len(ms.Spec.Env))
-			for k, v := range ms.Spec.Env {
-				keys = append(keys, k)
-				if _, seen := env[k]; !seen && strings.TrimSpace(v) == "" {
+			keys := agentplugin.SpecCredentialKeys(ms.Spec)
+			for _, k := range keys {
+				if _, seen := env[k]; !seen {
 					env[k] = ""
 				}
 			}
-			sort.Strings(keys)
 			required[ms.Name] = keys
 		}
 		// CLI 组件的凭据占位用 "cli:<connector>" 作分组键:

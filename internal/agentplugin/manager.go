@@ -203,8 +203,8 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				"tools":      ms.ToolCount,
 				"error":      ms.Error,
 				"error_kind": ms.ErrorKind,
-				// env 值为空的 key = 需要用户填写的凭据占位(mcp.json 约定)。
-				"required_env": emptyEnvKeys(ms.Spec.Env),
+				// env 空值 + args/headers 里的 ${CRED:NAME} = 需要用户填写的凭据。
+				"required_env": SpecCredentialKeys(ms.Spec),
 			})
 		}
 		entry["mcp_servers"] = mcpEntries

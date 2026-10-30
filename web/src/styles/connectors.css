@@ -412,3 +412,94 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ===== 目录插件包详情（弹窗 teleport 到 body，样式必须全局） ===== */
+.cpc-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cpc-head .conn-avatar {
+  flex: none;
+}
+
+.cpc-sub {
+  font-size: 12px;
+  color: #909399;
+}
+
+.cpc-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.cpc-tags .conn-chip {
+  cursor: default;
+}
+
+.cpc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 6px;
+}
+
+.cpc-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+.cpc-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cpc-cmd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cpc-cmd code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.cpc-link {
+  font-size: 12px;
+  color: #2080f0;
+  text-decoration: none;
+}
+
+.cpc-link:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cpc-sub,
+  .cpc-hint {
+    color: #9a9a9a;
+  }
+
+  .cpc-label {
+    color: #c4c4c4;
+  }
+
+  .cpc-cmd code {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .cpc-link {
+    color: #78a9ff;
+  }
+}

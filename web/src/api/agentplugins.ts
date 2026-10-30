@@ -78,6 +78,38 @@ export interface AgentPluginInstallResult {
   dir: string
 }
 
+// 目录插件包：内置 MCP 连接器目录 / CLI 应用目录里的条目，安装后就是一个
+// 真正的 Agent Plugin（与官方技能包同构，可启用/禁用/卸载/授权）。
+export interface CatalogPack {
+  kind: 'mcp' | 'cli'
+  id: string
+  /** 物化后的插件名，也是目录名 */
+  name: string
+  display_name: string
+  description: string
+  category?: string
+  category_label?: string
+  tags?: string[]
+  /** 仅 MCP 条目有值（stdio / streamable-http / sse），纯展示 */
+  transport?: string
+  /** 安装后需要用户填写的凭据 key */
+  required_env?: string[]
+  /** stdio 模板参数（仅 MCP，用于"调整参数"覆盖安装） */
+  args?: string[]
+  /** CLI 条目的工具名（MCP 要连上才知道） */
+  tools?: string[]
+  binary?: string
+  binary_found?: boolean
+  install_commands?: string[]
+  login_commands?: string[]
+  docs_url?: string
+  installed: boolean
+}
+
+export interface CatalogInstallResult extends AgentPluginInstallResult {
+  required_env?: string[]
+}
+
 // 返回所有已加载的 Agent Plugin 摘要。
 export async function getAgentPlugins(): Promise<AgentPlugin[]> {
   return request('/agent-plugins')
@@ -93,6 +125,24 @@ export async function installOfficialPack(name: string): Promise<AgentPluginInst
   return request('/agent-plugins/official/install', {
     method: 'POST',
     body: JSON.stringify({ name }),
+  })
+}
+
+// 目录插件包列表（kind=mcp|cli，含 installed 状态）。
+export async function getCatalogPacks(kind: 'mcp' | 'cli'): Promise<CatalogPack[]> {
+  return request(`/agent-plugins/catalog?kind=${kind}`)
+}
+
+// 把目录条目安装成插件。args 仅对 stdio 类 MCP 条目生效（覆盖模板参数）。
+// 重复安装返回 409，由调用方提示先卸载。
+export async function installCatalogPack(
+  kind: 'mcp' | 'cli',
+  id: string,
+  args?: string[],
+): Promise<CatalogInstallResult> {
+  return request('/agent-plugins/catalog/install', {
+    method: 'POST',
+    body: JSON.stringify({ kind, id, args: args && args.length ? args : undefined }),
   })
 }
 

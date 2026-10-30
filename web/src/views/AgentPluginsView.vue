@@ -72,24 +72,24 @@
         <n-empty v-else :description="t('agentplugins.noPlugins')" style="padding: 16px 0;" />
       </div>
 
-      <!-- ===== MCP 连接器（目录条目直接铺成插件卡，点安装即接入） ===== -->
+      <!-- ===== MCP 连接器：目录条目即插件，装上进"已安装" ===== -->
       <div class="ap-section">
         <div class="ap-section-head">
           <n-icon size="16"><component :is="ServerOutline" /></n-icon>
           <span class="ap-section-title">{{ t('agentplugins.mcpCatalogTitle') }}</span>
           <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.mcpCatalogSubtitle') }}</n-text>
         </div>
-        <MCPCatalogCards />
+        <CatalogPackCards kind="mcp" @installed="onCatalogInstalled" />
       </div>
 
-      <!-- ===== CLI 应用（同上：一张卡一个工具，装上即出现在连接器页） ===== -->
+      <!-- ===== CLI 应用：同上，一张卡一个工具包 ===== -->
       <div class="ap-section">
         <div class="ap-section-head">
           <n-icon size="16"><component :is="TerminalOutline" /></n-icon>
           <span class="ap-section-title">{{ t('agentplugins.cliCatalogTitle') }}</span>
           <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.cliCatalogSubtitle') }}</n-text>
         </div>
-        <CLICatalogCards />
+        <CatalogPackCards kind="cli" @installed="onCatalogInstalled" />
       </div>
 
       <!-- ===== 已安装插件 ===== -->
@@ -456,8 +456,7 @@ import {
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
 import type { AgentPlugin } from '@/api/agentplugins'
-import MCPCatalogCards from '@/components/MCPCatalogCards.vue'
-import CLICatalogCards from '@/components/CLICatalogCards.vue'
+import CatalogPackCards from '@/components/CatalogPackCards.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -560,7 +559,19 @@ async function handleInstall(file: File) {
   }
 }
 
-// === 官方技能包一键安装 ===
+// === 官方技能包 / 目录插件包一键安装 ===
+
+/**
+ * 安装成功后：刷新插件列表（卡片状态由后端 installed 决定），
+ * 需要凭据的直接弹授权表单——"装上 → 授权 → 能用"一步接一步。
+ */
+async function onCatalogInstalled(payload: { name: string; requiredEnv: string[] }) {
+  await store.loadPlugins()
+  expanded[payload.name] = true
+  if (payload.requiredEnv.length) {
+    await openCredentials(payload.name)
+  }
+}
 
 async function handleInstallOfficial(name: string) {
   try {

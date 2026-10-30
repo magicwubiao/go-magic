@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// withCredentials 的核心约定:用户凭据覆盖 mcp.json 同名 env、其余保留、
+// applyCredentials 的核心约定:用户凭据覆盖 mcp.json 同名 env、其余保留、
 // 且绝不改写原 spec(重连要以 mcp.json 为基准重新合并)。
-func TestWithCredentials(t *testing.T) {
+func TestApplyCredentials(t *testing.T) {
 	base := MCPServerSpec{
 		Type: TransportStdio,
 		Env:  map[string]string{"DINGTALK_Client_ID": "", "DINGTALK_Client_Secret": "", "LOG_LEVEL": "debug"},
@@ -18,7 +18,10 @@ func TestWithCredentials(t *testing.T) {
 		"EXTRA":                  "1", // mcp.json 里没声明的 key 也要带上
 	}
 
-	got := withCredentials(base, creds)
+	got, missing := applyCredentials(base, creds)
+	if len(missing) != 0 {
+		t.Fatalf("unexpected missing creds: %v", missing)
+	}
 
 	if got.Env["DINGTALK_Client_ID"] != "app-123" || got.Env["DINGTALK_Client_Secret"] != "sec-456" {
 		t.Errorf("credentials not applied: %v", got.Env)
@@ -35,8 +38,68 @@ func TestWithCredentials(t *testing.T) {
 	}
 
 	// 空凭据:原样返回。
-	if out := withCredentials(base, nil); !reflect.DeepEqual(out, base) {
-		t.Errorf("nil credentials should return spec unchanged, got %+v", out)
+	out, missing := applyCredentials(base, nil)
+	if len(missing) != 0 {
+		t.Errorf("missing should be empty, got %v", missing)
+	}
+	if !reflect.DeepEqual(out.Env, base.Env) {
+		t.Errorf("nil credentials should keep env, got %+v", out.Env)
+	}
+}
+
+// ${CRED:NAME} 是 args/headers 里的凭据引用(目录条目物化成插件包后才需要)。
+func TestApplyCredentialsCredRefs(t *testing.T) {
+	base := MCPServerSpec{
+		Type:    TransportStdio,
+		Command: "npx",
+		Args:    []string{"-y", "lark-mcp", "-a", "${CRED:LARK_APP_ID}", "-s", "${CRED:LARK_APP_SECRET}"},
+		Headers: map[string]string{"Authorization": "Bearer ${CRED:TOKEN}"},
+	}
+
+	// 缺凭据:原样保留占位，并报告缺失的 key（排序去重）。
+	_, missing := applyCredentials(base, map[string]string{"TOKEN": "t"})
+	want := []string{"LARK_APP_ID", "LARK_APP_SECRET"}
+	if !reflect.DeepEqual(missing, want) {
+		t.Fatalf("missing = %v, want %v", missing, want)
+	}
+
+	got, missing := applyCredentials(base, map[string]string{
+		"LARK_APP_ID":     "app",
+		"LARK_APP_SECRET": "sec",
+		"TOKEN":           "tok",
+	})
+	if len(missing) != 0 {
+		t.Fatalf("unexpected missing: %v", missing)
+	}
+	wantArgs := []string{"-y", "lark-mcp", "-a", "app", "-s", "sec"}
+	if !reflect.DeepEqual(got.Args, wantArgs) {
+		t.Errorf("args = %v, want %v", got.Args, wantArgs)
+	}
+	if got.Headers["Authorization"] != "Bearer tok" {
+		t.Errorf("headers not resolved: %v", got.Headers)
+	}
+	// 共享切片必须被复制，否则会把凭据写回 mcp.json 的原始 spec。
+	if base.Args[3] != "${CRED:LARK_APP_ID}" {
+		t.Errorf("original args mutated: %v", base.Args)
+	}
+}
+
+// SpecCredentialKeys 汇总三处凭据位置:env 空值、args 与 headers 里的引用。
+func TestSpecCredentialKeys(t *testing.T) {
+	spec := MCPServerSpec{
+		Args: []string{"--url=${CRED:SITE_URL}"},
+		Env:  map[string]string{"APP_TOKEN": "", "LOG": "debug"},
+		Headers: map[string]string{
+			"Authorization": "Bearer ${CRED:HEADER_TOKEN}",
+		},
+	}
+	got := SpecCredentialKeys(spec)
+	want := []string{"APP_TOKEN", "HEADER_TOKEN", "SITE_URL"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SpecCredentialKeys = %v, want %v", got, want)
+	}
+	if out := SpecCredentialKeys(MCPServerSpec{Env: map[string]string{"K": "v"}}); len(out) != 0 {
+		t.Errorf("no placeholders expected, got %v", out)
 	}
 }
 
