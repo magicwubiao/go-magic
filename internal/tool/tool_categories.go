@@ -168,6 +168,14 @@ var toolCategories = []ToolCategory{
 		Description: "Tools bridged from configured MCP servers",
 		Tools:       []string{},
 	},
+	{
+		// CLI 连接器工具（cli_<connector>_<tool>），同样按前缀归类：
+		// 每个连接器展开出多少工具取决于用户配置，无法静态列举。
+		ID:          "cli",
+		Label:       "CLI Connectors",
+		Description: "Tools exposed by external command-line programs",
+		Tools:       []string{},
+	},
 }
 
 // OtherCategoryID 未登记工具的兜底分组 id（前端 "Other"）。
@@ -186,14 +194,18 @@ func buildCategoryIndex() map[string]string {
 	return idx
 }
 
-// CategoryOfTool 返回工具所属分类 id；未登记的非 MCP 工具返回 ""，
-// 调用方应把它归入 OtherCategoryID。MCP 桥接工具按 mcp_ 前缀识别。
+// CategoryOfTool 返回工具所属分类 id；未登记的非 MCP/CLI 工具返回 ""，
+// 调用方应把它归入 OtherCategoryID。MCP 桥接工具按 mcp_ 前缀识别，
+// CLI 连接器工具按 cli_ 前缀识别。
 func CategoryOfTool(name string) string {
 	if id, ok := categoryIndex[name]; ok {
 		return id
 	}
 	if strings.HasPrefix(name, "mcp_") {
 		return "mcp"
+	}
+	if strings.HasPrefix(name, "cli_") {
+		return "cli"
 	}
 	return ""
 }

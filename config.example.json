@@ -145,5 +145,31 @@
     "redact_ip": true,
     "redact_address": true,
     "custom_patterns": {}
+  },
+  "cli": {
+    "comment": "CLI connectors: wrap command-line programs that have no MCP server. Each tool becomes cli_<connector>_<tool>. Args are passed as an argv array (no shell), so values containing spaces/semicolons stay literal. Templates: {{name}} inserts a parameter value (a lone placeholder with an empty value drops the whole argument, including a preceding --flag); an argument starting with {{?name}} is kept only when that parameter is truthy.",
+    "connectors": {
+      "gh": {
+        "command": "gh",
+        "description": "GitHub CLI",
+        "env": ["GH_TOKEN=ghp_xxx"],
+        "timeout_seconds": 60,
+        "require_approval": true,
+        "tools": [
+          {
+            "name": "pr_list",
+            "description": "List pull requests of a repository",
+            "args": ["pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "--state", "{{state}}", "{{?json}}--json", "number,title,state,url"],
+            "read_only": true,
+            "params": [
+              {"name": "repo", "description": "owner/name", "required": true},
+              {"name": "limit", "type": "integer", "default": 20},
+              {"name": "state", "enum": ["open", "closed", "merged", "all"], "default": "open"},
+              {"name": "json", "type": "boolean", "description": "output JSON fields"}
+            ]
+          }
+        ]
+      }
+    }
   }
 }

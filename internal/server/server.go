@@ -23,6 +23,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/bot"
 	"github.com/magicwubiao/go-magic/internal/bus"
+	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
 	"github.com/magicwubiao/go-magic/internal/goal"
@@ -148,6 +149,10 @@ type Server struct {
 
 	// MCP manager
 	mcpMgr *mcp.Manager
+
+	// cliMgr 持有 CLI 连接器定义（config.json 的 cli 段）。CLI 是无状态的
+	// 一次性子进程，因此这里没有"连接"概念，只负责定义与工具注册。
+	cliMgr *cliconn.Manager
 
 	// Goal manager
 	goalMgr *goal.Manager
@@ -658,6 +663,7 @@ Your working directory is: %s
 		approvalMgr:          approvalMgr,
 		usageMgr:             usageMgr,
 		mcpMgr:               mcpMgr,
+		cliMgr:               cliconn.New(nil),
 		actions:              make(map[string]*ActionStatus),
 		sessionTokens:        make(map[string][3]int),
 		authToken:            authToken,
@@ -755,6 +761,11 @@ Your working directory is: %s
 			s.mcpMgr.StartHealthMonitor(mcp.DefaultHealthInterval)
 		}
 	})
+
+	// CLI 连接器（config.json 的 cli 段）：把外部命令行程序展开成
+	// cli_<connector>_<tool> 工具。纯内存注册，不拉子进程，同步执行即可——
+	// 放在 MCP 后台连接之后调用，保证首个会话创建时 cli_* 工具已经就位。
+	s.initCLIConnectors()
 
 	// QR 扫码平台（WeCom AI Bot / WeChat iLink）确认登录后自动重启 gateway：
 	// 让新写入 config.json 的 bot_id/secret 或 token 生效（否则新 bot 永不
@@ -1668,6 +1679,11 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/mcp/servers/", withCORS(requireAuth(s.handleMCPServerByID)))
 	mux.HandleFunc("/api/mcp/health", withCORS(requireAuth(s.handleMCPHealth)))
 	mux.HandleFunc("/api/mcp/catalog", withCORS(requireAuth(s.handleMCPCatalog)))
+
+	// CLI 连接器（把外部命令行程序暴露成工具）
+	mux.HandleFunc("/api/cli/connectors", withCORS(requireAuth(s.handleCLIConnectors)))
+	mux.HandleFunc("/api/cli/connectors/", withCORS(requireAuth(s.handleCLIConnectorByID)))
+	mux.HandleFunc("/api/cli/test", withCORS(requireAuth(s.handleCLITest)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))

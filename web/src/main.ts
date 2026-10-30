@@ -3,6 +3,8 @@ import { createPinia } from 'pinia'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import { i18n } from './locales'
+// 连接器页（MCP / CLI 共用）的卡片化样式：两个组件 + teleport 到 body 的抽屉都要用
+import './styles/connectors.css'
 import { getAuthToken, setAuthToken } from './api/client'
 import { getAuthStatus } from './api/auth'
 
@@ -75,6 +77,8 @@ const router = createRouter({
     { path: '/files', component: FilesView },
     { path: '/usage', component: UsageView },
     { path: '/mcp', component: MCPView },
+    // CLI 连接器已并入连接器页（MCP / CLI 两个页签），旧链接重定向
+    { path: '/cli', redirect: '/mcp' },
     { path: '/plugins', component: AgentPluginsView },
 
   ],

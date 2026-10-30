@@ -1,0 +1,776 @@
+<template>
+  <div>
+    <!-- 与 MCP 页签同一套卡片布局（样式在 styles/connectors.css）：
+         上面检索/筛选，下面卡片，点卡片在右侧抽屉里看工具清单。 -->
+    <div class="conn-toolbar">
+      <n-input
+        v-model:value="searchQuery"
+        clearable
+        :placeholder="t('cli.searchPlaceholder')"
+        class="conn-search"
+      >
+        <template #prefix><component :is="SearchOutline" /></template>
+      </n-input>
+
+      <div class="conn-chips">
+        <button
+          v-for="chip in stateChips"
+          :key="chip.key"
+          type="button"
+          class="conn-chip"
+          :class="{ 'is-active': stateFilter === chip.key }"
+          @click="stateFilter = chip.key"
+        >
+          {{ chip.label }}
+        </button>
+      </div>
+
+      <n-space :size="8" class="conn-toolbar-actions">
+        <n-button size="small" @click="handleRefresh" :loading="loading">
+          <template #icon><component :is="RefreshOutline" /></template>
+          {{ t('common.refresh') }}
+        </n-button>
+        <n-button size="small" type="primary" @click="openAdd">
+          <template #icon><component :is="AddOutline" /></template>
+          {{ t('cli.addConnector') }}
+        </n-button>
+      </n-space>
+    </div>
+
+    <div class="conn-count">{{ t('cli.listSummary', { total: connectors.length, enabled: enabledCount }) }}</div>
+
+    <n-spin v-if="loading && !connectors.length" />
+
+    <template v-else>
+      <div v-if="visibleConnectors.length" class="conn-grid">
+        <div
+          v-for="row in visibleConnectors"
+          :key="row.name"
+          class="conn-card"
+          :class="{ 'is-idle': !row.active }"
+          @click="openDetail(row)"
+        >
+          <div class="conn-card-head">
+            <div class="conn-avatar" :class="row.active ? 'is-ok' : ''">{{ avatarText(row.name) }}</div>
+            <div class="conn-ident">
+              <div class="conn-name">
+                <span class="conn-name-text">{{ row.name }}</span>
+                <span class="conn-dot" :class="row.active ? 'is-ok' : ''" />
+              </div>
+              <div class="conn-sub">
+                <span>{{ row.command }}</span>
+                <span> · {{ t('cli.toolCountLabel', { count: row.tools?.length || 0 }) }}</span>
+              </div>
+            </div>
+            <n-dropdown
+              trigger="click"
+              :options="cardMenu()"
+              @select="(key: string) => handleCardMenu(key, row)"
+            >
+              <n-button text size="tiny" class="conn-more" @click.stop>
+                <template #icon><component :is="EllipsisHorizontalOutline" /></template>
+              </n-button>
+            </n-dropdown>
+          </div>
+
+          <div class="conn-desc" :title="row.description || ''">
+            {{ row.description || t('cli.noDescription') }}
+          </div>
+
+          <div class="conn-foot" @click.stop>
+            <n-space :size="4">
+              <n-tag v-if="row.require_approval" size="tiny" :bordered="false" type="info">
+                {{ t('cli.approvalTag') }}
+              </n-tag>
+              <span class="conn-state" :class="{ 'is-on': row.active }">
+                {{ row.active ? t('cli.stateEnabled') : t('cli.stateDisabled') }}
+              </span>
+            </n-space>
+            <n-button size="tiny" @click="openTest(row)">
+              <template #icon><component :is="PlayOutline" /></template>
+              {{ t('cli.test') }}
+            </n-button>
+          </div>
+        </div>
+      </div>
+
+      <n-alert v-else-if="!connectors.length" type="info" :bordered="false">
+        {{ t('cli.emptyHint') }}
+      </n-alert>
+      <n-empty v-else :description="t('mcp.noSearchResult')" style="margin-top: 16px;" />
+    </template>
+
+    <!-- 详情抽屉：工具清单 + 单工具的参数/参数模板。卡片只放概览。 -->
+    <n-drawer
+      :show="!!detailName"
+      :width="520"
+      placement="right"
+      @update:show="(v: boolean) => { if (!v) detailName = '' }"
+    >
+      <n-drawer-content :title="detailName" closable>
+        <template v-if="detailRow">
+          <n-space :size="8" style="margin-bottom: 14px;">
+            <n-button size="small" @click="openTest(detailRow)">
+              <template #icon><component :is="PlayOutline" /></template>
+              {{ t('cli.test') }}
+            </n-button>
+            <n-button size="small" @click="openEdit(detailRow)">
+              <template #icon><component :is="CreateOutline" /></template>
+              {{ t('common.edit') }}
+            </n-button>
+            <n-button size="small" type="error" @click="confirmDelete(detailRow)">
+              <template #icon><component :is="TrashOutline" /></template>
+              {{ t('common.delete') }}
+            </n-button>
+          </n-space>
+
+          <div class="conn-drawer-tools">
+            <div v-for="tool in detailRow.tools" :key="tool.name" class="cli-tool">
+              <div class="cli-tool-head">
+                <n-text code>{{ detailRow.name }}_{{ tool.name }}</n-text>
+                <n-tag v-if="tool.read_only" size="tiny" :bordered="false" type="success">
+                  {{ t('cli.readOnly') }}
+                </n-tag>
+                <n-tag v-if="tool.timeout_seconds" size="tiny" :bordered="false">
+                  {{ tool.timeout_seconds }}s
+                </n-tag>
+              </div>
+              <div class="cli-tool-desc">{{ tool.description }}</div>
+              <pre class="cli-tool-args">{{ (tool.args || []).join('\n') }}</pre>
+              <div v-if="tool.params?.length" class="cli-tool-params">
+                <n-tag v-for="p in tool.params" :key="p.name" size="tiny" :bordered="false">
+                  {{ p.name }}:{{ p.type || 'string' }}{{ p.required ? '*' : '' }}
+                </n-tag>
+              </div>
+            </div>
+          </div>
+        </template>
+      </n-drawer-content>
+    </n-drawer>
+
+    <!-- 新建 / 编辑 -->
+    <n-modal v-model:show="showForm" preset="card" :title="editingName ? t('cli.editConnector') : t('cli.addConnector')" style="width: 760px;">
+      <n-space vertical size="small">
+        <n-form-item :label="t('cli.name')" required>
+          <n-input
+            v-model:value="form.name"
+            :disabled="!!editingName"
+            placeholder="gh"
+          />
+        </n-form-item>
+
+        <n-form-item :label="t('cli.command')" required>
+          <n-input v-model:value="form.command" placeholder="gh / /usr/local/bin/kubectl" />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('cli.commandHint') }}</n-text>
+          </template>
+        </n-form-item>
+
+        <n-form-item :label="t('cli.commonArgs')">
+          <n-input
+            v-model:value="form.argsStr"
+            type="textarea"
+            :rows="2"
+            :placeholder="ARGS_EXAMPLE"
+          />
+        </n-form-item>
+
+        <n-form-item :label="t('cli.description')">
+          <n-input v-model:value="form.description" :placeholder="t('cli.descriptionPlaceholder')" />
+        </n-form-item>
+
+        <n-form-item :label="t('cli.env')">
+          <n-input
+            v-model:value="form.envStr"
+            type="textarea"
+            :rows="2"
+            placeholder="GH_TOKEN=xxxx&#10;NO_COLOR=1"
+          />
+          <template #feedback>
+            <n-text depth="3" style="font-size: 12px;">{{ t('cli.envHint') }}</n-text>
+          </template>
+        </n-form-item>
+
+        <n-space :size="12">
+          <n-form-item :label="t('cli.timeout')" style="width: 160px;">
+            <n-input-number v-model:value="form.timeoutSeconds" :min="1" :max="600" style="width: 100%;" />
+          </n-form-item>
+          <n-form-item :label="t('cli.workingDir')" style="flex: 1;">
+            <n-input v-model:value="form.workingDir" :placeholder="t('cli.workingDirPlaceholder')" />
+          </n-form-item>
+        </n-space>
+
+        <n-form-item :label="t('cli.behavior')">
+          <n-space vertical size="small" style="width: 100%;">
+            <n-space align="center" size="small">
+              <n-switch v-model:value="form.enabled" size="small" />
+              <n-text style="font-size: 13px;">{{ t('cli.enabled') }}</n-text>
+            </n-space>
+            <n-space align="center" size="small">
+              <n-switch v-model:value="form.requireApproval" size="small" />
+              <n-text style="font-size: 13px;">{{ t('cli.requireApproval') }}</n-text>
+            </n-space>
+            <n-input v-model:value="form.profilesStr" size="small" :placeholder="t('cli.profilesPlaceholder')" />
+          </n-space>
+        </n-form-item>
+
+        <n-divider style="margin: 4px 0;">
+          {{ t('cli.toolsSection') }}
+        </n-divider>
+
+        <div v-for="(tool, idx) in formTools" :key="idx" class="cli-tool-editor">
+          <n-space justify="space-between" align="center" style="margin-bottom: 6px;">
+            <n-text strong style="font-size: 13px;">{{ t('cli.toolN', { n: idx + 1 }) }}</n-text>
+            <n-button text size="tiny" type="error" @click="formTools.splice(idx, 1)">
+              {{ t('common.delete') }}
+            </n-button>
+          </n-space>
+          <n-space :size="8" style="margin-bottom: 6px;">
+            <n-input v-model:value="tool.name" size="small" :placeholder="t('cli.toolName')" style="width: 200px;" />
+            <n-input v-model:value="tool.description" size="small" :placeholder="t('cli.toolDescription')" style="flex: 1;" />
+          </n-space>
+          <n-input
+            v-model:value="tool.argsStr"
+            type="textarea"
+            :rows="3"
+            size="small"
+            :placeholder="ARGS_EXAMPLE"
+          />
+          <n-space align="center" size="small" style="margin-top: 6px;">
+            <n-switch v-model:value="tool.readOnly" size="small" />
+            <n-text style="font-size: 12px;">{{ t('cli.readOnly') }}</n-text>
+            <n-input v-model:value="tool.stdinParam" size="small" :placeholder="t('cli.stdinParam')" style="width: 200px;" />
+            <n-input-number v-model:value="tool.timeoutSeconds" size="small" :min="0" :max="600" :placeholder="t('cli.timeout')" style="width: 130px;" />
+          </n-space>
+          <n-input
+            v-model:value="tool.paramsJson"
+            type="textarea"
+            :rows="2"
+            size="small"
+            style="margin-top: 6px;"
+            :placeholder="PARAMS_EXAMPLE"
+          />
+        </div>
+
+        <n-space size="small">
+          <n-button size="small" @click="addTool">
+            <template #icon><component :is="AddOutline" /></template>
+            {{ t('cli.addTool') }}
+          </n-button>
+          <n-button size="small" quaternary @click="fillExample">{{ t('cli.fillExample') }}</n-button>
+        </n-space>
+
+        <n-alert type="default" :bordered="false" style="margin-top: 8px;">
+          <span style="font-size: 12px;">{{ t('cli.templateHint') }}</span>
+        </n-alert>
+      </n-space>
+
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showForm = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- 试跑 -->
+    <n-modal v-model:show="showTest" preset="card" :title="t('cli.testTitle')" style="width: 720px;">
+      <n-space vertical size="small">
+        <n-form-item :label="t('cli.pickTool')">
+          <n-select v-model:value="testTool" :options="testToolOptions" />
+        </n-form-item>
+        <n-form-item :label="t('cli.testParams')">
+          <n-input
+            v-model:value="testParams"
+            type="textarea"
+            :rows="4"
+            placeholder="{}"
+          />
+        </n-form-item>
+        <n-button type="primary" :loading="testing" :disabled="!testTool" @click="runTest">
+          <template #icon><component :is="PlayOutline" /></template>
+          {{ t('cli.runTest') }}
+        </n-button>
+
+        <template v-if="testResult">
+          <n-alert :type="testResult.ok ? 'success' : 'error'" :bordered="false">
+            <span style="font-size: 12px;">
+              {{ testResult.ok ? t('cli.testOk') : (testResult.error || t('cli.testFailed')) }}
+              · {{ testResult.elapsed_ms }}ms
+            </span>
+          </n-alert>
+          <template v-if="testResult.result">
+            <div class="cli-output-label">
+              {{ t('cli.exitCode') }}: {{ testResult.result.exit_code }}
+            </div>
+            <pre class="cli-output">{{ testResult.result.stdout || t('cli.noStdout') }}</pre>
+            <template v-if="testResult.result.stderr">
+              <div class="cli-output-label">{{ t('cli.stderr') }}</div>
+              <pre class="cli-output is-error">{{ testResult.result.stderr }}</pre>
+            </template>
+            <n-text v-if="testResult.result.truncated" depth="3" style="font-size: 12px;">
+              {{ testResult.result.truncated_hint }}
+            </n-text>
+          </template>
+        </template>
+      </n-space>
+    </n-modal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import {
+  NAlert,
+  NButton,
+  NDivider,
+  NDrawer,
+  NDrawerContent,
+  NDropdown,
+  NEmpty,
+  NFormItem,
+  NInput,
+  NInputNumber,
+  NModal,
+  NSelect,
+  NSpace,
+  NSpin,
+  NSwitch,
+  NTag,
+  NText,
+  useDialog,
+  useMessage,
+} from 'naive-ui'
+import { useI18n } from 'vue-i18n'
+import { AddOutline, CreateOutline, EllipsisHorizontalOutline, PlayOutline, RefreshOutline, SearchOutline, TrashOutline } from '@vicons/ionicons5'
+import {
+  listCLIConnectors,
+  removeCLIConnector,
+  saveCLIConnector,
+  testCLIConnector,
+} from '@/api/cli'
+import type { CLIConnector, CLIConnectorView, CLITestResult } from '@/api/cli'
+
+const emit = defineEmits<{ (e: 'count', n: number): void }>()
+
+const { t } = useI18n()
+
+// 代码示例不放进 i18n：内容与语言无关，而且 vue-i18n 会把 {{name}}、{...}
+// 当成插值语法解析（编译期报错/运行期告警）。这里按字面量展示。
+const ARGS_EXAMPLE = 'pr\nlist\n--limit\n{{limit}}'
+const PARAMS_EXAMPLE = '[{"name":"limit","type":"integer","required":false}]'
+const message = useMessage()
+const dialog = useDialog()
+
+const connectors = ref<CLIConnectorView[]>([])
+const loading = ref(false)
+const saving = ref(false)
+
+const searchQuery = ref('')
+/** 筛选：全部 / 已启用 / 未启用（enabled=false 或 profiles 不含当前分身）。 */
+const stateFilter = ref<'all' | 'enabled' | 'disabled'>('all')
+const stateChips = computed(() => [
+  { key: 'all' as const, label: t('common.all') },
+  { key: 'enabled' as const, label: t('cli.stateEnabled') },
+  { key: 'disabled' as const, label: t('cli.stateDisabled') },
+])
+
+const enabledCount = computed(() => connectors.value.filter((c) => c.active).length)
+
+const visibleConnectors = computed(() => {
+  let list = connectors.value
+  if (stateFilter.value === 'enabled') list = list.filter((c) => c.active)
+  else if (stateFilter.value === 'disabled') list = list.filter((c) => !c.active)
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q)
+        || (c.command || '').toLowerCase().includes(q)
+        || (c.description || '').toLowerCase().includes(q),
+    )
+  }
+  return list
+})
+
+/** 详情抽屉：卡片只放概览，工具清单/参数模板放这里。 */
+const detailName = ref('')
+const detailRow = computed(
+  () => connectors.value.find((c) => c.name === detailName.value) ?? null,
+)
+
+function openDetail(row: CLIConnectorView) {
+  detailName.value = row.name
+}
+
+/** 卡片头像：取连接器名前两位，与 MCP 卡片同款。 */
+function avatarText(name: string): string {
+  const trimmed = (name || '').trim()
+  if (!trimmed) return '?'
+  return trimmed.slice(0, 2).toUpperCase()
+}
+
+/** 卡片「…」菜单：低频动作不进主路径。 */
+function cardMenu() {
+  return [
+    { label: t('common.edit'), key: 'edit' },
+    { label: t('cli.test'), key: 'test' },
+    { type: 'divider' as const },
+    { label: t('common.delete'), key: 'delete' },
+  ]
+}
+
+function handleCardMenu(key: string, row: CLIConnectorView) {
+  if (key === 'edit') openEdit(row)
+  else if (key === 'test') openTest(row)
+  else if (key === 'delete') confirmDelete(row)
+}
+
+const showForm = ref(false)
+const editingName = ref('')
+
+interface ToolForm {
+  name: string
+  description: string
+  argsStr: string
+  readOnly: boolean
+  stdinParam: string
+  timeoutSeconds: number | null
+  paramsJson: string
+}
+
+const form = reactive({
+  name: '',
+  command: '',
+  argsStr: '',
+  description: '',
+  envStr: '',
+  workingDir: '',
+  timeoutSeconds: 60 as number | null,
+  enabled: true,
+  requireApproval: true,
+  profilesStr: '',
+})
+const formTools = ref<ToolForm[]>([])
+
+const showTest = ref(false)
+const testTarget = ref<CLIConnectorView | null>(null)
+const testTool = ref<string | null>(null)
+const testParams = ref('{}')
+const testing = ref(false)
+const testResult = ref<CLITestResult | null>(null)
+
+const testToolOptions = computed(() =>
+  (testTarget.value?.tools || []).map((tool) => ({ label: tool.name, value: tool.name })),
+)
+
+async function handleRefresh() {
+  loading.value = true
+  try {
+    connectors.value = await listCLIConnectors()
+    emit('count', connectors.value.length)
+    // 抽屉跟着列表走：被删掉的连接器不该留在抽屉里
+    if (detailName.value && !connectors.value.some((c) => c.name === detailName.value)) {
+      detailName.value = ''
+    }
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 一行一个参数：不做 shell 拆分，值里有空格也不会被拆成两个参数。 */
+function splitLines(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+function emptyTool(): ToolForm {
+  return {
+    name: '',
+    description: '',
+    argsStr: '',
+    readOnly: false,
+    stdinParam: '',
+    timeoutSeconds: 0,
+    paramsJson: '',
+  }
+}
+
+function addTool() {
+  formTools.value.push(emptyTool())
+}
+
+function resetForm() {
+  form.name = ''
+  form.command = ''
+  form.argsStr = ''
+  form.description = ''
+  form.envStr = ''
+  form.workingDir = ''
+  form.timeoutSeconds = 60
+  form.enabled = true
+  form.requireApproval = true
+  form.profilesStr = ''
+  formTools.value = [emptyTool()]
+}
+
+function openAdd() {
+  editingName.value = ''
+  resetForm()
+  showForm.value = true
+}
+
+function openEdit(row: CLIConnectorView) {
+  editingName.value = row.name
+  form.name = row.name
+  form.command = row.command || ''
+  form.argsStr = (row.args || []).join('\n')
+  form.description = row.description || ''
+  form.envStr = (row.env || []).join('\n')
+  form.workingDir = row.working_dir || ''
+  form.timeoutSeconds = row.timeout_seconds || 60
+  form.enabled = row.enabled !== false
+  form.requireApproval = row.require_approval !== false
+  form.profilesStr = (row.profiles || []).join(', ')
+  formTools.value = (row.tools || []).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    argsStr: (tool.args || []).join('\n'),
+    readOnly: !!tool.read_only,
+    stdinParam: tool.stdin_param || '',
+    timeoutSeconds: tool.timeout_seconds || 0,
+    paramsJson: tool.params?.length ? JSON.stringify(tool.params, null, 0) : '',
+  }))
+  showForm.value = true
+}
+
+/** 一键填入一个真实可用的例子：形态对了，用户改两行就能用。 */
+function fillExample() {
+  form.name = form.name || 'gh'
+  form.command = form.command || 'gh'
+  form.description = form.description || 'GitHub CLI'
+  form.envStr = form.envStr || 'GH_TOKEN='
+  formTools.value = [
+    {
+      name: 'pr_list',
+      description: 'List pull requests of a repository',
+      argsStr: 'pr\nlist\n--repo\n{{repo}}\n--limit\n{{limit}}\n--state\n{{state}}\n{{?json}}--json\nnumber,title,state,url',
+      readOnly: true,
+      stdinParam: '',
+      timeoutSeconds: 30,
+      paramsJson: JSON.stringify([
+        { name: 'repo', description: 'owner/name', required: true },
+        { name: 'limit', type: 'integer', description: 'max rows', default: 20 },
+        { name: 'state', enum: ['open', 'closed', 'merged', 'all'], default: 'open' },
+        { name: 'json', type: 'boolean', description: 'output JSON fields' },
+      ]),
+    },
+  ]
+}
+
+function buildConnector(): CLIConnector {
+  const tools = formTools.value.map((tool) => {
+    let params: CLIConnector['tools'][number]['params']
+    const raw = tool.paramsJson.trim()
+    if (raw) {
+      try {
+        params = JSON.parse(raw)
+      } catch (e: any) {
+        throw new Error(`${t('cli.paramsInvalid')}: ${String(e?.message || e)}`)
+      }
+      if (!Array.isArray(params)) {
+        throw new Error(t('cli.paramsInvalid'))
+      }
+    }
+    return {
+      name: tool.name.trim(),
+      description: tool.description.trim(),
+      args: splitLines(tool.argsStr),
+      read_only: tool.readOnly,
+      stdin_param: tool.stdinParam.trim() || undefined,
+      timeout_seconds: tool.timeoutSeconds || undefined,
+      params,
+    }
+  })
+
+  return {
+    command: form.command.trim(),
+    args: splitLines(form.argsStr),
+    description: form.description.trim(),
+    working_dir: form.workingDir.trim() || undefined,
+    env: splitLines(form.envStr),
+    timeout_seconds: form.timeoutSeconds || undefined,
+    enabled: form.enabled,
+    profiles: form.profilesStr.split(',').map((p) => p.trim()).filter(Boolean),
+    require_approval: form.requireApproval,
+    tools,
+  }
+}
+
+async function handleSave() {
+  if (!form.name.trim()) {
+    message.warning(t('cli.nameRequired'))
+    return
+  }
+  if (!form.command.trim()) {
+    message.warning(t('cli.commandRequired'))
+    return
+  }
+  if (!formTools.value.length) {
+    message.warning(t('cli.toolsRequired'))
+    return
+  }
+
+  let payload: CLIConnector
+  try {
+    payload = buildConnector()
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+    return
+  }
+
+  saving.value = true
+  try {
+    await saveCLIConnector(form.name.trim(), payload)
+    message.success(t('cli.saved'))
+    showForm.value = false
+    await handleRefresh()
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    saving.value = false
+  }
+}
+
+function confirmDelete(row: CLIConnectorView) {
+  dialog.warning({
+    title: t('common.delete'),
+    content: t('cli.deleteConfirm', { name: row.name }),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      try {
+        await removeCLIConnector(row.name)
+        message.success(t('cli.deleted'))
+        await handleRefresh()
+      } catch (e: any) {
+        message.error(String(e?.message || e))
+      }
+    },
+  })
+}
+
+function openTest(row: CLIConnectorView) {
+  // 试跑走未保存的改动：用户刚在表单里加的工具还没落盘也要能试
+  const inForm = showForm.value && editingName.value === row.name
+  testTarget.value = inForm ? ({ ...row, ...buildConnectorSafely() } as CLIConnectorView) : row
+  testTool.value = testTarget.value?.tools?.[0]?.name || null
+  testParams.value = '{}'
+  testResult.value = null
+  showTest.value = true
+}
+
+function buildConnectorSafely(): Partial<CLIConnector> {
+  try {
+    return buildConnector()
+  } catch {
+    return {}
+  }
+}
+
+async function runTest() {
+  if (!testTarget.value || !testTool.value) return
+  let params: Record<string, unknown> = {}
+  try {
+    params = testParams.value.trim() ? JSON.parse(testParams.value) : {}
+  } catch (e: any) {
+    message.error(`${t('cli.paramsInvalid')}: ${String(e?.message || e)}`)
+    return
+  }
+  testing.value = true
+  testResult.value = null
+  try {
+    testResult.value = await testCLIConnector(testTarget.value, testTool.value, params)
+  } catch (e: any) {
+    testResult.value = { ok: false, error: String(e?.message || e), elapsed_ms: 0 }
+  } finally {
+    testing.value = false
+  }
+}
+
+onMounted(handleRefresh)
+</script>
+
+<style scoped>
+.cli-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cli-tool-desc {
+  font-size: 12px;
+  color: #606266;
+  margin: 4px 0;
+}
+
+.cli-tool-args {
+  margin: 0;
+  padding: 8px 10px;
+  background: #f7f8fa;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #303133;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cli-tool-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+</style>
+
+<style>
+/*
+  弹窗（n-modal）会 teleport 到 body，scoped 样式对其中元素不可靠
+  （data-v-xxx 匹配不上，naive-ui 的 preset card 更是整块隔开）。
+  项目约定：弹窗内部的样式写在全局 style 块里，类名带前缀避免撞车。
+*/
+.cli-tool-editor {
+  border: 1px solid #ebedf0;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fcfcfd;
+}
+
+.cli-output-label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.cli-output {
+  margin: 0;
+  padding: 10px;
+  background: #f7f8fa;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cli-output.is-error {
+  background: #fff5f5;
+  color: #d03050;
+}
+</style>

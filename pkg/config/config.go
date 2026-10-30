@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/internal/voice"
@@ -119,6 +120,12 @@ type Config struct {
 	// 到零值、不合并 defaultConfig——普通 bool 缺键会静默变 false。
 	Context  *ContextConfig  `json:"context,omitempty"`
 	MCP      *MCPConfig      `json:"mcp,omitempty"`
+	// Cli：CLI 连接器。把"只有命令行接口、没有 MCP"的外部软件（gh / kubectl /
+	// ffmpeg / 内部脚本）声明成连接器，每个子命令展开成一个工具
+	// （cli_<connector>_<tool>），执行时直接拉起子进程。
+	// 与 mcp 分开成段：前者是 JSON-RPC 长连接，后者是无状态的一次性进程，
+	// 混在一个 map 里会让"连接状态"这类字段对一半条目没有意义。
+	Cli      *cliconn.Config `json:"cli,omitempty"`
 	SubAgent *SubAgentConfig `json:"subagent,omitempty"`
 	Voice    *VoiceConfig    `json:"voice,omitempty"`
 	// ImageGen 图片生成配置段。nil（配置里没写）= 未配置，image_gen/image_edit

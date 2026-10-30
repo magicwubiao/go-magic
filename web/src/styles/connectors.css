@@ -1,0 +1,218 @@
+/*
+ * 连接器页（MCP / CLI 共用）的卡片化布局。
+ *
+ * 为什么放在全局样式而不是各自的 scoped 块：
+ *   1. 两个页签是两个组件（MCPView 与 CLIConnectorsPanel），必须共享同一套
+ *      视觉；scoped 样式各自维护一份迟早会走样。
+ *   2. n-drawer 的内容会 teleport 到 body，scoped 的 data-v-xxx 匹配不可靠。
+ *
+ * 类名统一 conn- 前缀，避免与页面内其他样式撞车。
+ */
+
+.conn-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.conn-search {
+  width: 280px;
+  max-width: 100%;
+}
+
+.conn-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 筛选芯片：比 n-tag checkable 更轻，不抢卡片的视觉重量 */
+.conn-chip {
+  border: 1px solid transparent;
+  background: #f4f5f7;
+  color: #606266;
+  font-size: 12px;
+  line-height: 22px;
+  padding: 0 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.conn-chip:hover {
+  background: #eceef1;
+}
+
+.conn-chip.is-active {
+  background: #eaf2ff;
+  border-color: #b9d6ff;
+  color: #1f6feb;
+}
+
+.conn-toolbar-actions {
+  margin-left: auto;
+}
+
+.conn-count {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-bottom: 10px;
+}
+
+/* 卡片网格：minmax(280px) 保证窄屏一列、宽屏三到四列，行高不因内容参差 */
+.conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.conn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #ebedf0;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.conn-card:hover {
+  border-color: #d4d9e0;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+}
+
+.conn-card.is-idle {
+  background: #fcfcfd;
+}
+
+.conn-card.is-error {
+  border-color: #f5c2c7;
+}
+
+.conn-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* 首字母头像：连接器没有 logo，用首两字上色块比纯文字列表更容易扫读 */
+.conn-avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #a8b0bd;
+  letter-spacing: 0.5px;
+}
+
+.conn-avatar.is-ok {
+  background: #18a058;
+}
+
+.conn-avatar.is-error {
+  background: #d03050;
+}
+
+.conn-ident {
+  flex: 1;
+  min-width: 0;
+}
+
+.conn-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.conn-name-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d0d0d0;
+}
+
+.conn-dot.is-ok {
+  background: #18a058;
+}
+
+.conn-dot.is-error {
+  background: #d03050;
+}
+
+.conn-sub {
+  font-size: 12px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 描述固定两行高度：卡片高度一致，网格不会因长报错参差不齐 */
+.conn-desc {
+  font-size: 12px;
+  line-height: 1.55;
+  color: #606266;
+  min-height: 37px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.conn-desc.is-error {
+  color: #d03050;
+}
+
+.conn-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.conn-state {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.conn-state.is-on {
+  color: #18a058;
+}
+
+.conn-more {
+  color: #9ca3af;
+}
+
+/* 抽屉里的工具清单沿用卡片内边距，避免贴边 */
+.conn-drawer-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

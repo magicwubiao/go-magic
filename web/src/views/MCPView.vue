@@ -1,11 +1,41 @@
 <template>
   <div>
-    <n-space justify="space-between" style="margin-bottom: 24px;" align="center">
+    <!--
+      页面头：标题 + 两类连接器的切换。
+
+      MCP 与 CLI 的运行时机制完全不同（长连接 JSON-RPC vs 一次性子进程），
+      但对用户来说是同一件事——"把我外部的软件接进来"。分成两个页面会让
+      "连接器"这个概念在导航里出现两次，所以合成一页两个页签，各自保留
+      自己的工具栏、列表形态与弹窗。
+    -->
+    <div class="mcp-page-head">
       <div class="mcp-page-title">
         <h2>{{ t('mcp.title') }}</h2>
         <span class="mcp-page-subtitle">{{ t('mcp.subtitle') }}</span>
       </div>
-      <n-space>
+      <n-tabs
+        v-model:value="activeTab"
+        type="segment"
+        size="small"
+        class="mcp-page-tabs"
+      >
+        <n-tab name="mcp">
+          <span class="mcp-tab-label">
+            MCP
+            <n-tag size="tiny" :bordered="false" round>{{ mcpStore.servers.length }}</n-tag>
+          </span>
+        </n-tab>
+        <n-tab name="cli">
+          <span class="mcp-tab-label">
+            CLI
+            <n-tag size="tiny" :bordered="false" round>{{ cliCount }}</n-tag>
+          </span>
+        </n-tab>
+      </n-tabs>
+    </div>
+
+    <div v-if="activeTab === 'mcp'">
+      <n-space justify="end" style="margin-bottom: 12px;">
         <n-button @click="openCatalogModal">
           <template #icon>
             <component :is="GridOutline" />
@@ -38,7 +68,6 @@
           {{ t('common.refresh') }}
         </n-button>
       </n-space>
-    </n-space>
 
     <n-spin v-if="mcpStore.loading && !mcpStore.servers.length" />
     <template v-else>
@@ -48,107 +77,132 @@
         重复，传输协议与健康检查时间挤占了列表空间。状态收敛为行首色点，
         失败原因就近显示在名字下方（比顶部汇总条更靠近问题本身）。
       -->
-      <n-input
-        v-model:value="searchQuery"
-        clearable
-        :placeholder="t('mcp.searchServers')"
-        style="margin-bottom: 12px;"
-      >
-        <template #prefix>
-          <component :is="SearchOutline" />
-        </template>
-      </n-input>
-
-      <div class="mcp-list-summary">
-        <n-text depth="3" style="font-size: 12px;">
-          {{ t('mcp.listSummary', { total: mcpStore.servers.length, connected: mcpStore.connectedServers.length }) }}
-        </n-text>
-        <n-text
-          v-if="failedServers.length"
-          type="error"
-          style="font-size: 12px; cursor: pointer;"
-          @click="showOnlyFailed = !showOnlyFailed"
+      <!-- 工具条：搜索 + 状态筛选 + 动作。形态参照 WorkBuddy 连接器页：
+           一排检索/筛选，下面一片卡片，点卡片看详情（抽屉里放工具清单与开关）。 -->
+      <div class="conn-toolbar">
+        <n-input
+          v-model:value="searchQuery"
+          clearable
+          :placeholder="t('mcp.searchServers')"
+          class="conn-search"
         >
-          {{ showOnlyFailed
-            ? t('mcp.clearFailureFilter')
-            : t('mcp.failureCount', { count: failedServers.length }) }}
-        </n-text>
+          <template #prefix>
+            <component :is="SearchOutline" />
+          </template>
+        </n-input>
+
+        <div class="conn-chips">
+          <button
+            v-for="chip in statusChips"
+            :key="chip.key"
+            type="button"
+            class="conn-chip"
+            :class="{ 'is-active': statusFilter === chip.key }"
+            @click="statusFilter = chip.key"
+          >
+            {{ chip.label }}
+          </button>
+        </div>
+
+        <n-space :size="8" class="conn-toolbar-actions">
+          <n-button size="small" @click="openCatalogModal">
+            <template #icon><component :is="GridOutline" /></template>
+            {{ t('mcp.catalogButton') }}
+          </n-button>
+          <n-button size="small" type="primary" @click="openAddModal">
+            <template #icon><component :is="AddOutline" /></template>
+            {{ t('mcp.addServer') }}
+          </n-button>
+          <n-dropdown
+            v-if="mcpStore.servers.length"
+            trigger="click"
+            :options="batchOptions"
+            @select="handleBatchAction"
+          >
+            <n-button size="small" :loading="batchBusy">
+              <template #icon><component :is="LayersOutline" /></template>
+              {{ t('mcp.batchOps') }}
+            </n-button>
+          </n-dropdown>
+          <n-button size="small" @click="handleRefresh" :loading="mcpStore.loading">
+            <template #icon><component :is="RefreshOutline" /></template>
+            {{ t('common.refresh') }}
+          </n-button>
+        </n-space>
       </div>
 
-      <div v-if="visibleServers.length" class="mcp-list">
+      <div class="conn-count">
+        {{ t('mcp.listSummary', { total: mcpStore.servers.length, connected: mcpStore.connectedServers.length }) }}
+      </div>
+
+      <div v-if="visibleServers.length" class="conn-grid">
         <div
           v-for="row in visibleServers"
           :key="row.name"
-          class="mcp-list-row"
-          :class="{ 'is-expanded': isExpanded(row.name), 'is-idle': !row.connected }"
+          class="conn-card"
+          :class="{ 'is-idle': !row.connected, 'is-error': !row.connected && !!row.last_error }"
+          @click="openDetail(row)"
         >
-          <div class="mcp-row-main" @click="toggleExpand(row.name)">
-            <span class="mcp-status-dot" :class="statusDotClass(row)" />
-            <div class="mcp-row-ident">
-              <div class="mcp-row-name">
-                <n-text strong>{{ row.name }}</n-text>
-                <n-tag v-if="row.configured === false" size="tiny" :bordered="false">
-                  {{ t('mcp.notConfigured') }}
-                </n-tag>
-                <n-tag
-                  v-else-if="row.state === 'unauthorized'"
-                  size="tiny"
-                  type="warning"
-                  :bordered="false"
-                >
-                  {{ t('mcp.stateUnauthorized') }}
-                </n-tag>
-                <n-tag v-else-if="row.enabled === false" size="tiny" :bordered="false">
-                  {{ t('mcp.stateDisabled') }}
-                </n-tag>
+          <div class="conn-card-head">
+            <div class="conn-avatar" :class="statusDotClass(row)">{{ avatarText(row.name) }}</div>
+            <div class="conn-ident">
+              <div class="conn-name">
+                <span class="conn-name-text">{{ row.name }}</span>
+                <span class="conn-dot" :class="statusDotClass(row)" />
               </div>
-              <div v-if="!row.connected && row.last_error" class="mcp-row-error" :title="row.last_error">
-                {{ row.last_error }}
-              </div>
-              <div v-else-if="row.connected" class="mcp-row-meta">
-                {{ t('mcp.toolCountLabel', { count: row.tool_count }) }}
+              <div class="conn-sub">
+                <span>{{ row.transport || 'stdio' }}</span>
+                <span v-if="row.tool_count"> · {{ t('mcp.toolCountLabel', { count: row.tool_count }) }}</span>
               </div>
             </div>
-
-            <div class="mcp-row-actions" @click.stop>
-              <!-- 主动作随状态变化：已连接 → 断开；未连接 → 连接/重连 -->
-              <n-button
-                v-if="row.connected"
-                text
-                size="small"
-                :loading="busy[row.name]"
-                @click="handleDisconnect(row.name)"
-              >
-                {{ t('mcp.disconnect') }}
+            <n-dropdown
+              trigger="click"
+              :options="rowMenuOptions(row)"
+              @select="(key: string) => handleRowMenu(key, row)"
+            >
+              <n-button text size="tiny" class="conn-more" @click.stop>
+                <template #icon><component :is="EllipsisHorizontalOutline" /></template>
               </n-button>
-              <n-button
-                v-else
-                text
-                size="small"
-                type="primary"
-                :loading="busy[row.name]"
-                @click="handleConnect(row)"
-              >
-                {{ row.last_error ? t('mcp.reconnect') : t('mcp.connect') }}
-              </n-button>
-
-              <!-- 低频动作收进「…」：健康检查 / 编辑 / 复制配置 / 删除 -->
-              <n-dropdown
-                trigger="click"
-                :options="rowMenuOptions(row)"
-                @select="(key: string) => handleRowMenu(key, row)"
-              >
-                <n-button text size="small" class="mcp-row-more">
-                  <template #icon>
-                    <component :is="EllipsisHorizontalOutline" />
-                  </template>
-                </n-button>
-              </n-dropdown>
-            </div>
+            </n-dropdown>
           </div>
 
-          <div v-if="isExpanded(row.name)" class="mcp-row-detail">
-            <component :is="renderExpandedRow(row)" />
+          <!-- 失败原因直接占位在描述行：比"点开才发现连不上"更有用 -->
+          <div
+            class="conn-desc"
+            :class="{ 'is-error': !row.connected && !!row.last_error }"
+            :title="(!row.connected && row.last_error) || row.url || row.command || ''"
+          >
+            {{ (!row.connected && row.last_error) || row.server_name || row.command || row.url || t('mcp.connNoDesc') }}
+          </div>
+
+          <div class="conn-foot" @click.stop>
+            <n-tag v-if="row.enabled === false" size="tiny" :bordered="false">
+              {{ t('mcp.stateDisabled') }}
+            </n-tag>
+            <n-tag v-else-if="row.state === 'unauthorized'" size="tiny" type="warning" :bordered="false">
+              {{ t('mcp.stateUnauthorized') }}
+            </n-tag>
+            <span v-else class="conn-state" :class="{ 'is-on': row.connected }">
+              {{ row.connected ? t('mcp.connected') : t('mcp.disconnected') }}
+            </span>
+
+            <n-button
+              v-if="row.connected"
+              size="tiny"
+              :loading="busy[row.name]"
+              @click="handleDisconnect(row.name)"
+            >
+              {{ t('mcp.disconnect') }}
+            </n-button>
+            <n-button
+              v-else
+              size="tiny"
+              type="primary"
+              :loading="busy[row.name]"
+              @click="handleConnect(row)"
+            >
+              {{ row.last_error ? t('mcp.reconnect') : t('mcp.connect') }}
+            </n-button>
           </div>
         </div>
       </div>
@@ -165,6 +219,24 @@
         </template>
       </n-empty>
     </template>
+    </div>
+
+    <!-- CLI 页签：面板自成一体（自己的数据、自己的弹窗），父组件只收一个计数。 -->
+    <CLIConnectorsPanel v-else @count="cliCount = $event" />
+
+    <!-- 详情抽屉：卡片承载"概览"，细节（工具清单/开关/调用统计）放这里，
+         不再让每一行在列表里向下撑开——卡片网格一旦有行被撑高，整片就歪了。 -->
+    <n-drawer
+      :show="!!detailName"
+      :width="520"
+      placement="right"
+      @update:show="(v: boolean) => { if (!v) detailName = '' }"
+    >
+      <n-drawer-content :title="detailName" closable>
+        <component :is="renderExpandedRow(detailRow)" v-if="detailRow" />
+        <n-empty v-else :description="t('mcp.noServers')" />
+      </n-drawer-content>
+    </n-drawer>
 
     <!-- Add/Edit Server Modal -->
     <n-modal
@@ -423,7 +495,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch, h } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NScrollbar, NSelect, NSpace, NSpin, NSwitch, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDrawer, NDrawerContent, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NScrollbar, NSelect, NSpace, NSpin, NSwitch, NTab, NTabs, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   AddOutline,
@@ -434,6 +506,7 @@ import {
   GridOutline,
   LayersOutline,
 } from '@vicons/ionicons5'
+import CLIConnectorsPanel from '@/components/CLIConnectorsPanel.vue'
 import { useMCPStore } from '@/stores/mcp'
 import { getMCPCatalog, getMCPOAuthStatus, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, signOutMCPOAuth, startMCPOAuth, testMCPServer } from '@/api/mcp'
 import type { CatalogCategory, CatalogConnector, MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
@@ -442,6 +515,11 @@ const { t } = useI18n()
 const message = useMessage()
 const mcpStore = useMCPStore()
 
+/** 页签：mcp（长连接 JSON-RPC）/ cli（一次性子进程）。 */
+const activeTab = ref<'mcp' | 'cli'>('mcp')
+/** CLI 页签的连接器数量，由面板上报（面板自己管数据，父组件不做二次拉取）。 */
+const cliCount = ref(0)
+
 const showAddModal = ref(false)
 const isEditing = ref(false)
 const serverTools = ref<Record<string, any[]>>({})
@@ -449,8 +527,29 @@ const serverTools = ref<Record<string, any[]>>({})
 const toolStats = ref<Record<string, Record<string, MCPToolStat>>>({})
 const toolsLoading = ref<Record<string, boolean>>({})
 const batchBusy = ref(false)
-// 受控展开：点击行（非按钮区）展开该服务器的工具清单。
+// 受控展开：卡片点开后，详情抽屉里展示该服务器的工具清单。
 const expandedKeys = ref<string[]>([])
+/** 当前详情抽屉指向的连接器（空 = 抽屉关闭）。 */
+const detailName = ref('')
+const detailRow = computed(
+  () => mcpStore.servers.find((s) => s.name === detailName.value) ?? null,
+)
+
+/** 点卡片：打开抽屉并确保工具清单已加载（与展开同一套加载逻辑）。 */
+function openDetail(row: MCPServer) {
+  detailName.value = row.name
+  if (!isExpanded(row.name)) {
+    expandedKeys.value = [...expandedKeys.value, row.name]
+    void loadToolsIfNeeded(row.name)
+  }
+}
+
+/** 卡片头像文字：取名字首字符，WorkBuddy 连接器卡片同款做法。 */
+function avatarText(name: string): string {
+  const trimmed = (name || '').trim()
+  if (!trimmed) return '?'
+  return trimmed.slice(0, 2).toUpperCase()
+}
 
 // 添加弹窗的两种录入方式：表单（单服务器）与 JSON（可一次导入多个）。
 const inputMode = ref<'form' | 'json'>('form')
@@ -718,24 +817,34 @@ function renderExpandedRow(row: MCPServer) {
   return h('div', { class: 'expanded-row' }, children)
 }
 
-/** 未连接 + 已知失败原因的服务器（供计数摘要与过滤器使用）。 */
-const failedServers = computed(() =>
-  mcpStore.servers.filter(s => !s.connected && !!s.last_error),
-)
-
 const searchQuery = ref('')
-const showOnlyFailed = ref(false)
+/** 状态筛选：全部 / 已连接 / 未连接 / 异常。 */
+const statusFilter = ref<'all' | 'connected' | 'idle' | 'error'>('all')
+const statusChips = computed(() => [
+  { key: 'all' as const, label: t('common.all') },
+  { key: 'connected' as const, label: t('mcp.connected') },
+  { key: 'idle' as const, label: t('mcp.disconnected') },
+  { key: 'error' as const, label: t('common.error') },
+])
 /** 每行的操作进行态：连接/断开按钮显示 loading，避免重复点击。 */
 const busy = reactive<Record<string, boolean>>({})
 
 /**
  * 列表可见项：搜索词同时匹配服务器名与失败原因（用户常按报错内容找），
- * showOnlyFailed 是点计数摘要里"2 个失败"后进入的子集视图。
+ * 状态筛选是"我只想看连不上的那些"的快捷入口。
  */
 const visibleServers = computed(() => {
   let list = mcpStore.servers
-  if (showOnlyFailed.value) {
-    list = list.filter(s => !s.connected && !!s.last_error)
+  switch (statusFilter.value) {
+    case 'connected':
+      list = list.filter(s => s.connected)
+      break
+    case 'idle':
+      list = list.filter(s => !s.connected && !s.last_error)
+      break
+    case 'error':
+      list = list.filter(s => !s.connected && !!s.last_error)
+      break
   }
   const q = searchQuery.value.trim().toLowerCase()
   if (q) {
@@ -806,15 +915,6 @@ async function handleRowMenu(key: string, row: MCPServer) {
       await handleDelete(row.name)
       return
   }
-}
-
-function toggleExpand(name: string) {
-  if (isExpanded(name)) {
-    expandedKeys.value = expandedKeys.value.filter(k => k !== name)
-    return
-  }
-  expandedKeys.value = [...expandedKeys.value, name]
-  void loadToolsIfNeeded(name)
 }
 
 const batchOptions = computed(() => [
@@ -1442,11 +1542,31 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 页面标题 + 一行副标题：MCP 协议细节收进副标题，主标题统一叫「连接器」 */
+/* 页面头：左侧标题 + 右侧页签，窄屏自动换行（页签不压缩标题） */
+.mcp-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+/* 页面标题 + 一行副标题：协议细节收进副标题，主标题统一叫「连接器」 */
 .mcp-page-title {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.mcp-page-tabs {
+  min-width: 180px;
+}
+
+.mcp-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .mcp-page-title h2 {
@@ -1459,20 +1579,6 @@ onMounted(async () => {
 }
 
 /* 列表优先：搜索框 + 计数摘要 + 每行一个主动作 */
-.mcp-list-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.mcp-list {
-  border: 0.5px solid var(--n-border-color, rgba(128, 128, 128, 0.24));
-  border-radius: 8px;
-  overflow: hidden;
-}
-
 .mcp-list-row.is-idle {
   opacity: 0.78;
 }
@@ -1485,78 +1591,8 @@ onMounted(async () => {
   background: rgba(128, 128, 128, 0.04);
 }
 
-.mcp-row-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  cursor: pointer;
-}
-
-.mcp-row-main:hover {
-  background: rgba(128, 128, 128, 0.06);
-}
-
 /* 状态即色点：绿=已连接、红=失败、灰=未连接 */
-.mcp-status-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.mcp-status-dot.is-ok {
-  background: #18a058;
-}
-
-.mcp-status-dot.is-error {
-  background: #d03050;
-}
-
-.mcp-status-dot.is-idle {
-  background: #c2c2c2;
-}
-
-.mcp-row-ident {
-  flex: 1;
-  min-width: 0;
-}
-
-.mcp-row-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 /* 失败原因就近显示在名字下方，比顶部汇总条更靠近问题本身 */
-.mcp-row-error {
-  font-size: 12px;
-  color: #d03050;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mcp-row-meta {
-  font-size: 12px;
-  color: #9ca3af;
-}
-
-.mcp-row-actions {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.mcp-row-more {
-  padding: 0 4px;
-}
-
-.mcp-row-detail {
-  padding: 0 12px 12px 30px;
-}
-
 /* JSON 模式的预检提示 */
 .json-preview {
   margin-top: -12px;
@@ -1571,19 +1607,6 @@ onMounted(async () => {
 }
 
 /* 失败汇总提示条里的一行：服务器名 + 原因 */
-.failure-line {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 0;
-}
-
-.failure-line + .failure-line {
-  border-top: 1px dashed rgba(128, 128, 128, 0.2);
-  margin-top: 4px;
-  padding-top: 4px;
-}
-
 /* 展开行内的容器留白 */
 .expanded-row {
   padding: 0;
