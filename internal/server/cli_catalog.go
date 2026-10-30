@@ -115,6 +115,10 @@ func (s *Server) handleCLICatalogInstall(w http.ResponseWriter, r *http.Request)
 		Env  map[string]string `json:"env"`
 		// Overwrite 允许覆盖同名连接器；默认拒绝，避免误把用户改过的配置冲掉。
 		Overwrite bool `json:"overwrite"`
+		// AllowPlaintext 显式允许把明文凭据写进 config.json。默认拒绝：
+		// 疑似 token 的值（ghp_/AKIA/sk- 等）会被拦下并提示改用 ${VAR} 引用，
+		// 引用在每次执行前展开，token 不落盘。
+		AllowPlaintext bool `json:"allow_plaintext"`
 	}
 	if err := decodeCLIBody(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -153,6 +157,15 @@ func (s *Server) handleCLICatalogInstall(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			continue
+		}
+		// 明文凭据防线：疑似 token 的值默认拒绝落盘，引导走 ${VAR} 引用。
+		// 引用在每次执行前展开（换 token 不用重启），磁盘上只有变量名。
+		if !body.AllowPlaintext && cliconn.LooksSecretLike(value) {
+			jsonError(w, http.StatusBadRequest,
+				"value for "+req.Key+" looks like a plaintext credential; "+
+					"set an environment variable and submit a reference like ${"+req.Key+"} instead, "+
+					"or allow storing it as plaintext explicitly")
+			return
 		}
 		env = append(env, req.Key+"="+value)
 	}

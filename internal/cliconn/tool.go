@@ -144,6 +144,13 @@ func (t *Tool) Execute(ctx context.Context, params map[string]interface{}) (inte
 		out["timeout_seconds"] = int(timeout.Seconds())
 		out["hint"] = "command timed out and was killed; add filters to narrow the work, or raise timeout_seconds in the connector config if this command is legitimately slow"
 	}
+	// 认证失效是 CLI 工具最常见的"看起来像参数错"的失败。不在这里拦下，
+	// 模型就会把 401 当业务错误反复重试。识别是启发式的（见 authfailure.go），
+	// 误报无害——最多多建议一次重新登录。
+	if res.ExitCode != 0 && !res.TimedOut && LooksLikeAuthFailure(res.Stderr) {
+		out["auth_required"] = true
+		out["hint"] = "output looks like an authentication failure; ask the user to re-authenticate in a terminal (for example the CLI's login command such as \"gh auth login\"), or update the connector's env credentials, then retry"
+	}
 	return out, nil
 }
 

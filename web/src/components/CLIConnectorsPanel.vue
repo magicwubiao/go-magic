@@ -262,6 +262,11 @@
           <span v-if="catalogDetail.ready === true" class="conn-chip is-ok">{{ t('cli.catalogReadyOk') }}</span>
           <span v-else-if="catalogDetail.ready === false" class="conn-chip is-warn">{{ t('cli.catalogNotReady') }}</span>
           <span v-if="catalogDetail.ready_message" class="cli-catalog-note">{{ catalogDetail.ready_message }}</span>
+          <!-- ready 只证明"最后一次 Check 通过"：CLI 自己的 auth status 未必校验
+               token 有效性，过期往往要等调用 401 才发现。 -->
+          <span v-if="catalogDetail.ready === true" class="cli-catalog-note">
+            {{ t('cli.catalogReadyCaveat') }}
+          </span>
         </div>
 
         <n-alert v-if="!catalogDetail.installed" type="warning" :bordered="false">
@@ -315,26 +320,40 @@
           </div>
         </n-alert>
 
+        <!-- 明文凭据被后端拦下：就地说明 + 逃生口，不逼用户重开弹窗。 -->
+        <n-alert v-if="catalogPlaintextBlocked" type="warning" :bordered="false">
+          <div class="cli-install-hint">{{ t('cli.catalogPlaintextHint') }}</div>
+          <n-button
+            size="tiny"
+            style="margin-top: 6px;"
+            :loading="catalogInstalling"
+            @click="installCatalogEntry(true)"
+          >
+            {{ t('cli.catalogPlaintextForce') }}
+          </n-button>
+        </n-alert>
+
         <div v-if="catalogDetail.requires?.length">
           <div class="cli-catalog-label">{{ t('cli.catalogRequirements') }}</div>
-          <n-form-item
-            v-for="req in catalogDetail.requires"
-            :key="req.key"
-            :label="req.label"
-            :required="req.required"
-          >
-            <n-input
-              v-model:value="catalogEnv[req.key]"
-              :type="req.secret ? 'password' : 'text'"
-              :placeholder="req.placeholder || req.key"
-              show-password-on="click"
-            />
-            <template v-if="req.help_url" #feedback>
-              <a :href="req.help_url" target="_blank" rel="noreferrer" class="cli-catalog-link">
-                {{ t('cli.catalogGetToken') }}
-              </a>
-            </template>
-          </n-form-item>
+          <div v-for="req in catalogDetail.requires" :key="req.key">
+            <n-form-item :label="req.label" :required="req.required">
+              <n-input
+                v-model:value="catalogEnv[req.key]"
+                :type="req.secret ? 'password' : 'text'"
+                :placeholder="req.placeholder || req.key"
+                show-password-on="click"
+              />
+              <template v-if="req.help_url" #feedback>
+                <a :href="req.help_url" target="_blank" rel="noreferrer" class="cli-catalog-link">
+                  {{ t('cli.catalogGetToken') }}
+                </a>
+              </template>
+            </n-form-item>
+            <!-- 引用形态里的 ${} 会被 vue-i18n 当命名插值，所以由调用方拼进参数。 -->
+            <div v-if="req.secret" class="cli-catalog-note">
+              {{ t('cli.catalogSecretHint', { ref: '${' + req.key + '}' }) }}
+            </div>
+          </div>
         </div>
 
         <div>
@@ -366,7 +385,7 @@
             type="primary"
             :loading="catalogInstalling"
             :disabled="!catalogDetail.installed || catalogDetail.added"
-            @click="installCatalogEntry"
+            @click="installCatalogEntry(false)"
           >
             {{ catalogDetail.added ? t('cli.catalogAdded') : t('cli.catalogInstallAndEnable') }}
           </n-button>
@@ -734,6 +753,8 @@ const catalogDetail = ref<CLICatalogEntry | null>(null)
 /** 刚装完的自检结论：null = 还没装。留着结论而不是直接关弹窗，
  *  用户可以顺着登录引导继续走，不用再翻回目录重进一次。 */
 const catalogInstallResult = ref<{ ready?: boolean; message?: string } | null>(null)
+/** 后端拦下明文凭据时置位：显示就地说明 + 「仍要明文保存」逃生口。 */
+const catalogPlaintextBlocked = ref(false)
 /** 详情里填的凭据（key 是目录声明的环境变量名）。 */
 const catalogEnv = reactive<Record<string, string>>({})
 
@@ -791,6 +812,7 @@ async function loadCatalog() {
 function openCatalogDetail(entry: CLICatalogEntry) {
   catalogDetail.value = entry
   catalogInstallResult.value = null
+  catalogPlaintextBlocked.value = false
   // 凭据输入框每次重新打开都清空：不要把一个应用的 token 带进另一个
   for (const key of Object.keys(catalogEnv)) delete catalogEnv[key]
 }
@@ -828,12 +850,13 @@ async function checkCatalogEntry() {
   }
 }
 
-async function installCatalogEntry() {
+async function installCatalogEntry(forcePlaintext = false) {
   const entry = catalogDetail.value
   if (!entry) return
   catalogInstalling.value = true
   try {
-    const res = await installCLICatalogEntry(entry.id, entry.default_name, { ...catalogEnv })
+    const res = await installCLICatalogEntry(entry.id, entry.default_name, { ...catalogEnv }, forcePlaintext)
+    catalogPlaintextBlocked.value = false
     catalogInstallResult.value = { ready: res.ready, message: res.ready_message }
     // 不关弹窗：未就绪时正好接着展示登录命令。
     if (res.ready === false) {
@@ -846,7 +869,12 @@ async function installCatalogEntry() {
     // 再复检一次：装上之后的结论比安装前的探测更有意义。
     await checkCatalogEntry()
   } catch (e: any) {
-    message.error(String(e?.message || e))
+    const msg = String(e?.message || e)
+    if (/plaintext credential/i.test(msg)) {
+      // 后端拦下明文凭据：只靠 toast 用户会丢上下文，就地常驻说明 + 逃生口。
+      catalogPlaintextBlocked.value = true
+    }
+    message.error(msg)
   } finally {
     catalogInstalling.value = false
   }

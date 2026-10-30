@@ -145,17 +145,18 @@ export async function checkCLICatalogEntry(id: string): Promise<CLICatalogEntry>
 
 /**
  * 一键添加目录条目：服务端校验命令存在、写入 config.json、注册工具。
- * env 只接受目录声明过的键。
+ * env 只接受目录声明过的键；疑似明文凭据默认拒绝，需显式 allowPlaintext。
  * 返回里带上装完的自检结果，前端可以直接展示"可用/不可用 + 原因"。
  */
 export async function installCLICatalogEntry(
   id: string,
   name: string,
   env: Record<string, string>,
+  allowPlaintext = false,
 ): Promise<{ success: boolean; name: string; ready?: boolean; ready_message?: string }> {
   return request('/cli/catalog/install', {
     method: 'POST',
-    body: JSON.stringify({ id, name, env }),
+    body: JSON.stringify({ id, name, env, allow_plaintext: allowPlaintext }),
   })
 }
 

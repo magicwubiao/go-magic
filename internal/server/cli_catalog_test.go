@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/magicwubiao/go-magic/pkg/clicatalog"
@@ -63,6 +64,67 @@ func TestCLICatalogInstallValidation(t *testing.T) {
 	}
 	if s.cfg.Cli != nil {
 		t.Fatal("failed install must not persist anything")
+	}
+}
+
+// 明文凭据防线：gh 条目声明了可选的 GH_TOKEN。提交 ghp_ 开头的明文要被拦下
+// （config.json 会长期落盘），改用 ${VAR} 引用或显式 allow_plaintext 才放行。
+func TestCLICatalogInstallRejectsPlaintextSecret(t *testing.T) {
+	s, home := newCLITestServer(t)
+
+	body := `{"id": "gh", "env": {"GH_TOKEN": "ghp_0123456789abcdefghijklmnopqrstuvwxyz"}}`
+	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("plaintext token: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "plaintext credential") {
+		t.Fatalf("error should explain the plaintext policy, body = %s", rec.Body.String())
+	}
+	if s.cfg.Cli != nil {
+		t.Fatal("rejected install must not persist anything")
+	}
+
+	// ${VAR} 引用不是明文，直接放行（gh 没装时会走到"命令不存在"，那是另一条错误）。
+	// overwrite=true：这台机器可能已经装过 gh，别让 409 盖住要验证的结论。
+	rec = doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install",
+		`{"id": "gh", "env": {"GH_TOKEN": "${GH_TOKEN}"}, "overwrite": true}`)
+	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "plaintext") {
+		t.Fatalf("env reference must pass the plaintext check, body = %s", rec.Body.String())
+	}
+
+	// 显式 allow_plaintext 是逃生口：不再被明文检查拦（命令不存在时是别的报错）。
+	body = `{"id": "gh", "env": {"GH_TOKEN": "ghp_0123456789abcdefghijklmnopqrstuvwxyz"}, "allow_plaintext": true, "overwrite": true}`
+	rec = doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", body)
+	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "plaintext") {
+		t.Fatalf("allow_plaintext must bypass the check, body = %s", rec.Body.String())
+	}
+
+	// gh 已安装且放行明文时，配置里就是明文（用户被明确告知过后果）。
+	// gh 没装时，请求应在命令检测处停下，报错必须是"找不到命令"而不是明文检查。
+	if _, err := exec.LookPath("gh"); err == nil {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("allow_plaintext install: status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		cfg := readPersistedConfig(t, home)
+		if cfg.Cli == nil {
+			t.Fatal("cli section was not persisted")
+		}
+		conn, ok := cfg.Cli.Connectors["gh"]
+		if !ok {
+			t.Fatalf("connector %q missing from persisted config", "gh")
+		}
+		want := "GH_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+		found := false
+		for _, kv := range conn.Env {
+			if kv == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("plaintext env %q not persisted, env = %v", want, conn.Env)
+		}
+	} else if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not found") {
+		t.Fatalf("gh missing: expect a not-found error, got status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
