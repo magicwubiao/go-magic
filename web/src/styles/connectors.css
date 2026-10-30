@@ -309,3 +309,106 @@
     color: #7d7d7d;
   }
 }
+
+/* ===== 目录详情（CLI 应用安装引导，弹窗 teleport 到 body 必须全局） ===== */
+.cli-catalog-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cli-catalog-sub {
+  font-size: 12px;
+  color: #909399;
+}
+
+/* 状态行：版本 / 可用性 chip + 一句话说明（当前 context 或失败原因） */
+.cli-catalog-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cli-catalog-status .conn-chip {
+  cursor: default;
+}
+
+.cli-catalog-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+  margin: 4px 0 6px;
+}
+
+.cli-catalog-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  flex-wrap: wrap;
+}
+
+.cli-catalog-tool-desc {
+  font-size: 12px;
+  color: #909399;
+}
+
+.cli-catalog-link {
+  font-size: 12px;
+  color: #2080f0;
+  text-decoration: none;
+}
+
+.cli-catalog-link:hover {
+  text-decoration: underline;
+}
+
+.cli-install-hint {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.cli-install-cmd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cli-install-cmd code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cli-catalog-sub,
+  .cli-catalog-tool-desc {
+    color: #9a9a9a;
+  }
+
+  .cli-catalog-label {
+    color: #c4c4c4;
+  }
+
+  .cli-catalog-link {
+    color: #78a9ff;
+  }
+
+  .cli-install-cmd code {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* 卡片底部状态文字可能很长（"需要凭据：App ID, App Secret"），
+   必须截断，否则会把右侧按钮挤出卡片 */
+.conn-foot .conn-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

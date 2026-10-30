@@ -72,37 +72,24 @@
         <n-empty v-else :description="t('agentplugins.noPlugins')" style="padding: 16px 0;" />
       </div>
 
-      <!-- ===== 应用目录（原连接器页的 MCP 目录 / CLI 应用目录迁到这里） ===== -->
+      <!-- ===== MCP 连接器（目录条目直接铺成插件卡，点安装即接入） ===== -->
       <div class="ap-section">
         <div class="ap-section-head">
-          <n-icon size="16"><component :is="GridOutline" /></n-icon>
-          <span class="ap-section-title">{{ t('agentplugins.catalogTitle') }}</span>
-          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.catalogSubtitle') }}</n-text>
+          <n-icon size="16"><component :is="ServerOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.mcpCatalogTitle') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.mcpCatalogSubtitle') }}</n-text>
         </div>
-        <n-grid cols="1 s:2" responsive="screen" :x-gap="12" :y-gap="12">
-          <n-gi>
-            <div class="ap-catalog-card" @click="showMCPCatalog = true">
-              <div class="ap-catalog-text">
-                <div class="ap-catalog-name">{{ t('agentplugins.catalogMcp') }}</div>
-                <div class="ap-catalog-desc">{{ t('agentplugins.catalogMcpDesc') }}</div>
-              </div>
-              <n-button size="tiny" secondary @click.stop="showMCPCatalog = true">
-                {{ t('agentplugins.catalogBrowse') }}
-              </n-button>
-            </div>
-          </n-gi>
-          <n-gi>
-            <div class="ap-catalog-card" @click="showCLICatalog = true">
-              <div class="ap-catalog-text">
-                <div class="ap-catalog-name">{{ t('agentplugins.catalogCli') }}</div>
-                <div class="ap-catalog-desc">{{ t('agentplugins.catalogCliDesc') }}</div>
-              </div>
-              <n-button size="tiny" secondary @click.stop="showCLICatalog = true">
-                {{ t('agentplugins.catalogBrowse') }}
-              </n-button>
-            </div>
-          </n-gi>
-        </n-grid>
+        <MCPCatalogCards />
+      </div>
+
+      <!-- ===== CLI 应用（同上：一张卡一个工具，装上即出现在连接器页） ===== -->
+      <div class="ap-section">
+        <div class="ap-section-head">
+          <n-icon size="16"><component :is="TerminalOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.cliCatalogTitle') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.cliCatalogSubtitle') }}</n-text>
+        </div>
+        <CLICatalogCards />
       </div>
 
       <!-- ===== 已安装插件 ===== -->
@@ -404,10 +391,6 @@
         </div>
       </div>
 
-      <!-- 应用目录弹窗（从连接器页迁入） -->
-      <CLICatalogModal v-model:show="showCLICatalog" />
-      <MCPCatalogModal v-model:show="showMCPCatalog" />
-
       <!-- 凭据授权弹窗 -->
       <n-modal
         v-model:show="credModal.show"
@@ -468,20 +451,17 @@ import {
   CloudUploadOutline,
   TrashOutline,
   RocketOutline,
-  GridOutline,
+  ServerOutline,
+  TerminalOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
 import type { AgentPlugin } from '@/api/agentplugins'
-import CLICatalogModal from '@/components/CLICatalogModal.vue'
-import MCPCatalogModal from '@/components/MCPCatalogModal.vue'
+import MCPCatalogCards from '@/components/MCPCatalogCards.vue'
+import CLICatalogCards from '@/components/CLICatalogCards.vue'
 
 const { t } = useI18n()
 const message = useMessage()
 const store = useAgentPluginsStore()
-
-// 应用目录弹窗（原连接器页入口，迁到插件页）
-const showCLICatalog = ref(false)
-const showMCPCatalog = ref(false)
 
 // 每个插件卡片的展开状态(默认全部收起,保持页面干净)。
 const expanded = reactive<Record<string, boolean>>({})
@@ -730,33 +710,6 @@ onMounted(async () => {
 }
 .ap-section-spacer {
   flex: 1;
-}
-
-/* ===== 应用目录入口卡 ===== */
-.ap-catalog-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid #e5e6eb;
-  border-radius: 10px;
-  background: #fafafa;
-  cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-.ap-catalog-card:hover {
-  border-color: #2080f0;
-  box-shadow: 0 2px 10px rgba(32, 128, 240, 0.08);
-}
-.ap-catalog-name {
-  font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 2px;
-}
-.ap-catalog-desc {
-  font-size: 12px;
-  color: #909399;
 }
 
 /* ===== 官方技能包卡 ===== */
@@ -1039,16 +992,6 @@ onMounted(async () => {
   .ap-plugin {
     background: #18181c;
     border-color: #2c2c30;
-  }
-  .ap-catalog-card {
-    background: #1f1f1f;
-    border-color: #333;
-  }
-  .ap-catalog-card:hover {
-    border-color: #4a7dc0;
-  }
-  .ap-catalog-desc {
-    color: #7d7d7d;
   }
   .ap-plugin:hover {
     border-color: #3d4a63;
