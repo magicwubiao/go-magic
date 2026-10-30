@@ -101,12 +101,20 @@ func (t *Tool) Schema() map[string]interface{} {
 	return schema
 }
 
+// Timeout 返回该工具的单次执行超时。
+//
+// 注册表要按工具设置超时（tool.Registry.SetTimeout），否则执行器会套上
+// 默认的 60s —— 连接器里配的 timeout_seconds 就永远不生效。
+func (t *Tool) Timeout() time.Duration {
+	return time.Duration(t.conn.EffectiveTimeout(t.spec)) * time.Second
+}
+
 // Execute 执行子命令并返回结构化结果。
 //
 // 退出码非零不返回 error（见 Result 的注释），超时返回 124 + 提示，
 // 只有"根本没跑起来"（命令不存在/无权限/参数校验失败）才是 error。
 func (t *Tool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-	timeout := time.Duration(t.conn.EffectiveTimeout(t.spec)) * time.Second
+	timeout := t.Timeout()
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -139,8 +147,23 @@ func (t *Tool) Execute(ctx context.Context, params map[string]interface{}) (inte
 	return out, nil
 }
 
-// RequiresApproval 实现 agent 侧的 approvalAware 接口。
+// RequiresApproval 实现 agent 侧的 approvalAware 接口（见下方 ApprovalSummary
+// 的注释：两个方法必须成对实现）。
 func (t *Tool) RequiresApproval() bool { return t.requireApproval }
+
+// ApprovalSummary 给审批卡片一句人类可读的动作描述。
+//
+// **不要删这个方法**：agent 侧的 approvalAware 是
+//
+//	interface { RequiresApproval() bool; ApprovalSummary() string }
+//
+// 两个方法缺一个，t.(approvalAware) 就断言失败，agent 会认为"这工具不需要确认"
+// 而直接放行——命令行能做的事没有边界，等于把审批链路整条绕过去。
+// 这类失败是静默的（编译/单测都发现不了），所以 cliconn_test.go 里用同一形状的
+// 接口做了编译期断言。
+func (t *Tool) ApprovalSummary() string {
+	return fmt.Sprintf("CLI %s → %s", t.connector, t.spec.Name)
+}
 
 // ConnectorName 返回所属连接器名（供测试接口/UI 反查）。
 func (t *Tool) ConnectorName() string { return t.connector }
@@ -176,36 +199,6 @@ func (m *Manager) Get(name string) (Connector, bool) {
 	defer m.mu.RUnlock()
 	c, ok := m.connectors[name]
 	return c, ok
-}
-
-// Snapshot 返回全部定义的浅拷贝（调用方可随意改 map，但不要改 Connector
-// 里的 slice 元素）。
-func (m *Manager) Snapshot() map[string]Connector {
-	if m == nil {
-		return map[string]Connector{}
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]Connector, len(m.connectors))
-	for name, c := range m.connectors {
-		out[name] = c
-	}
-	return out
-}
-
-// Names 返回按字典序排好的连接器名（列表页需要稳定顺序）。
-func (m *Manager) Names() []string {
-	if m == nil {
-		return nil
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]string, 0, len(m.connectors))
-	for name := range m.connectors {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // Upsert 写入/替换一个连接器定义（先校验）。

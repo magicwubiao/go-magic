@@ -22,7 +22,7 @@
 - [12. Messaging Gateways](#12-messaging-gateways)
 - [13. Skills System](#13-skills-system)
 - [14. Tools & Toolsets](#14-tools--toolsets)
-- [15. MCP & ACP](#15-mcp--acp)
+- [15. MCP, ACP & CLI Connectors](#15-mcp-acp--cli-connectors)
 - [16. Scheduled Tasks (Cron)](#16-scheduled-tasks-cron)
 - [17. Kanban Board](#17-kanban-board)
 - [18. Token Usage & Budget](#18-token-usage--budget)
@@ -1103,7 +1103,7 @@ first when debugging; it is faster than reading logs.
 
 ---
 
-## 15. MCP & ACP
+## 15. MCP, ACP & CLI Connectors
 
 ### 15.1 MCP (Model Context Protocol)
 
@@ -1239,6 +1239,58 @@ magic acp ping [agent]
 magic acp skills [agent]
 magic acp call helper summarize --params '{"text":"..."}'
 magic acp disconnect helper
+```
+
+### 15.3 CLI Connectors
+
+Plenty of tools only ship a command line and no MCP server (`gh`, `kubectl`, `ffmpeg`, in-house ops scripts). Declare one as a "CLI connector" and each subcommand becomes a tool named `cli_<connector>_<tool>` the model can call.
+
+```jsonc
+"cli": {
+  "connectors": {
+    "gh": {
+      "command": "gh",                       // name on PATH, or an absolute path
+      "description": "GitHub CLI",           // prefixed to every tool description
+      "env": ["GH_TOKEN=ghp_xxx"],           // masked as *** in API responses
+      "timeout_seconds": 60,
+      "require_approval": true,
+      "tools": [{
+        "name": "pr_list",
+        "description": "List pull requests of a repository",
+        "args": ["pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "{{?json}}--json=number,title,state"],
+        "read_only": true,
+        "params": [
+          {"name": "repo", "description": "owner/name", "required": true},
+          {"name": "limit", "type": "integer", "default": 20},
+          {"name": "json", "type": "boolean"}
+        ]
+      }]
+    }
+  }
+}
+```
+
+Two template forms:
+
+| Template | Meaning |
+| --- | --- |
+| `{{name}}` | Insert the value. When the whole argument is a single placeholder and the value is empty, the argument is dropped together with the option name right before it (`--limit`). |
+| `{{?name}}--flag=...` | Conditional: kept only when `name` is truthy, otherwise the whole argument is dropped. |
+
+**Security model**: arguments go straight to `exec` as an argv array — **no shell**, no word splitting — so values containing `;`, `|` or `$(...)` stay literal. Every placeholder must be declared in `params`; extra keys from the model are ignored. On Windows `.bat`/`.cmd` is rejected (point at the `.exe`, or use `command: "cmd"` with `args: ["/c", ...]`).
+
+**Approval**: every call asks for confirmation by default; only tools marked `read_only: true` skip it, and the connector-level `require_approval` wins over the per-tool flag (set it to `false` to disable globally for that connector — use with care).
+
+**Results**: a non-zero exit code is not a failure — the tool returns `{exit_code, stdout, stderr, duration_ms}` and lets the model judge. Output above 32KB is truncated with a hint; a real timeout returns `exit_code: 124` plus advice. Per-tool timeout is capped at 300s (matching `MaxTimeout` in the tool layer).
+
+The Connectors → CLI tab lets you add/edit/delete and run a dry run (it really spawns the process, but saves nothing).
+
+```
+GET    /api/cli/connectors          list all (env masked)
+POST   /api/cli/connectors          create (body includes name)
+PUT    /api/cli/connectors/{name}   update
+DELETE /api/cli/connectors/{name}   delete
+POST   /api/cli/test                dry run (not saved)
 ```
 
 ---

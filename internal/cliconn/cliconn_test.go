@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // 这些测试不依赖具体平台的 echo/cat：把测试二进制自己当成外部 CLI 拉起来，
@@ -44,6 +45,11 @@ func TestHelperProcess(t *testing.T) {
 	case "big":
 		for i := 0; i < 6000; i++ {
 			fmt.Print("0123456789")
+		}
+	case "big_cn":
+		// 3 字节/字：32768 的截断点必然落在某个字的中间
+		for i := 0; i < 20000; i++ {
+			fmt.Print("中")
 		}
 	case "slow":
 		time.Sleep(5 * time.Second)
@@ -203,6 +209,17 @@ func TestRunStdinEnvAndExitCode(t *testing.T) {
 		t.Fatalf("env not passed through, stdout = %q", res.Stdout)
 	}
 
+	// 连接器的 env 必须覆盖进程继承的同名变量：重名键追加在数组末尾时，
+	// getenv（Unix）与环境块解析（Windows）都只认第一个，配置就形同虚设。
+	t.Setenv("MY_TOKEN", "stale-from-parent")
+	res, err = Run(context.Background(), envConn, ToolSpec{Name: "e", Description: "d", Args: []string{"x"}}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Stdout != "secret-123" {
+		t.Fatalf("connector env must override inherited env, stdout = %q", res.Stdout)
+	}
+
 	failConn := helperConnector("fail")
 	failConn.Args = nil
 	res, err = Run(context.Background(), failConn, ToolSpec{Name: "f", Description: "d", Args: []string{"x"}}, nil)
@@ -241,6 +258,49 @@ func TestRunTimeoutAndOutputCap(t *testing.T) {
 	}
 	if len(res.Stdout) != DefaultMaxOutputBytes {
 		t.Fatalf("kept %d bytes, want %d", len(res.Stdout), DefaultMaxOutputBytes)
+	}
+
+	// 截断点落在多字节字符中间时，不能把尾巴上的半个字当成"这不是 UTF-8"
+	// 转去解 GB18030 —— 那会把整段中文变成乱码。
+	bigCN := helperConnector("big_cn")
+	bigCN.Args = nil
+	res, err = Run(context.Background(), bigCN, ToolSpec{Name: "b", Description: "d", Args: []string{"x"}}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Truncated {
+		t.Fatal("60000 bytes of output should be truncated")
+	}
+	if !utf8.ValidString(res.Stdout) {
+		t.Fatalf("truncated stdout is not valid UTF-8: %q", res.Stdout[max(0, len(res.Stdout)-8):])
+	}
+	for _, r := range res.Stdout {
+		if r != '中' {
+			t.Fatalf("stdout contains mojibake %q", r)
+		}
+	}
+}
+
+// approvalAwareShape 与 internal/agent 里的 approvalAware（未导出）形状一致。
+//
+// 存在的唯一目的是编译期断言：agent 判断"这个工具要不要人工确认"用的是
+// `t.(approvalAware)` 类型断言，**少实现一个方法就断言失败、静默放行**。
+// 单看 *Tool.RequiresApproval() 的返回值是发现不了的（那样测试会一直绿）。
+type approvalAwareShape interface {
+	RequiresApproval() bool
+	ApprovalSummary() string
+}
+
+var _ approvalAwareShape = (*Tool)(nil)
+
+func TestToolApprovalInterfaceShape(t *testing.T) {
+	tool := NewTool("gh", Connector{Command: "gh"}, ToolSpec{Name: "pr_list", Description: "d", Args: []string{"pr", "list"}})
+	var aw approvalAwareShape = tool // 断言一次，确保运行时断言也成立
+	if !aw.RequiresApproval() {
+		t.Fatal("non read_only tool must require approval")
+	}
+	if summary := aw.ApprovalSummary(); !strings.Contains(summary, "gh") || !strings.Contains(summary, "pr_list") {
+		t.Fatalf("approval summary = %q", summary)
 	}
 }
 
@@ -282,7 +342,7 @@ func TestToolMetadataAndApproval(t *testing.T) {
 func TestManagerFiltersAndUpsert(t *testing.T) {
 	off := false
 	m := New(map[string]Connector{
-		"gh":    {Command: "gh", Tools: []ToolSpec{{Name: "a", Description: "d", Args: []string{"a"}}}},
+		"gh": {Command: "gh", Tools: []ToolSpec{{Name: "a", Description: "d", Args: []string{"a"}}}},
 		"kubectl": {
 			Command:  "kubectl",
 			Profiles: []string{"work"},

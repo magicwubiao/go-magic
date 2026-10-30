@@ -11,9 +11,9 @@ import (
 // stub 是一个最小工具，用来验证前缀清理不会误伤内置工具。
 type stub struct{ name string }
 
-func (s stub) Name() string                            { return s.name }
-func (s stub) Description() string                     { return "stub" }
-func (s stub) Schema() map[string]interface{}          { return map[string]interface{}{"type": "object"} }
+func (s stub) Name() string                   { return s.name }
+func (s stub) Description() string            { return "stub" }
+func (s stub) Schema() map[string]interface{} { return map[string]interface{}{"type": "object"} }
 func (s stub) Execute(context.Context, map[string]interface{}) (interface{}, error) {
 	return nil, nil
 }
@@ -54,6 +54,28 @@ func TestSyncToRegistry(t *testing.T) {
 	}
 	if reg.Count() != 2 {
 		t.Fatalf("registry has %d tools, want 2", reg.Count())
+	}
+}
+
+// 注册表没有超时条目时执行器会套默认的 60s，连接器配置的 timeout_seconds
+// 就永远不生效（构建/同步类命令会莫名在 60s 被杀）。
+func TestSyncAppliesConnectorTimeout(t *testing.T) {
+	reg := tool.NewRegistry()
+	conn := testConnector()
+	conn.TimeoutSeconds = 180
+	conn.Tools[0].TimeoutSeconds = 240
+	SyncToRegistry(cliconn.New(map[string]cliconn.Connector{"gh": conn}), reg, "")
+
+	if got := reg.GetTimeout("cli_gh_pr_list"); got.Seconds() != 240 {
+		t.Fatalf("tool timeout = %v, want 240s (tool-level override)", got)
+	}
+
+	// 工具级留空 → 用连接器级
+	conn2 := testConnector()
+	conn2.TimeoutSeconds = 180
+	SyncToRegistry(cliconn.New(map[string]cliconn.Connector{"gh": conn2}), reg, "")
+	if got := reg.GetTimeout("cli_gh_pr_list"); got.Seconds() != 180 {
+		t.Fatalf("tool timeout = %v, want 180s (connector default)", got)
 	}
 }
 

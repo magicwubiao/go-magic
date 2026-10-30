@@ -106,6 +106,9 @@ func (s *Server) handleCLITest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		// Name 是"已保存连接器"的名字（新建时为空）。带上它才能把表单回传的
+		// *** 还原成磁盘上的真值——否则拿 *** 当 token 去跑，试跑必然 401。
+		Name      string            `json:"name"`
 		Connector cliconn.Connector `json:"connector"`
 		Tool      string            `json:"tool"`
 		Params    map[string]any    `json:"params"`
@@ -113,6 +116,13 @@ func (s *Server) handleCLITest(w http.ResponseWriter, r *http.Request) {
 	if err := decodeCLIBody(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if name := strings.TrimSpace(body.Name); name != "" {
+		if stored, ok := s.cliConnectorConfigs()[name]; ok {
+			body.Connector.Env = mergeMaskedServerEnv(stored.Env, body.Connector.Env)
+		}
+	} else {
+		body.Connector.Env = mergeMaskedServerEnv(nil, body.Connector.Env)
 	}
 	if err := body.Connector.Validate(); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -201,23 +211,31 @@ func (s *Server) deleteCLIConnector(w http.ResponseWriter, name string) {
 		return
 	}
 	s.applyCLIConnectors()
-	// 删掉的连接器必须立刻从注册表消失，否则模型还能调到已经不存在的命令。
-	cliconnbridge.RemoveConnectorTools(s.toolReg, name)
+	// applyCLIConnectors 已经把 cli_* 工具整体重同步过一遍（被删的不会重建），
+	// 这里不再单独 RemoveConnectorTools —— 两次操作同一批工具只会让人误以为
+	// 清理有两套逻辑。
 	jsonResponse(w, map[string]interface{}{"status": "deleted", "name": name})
 }
 
 // applyCLIConnectors 用当前配置重建 Manager 并把工具同步进注册表。
+//
+// 整体替换而不是增量改：CLI 定义之间没有共享状态，重建成本是"拷一个 map"，
+// 换来的是"任何一次改动后注册表必然等于配置"，不会漏掉被删/被禁用的工具。
 func (s *Server) applyCLIConnectors() {
 	if s == nil || s.toolReg == nil {
 		return
 	}
 	defs := s.cliConnectorConfigs()
-	if s.cliMgr == nil {
-		s.cliMgr = cliconn.New(defs)
-	} else {
-		s.cliMgr = cliconn.New(defs)
-	}
-	count := cliconnbridge.SyncToRegistry(s.cliMgr, s.toolReg, s.activeProfile())
+	mgr := cliconn.New(defs)
+
+	// 两个页签同时保存、或保存与启动并发时，cliMgr 的赋值与注册表同步必须整体
+	// 串行：否则 A 先把新工具注册进去、B 再用旧定义覆盖 cliMgr，注册表与
+	// 内存定义就会长期不一致（要等下一次保存才自愈）。
+	s.acquireServerMu("applyCLIConnectors")
+	s.cliMgr = mgr
+	count := cliconnbridge.SyncToRegistry(mgr, s.toolReg, s.activeProfile())
+	s.releaseServerMu()
+
 	log.Infof("[CLI] connectors synced: %d connectors, %d tools", len(defs), count)
 }
 

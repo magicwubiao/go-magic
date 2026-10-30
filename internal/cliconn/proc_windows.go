@@ -23,6 +23,10 @@ func setProcAttrs(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags |= createNoWindow
 }
 
+// normalizeEnvKey 统一环境变量名的大小写：Windows 的变量名大小写不敏感，
+// `Path` 与 `PATH` 是同一个变量，去重时必须归一，否则会同时塞两条进去。
+func normalizeEnvKey(key string) string { return strings.ToUpper(key) }
+
 // isBatchScript 报告 command 是否是 .bat/.cmd（不能直接 CreateProcess）。
 func isBatchScript(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {

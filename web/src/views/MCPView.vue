@@ -34,7 +34,13 @@
       </n-tabs>
     </div>
 
-    <div v-if="activeTab === 'mcp'">
+    <!--
+      两个页签都用 v-show 而不是 v-if：
+       1. CLI 面板要在首屏就把连接器数量报给页签徽标（v-if 下徽标一直是 0，
+          直到用户点进 CLI 页签）；
+       2. 切页签时保留各自的搜索词/筛选态，回来不用重设。
+    -->
+    <div v-show="activeTab === 'mcp'">
       <n-space justify="end" style="margin-bottom: 12px;">
         <n-button @click="openCatalogModal">
           <template #icon>
@@ -222,7 +228,7 @@
     </div>
 
     <!-- CLI 页签：面板自成一体（自己的数据、自己的弹窗），父组件只收一个计数。 -->
-    <CLIConnectorsPanel v-else @count="cliCount = $event" />
+    <CLIConnectorsPanel v-show="activeTab === 'cli'" @count="cliCount = $event" />
 
     <!-- 详情抽屉：卡片承载"概览"，细节（工具清单/开关/调用统计）放这里，
          不再让每一行在列表里向下撑开——卡片网格一旦有行被撑高，整片就歪了。 -->

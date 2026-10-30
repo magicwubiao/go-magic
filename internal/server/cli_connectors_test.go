@@ -26,6 +26,11 @@ func TestCLIHelperProcess(t *testing.T) {
 	if os.Getenv("CLI_HELPER") != "1" {
 		return
 	}
+	// CLI_ECHO_ENV 指定要回显的环境变量名，用来验证"表单回传的 *** 被还原成真值"。
+	if key := os.Getenv("CLI_ECHO_ENV"); key != "" {
+		fmt.Print(os.Getenv(key))
+		os.Exit(0)
+	}
 	fmt.Print("hello from helper")
 	os.Exit(0)
 }
@@ -129,9 +134,9 @@ func TestCLIConnectorValidationRejected(t *testing.T) {
 	s, home := newCLITestServer(t)
 
 	cases := []string{
-		`{"command": "", "tools": []}`,                                     // 缺 command
-		`{"command": "gh", "tools": []}`,                                   // 没有工具
-		`{"command": "gh", "tools": [{"name": "x", "description": "d"}]}`,  // 没有 args
+		`{"command": "", "tools": []}`,                                                          // 缺 command
+		`{"command": "gh", "tools": []}`,                                                        // 没有工具
+		`{"command": "gh", "tools": [{"name": "x", "description": "d"}]}`,                       // 没有 args
 		`{"command": "gh", "tools": [{"name": "x", "description": "d", "args": ["{{nope}}"]}]}`, // 未声明参数
 	}
 	for _, body := range cases {
@@ -223,5 +228,50 @@ func TestCLITestEndpointRunsCommand(t *testing.T) {
 	}
 	if s.cfg.Cli != nil {
 		t.Fatal("dry run must not persist anything")
+	}
+}
+
+// 试跑必须用磁盘上的真值跑，而不是表单里回填的 ***。
+// 否则"保存后点试跑"对任何带 token 的连接器都是 401，用户会以为权限配错了。
+func TestCLITestEndpointRestoresMaskedEnv(t *testing.T) {
+	s, _ := newCLITestServer(t)
+	if rec := doCLIRequest(t, s, http.MethodPut, "/api/cli/connectors/gh", ghConnectorBody()); rec.Code != http.StatusOK {
+		t.Fatalf("seed failed: %s", rec.Body.String())
+	}
+
+	body := fmt.Sprintf(`{
+		"name": "gh",
+		"connector": {"command": %q,
+			"args": ["-test.run=TestCLIHelperProcess"],
+			"env": ["CLI_HELPER=1", "CLI_ECHO_ENV=GH_TOKEN", "GH_TOKEN=%s"],
+			"tools": [{"name": "hi", "description": "d", "args": ["x"]}]},
+		"tool": "hi"
+	}`, os.Args[0], maskedEnvValue)
+
+	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/test", body)
+	var resp struct {
+		OK     bool                   `json:"ok"`
+		Result map[string]interface{} `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("not JSON: %v (body=%s)", err, rec.Body.String())
+	}
+	if out, _ := resp.Result["stdout"].(string); out != "real-token" {
+		t.Fatalf("stdout = %q, want the stored token (masked value must not be executed)", out)
+	}
+}
+
+// 新建（未保存）时没有可还原的值，*** 只能按字面量跑——不能因此 panic 或 500。
+func TestCLITestEndpointWithoutStoredConnector(t *testing.T) {
+	s, _ := newCLITestServer(t)
+	body := fmt.Sprintf(`{
+		"connector": {"command": %q, "args": ["-test.run=TestCLIHelperProcess"],
+			"env": ["CLI_HELPER=1"],
+			"tools": [{"name": "hi", "description": "d", "args": ["x"]}]},
+		"tool": "hi"
+	}`, os.Args[0])
+	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/test", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }

@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -32,7 +31,11 @@ const (
 	// 所以给一个可覆盖的默认值。
 	DefaultTimeoutSeconds = 60
 	// MaxTimeoutSeconds 是超时上限，避免配置成几小时把回合挂死。
-	MaxTimeoutSeconds = 600
+	//
+	// 必须与 internal/tool.MaxTimeout（300s）保持一致：执行器会把 ctx 再包一层，
+	// 超过它的配置会被静默截断——用户在表单里填 600 却只跑 300，比拒绝填写更糟。
+	// 这里不能直接引用那个常量（internal/tool → pkg/config → 本包，会成环）。
+	MaxTimeoutSeconds = 300
 
 	// DefaultMaxOutputBytes 是单次命令回传给模型的最大输出（32KB）。
 	// 超出的部分被截断并标注，避免一次 `kubectl get pods -A` 把上下文吃光。
@@ -194,7 +197,6 @@ func (c Connector) Validate() error {
 	}
 
 	seen := make(map[string]bool, len(c.Tools))
-	names := make([]string, 0, len(c.Tools))
 	for i, spec := range c.Tools {
 		if err := spec.Validate(); err != nil {
 			return fmt.Errorf("tools[%d]: %w", i, err)
@@ -203,9 +205,7 @@ func (c Connector) Validate() error {
 			return fmt.Errorf("duplicate tool name %q", spec.Name)
 		}
 		seen[spec.Name] = true
-		names = append(names, spec.Name)
 	}
-	sort.Strings(names)
 
 	// 公共 Args 里引用的参数在每个工具里都必须有声明，否则展开时静默变空值。
 	for i, spec := range c.Tools {
@@ -310,21 +310,4 @@ func ExpandWorkingDir(dir string) string {
 		}
 	}
 	return dir
-}
-
-// MaskedEnvKeys 返回 env 里所有 key，供 API 层把值掩码成 *** 时使用。
-func MaskedEnvKeys(env []string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if key, _, ok := strings.Cut(kv, "="); ok && strings.TrimSpace(key) != "" {
-			out = append(out, strings.TrimSpace(key))
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }

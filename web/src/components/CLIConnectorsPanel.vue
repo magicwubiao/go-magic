@@ -193,7 +193,7 @@
 
         <n-space :size="12">
           <n-form-item :label="t('cli.timeout')" style="width: 160px;">
-            <n-input-number v-model:value="form.timeoutSeconds" :min="1" :max="600" style="width: 100%;" />
+            <n-input-number v-model:value="form.timeoutSeconds" :min="1" :max="300" style="width: 100%;" />
           </n-form-item>
           <n-form-item :label="t('cli.workingDir')" style="flex: 1;">
             <n-input v-model:value="form.workingDir" :placeholder="t('cli.workingDirPlaceholder')" />
@@ -207,8 +207,13 @@
               <n-text style="font-size: 13px;">{{ t('cli.enabled') }}</n-text>
             </n-space>
             <n-space align="center" size="small">
-              <n-switch v-model:value="form.requireApproval" size="small" />
-              <n-text style="font-size: 13px;">{{ t('cli.requireApproval') }}</n-text>
+              <n-text style="font-size: 13px; width: 76px;">{{ t('cli.approvalMode') }}</n-text>
+              <n-select
+                v-model:value="form.approvalMode"
+                size="small"
+                style="width: 260px;"
+                :options="approvalOptions"
+              />
             </n-space>
             <n-input v-model:value="form.profilesStr" size="small" :placeholder="t('cli.profilesPlaceholder')" />
           </n-space>
@@ -240,7 +245,7 @@
             <n-switch v-model:value="tool.readOnly" size="small" />
             <n-text style="font-size: 12px;">{{ t('cli.readOnly') }}</n-text>
             <n-input v-model:value="tool.stdinParam" size="small" :placeholder="t('cli.stdinParam')" style="width: 200px;" />
-            <n-input-number v-model:value="tool.timeoutSeconds" size="small" :min="0" :max="600" :placeholder="t('cli.timeout')" style="width: 130px;" />
+            <n-input-number v-model:value="tool.timeoutSeconds" size="small" :min="0" :max="300" :placeholder="t('cli.timeout')" style="width: 130px;" />
           </n-space>
           <n-input
             v-model:value="tool.paramsJson"
@@ -439,6 +444,20 @@ interface ToolForm {
   paramsJson: string
 }
 
+/**
+ * 确认策略是三态，不是开关：
+ *   inherit —— 不写 require_approval（后端 nil），按工具的 read_only 决定；
+ *   always / never —— 显式覆盖连接器下所有工具。
+ *
+ * 用开关会丢语义：nil（跟随工具声明）被读成 true 再存回去，一次"只改超时"
+ * 的编辑就会把所有只读工具也变成需要人工确认。
+ */
+const approvalOptions = computed(() => [
+  { label: t('cli.approvalInherit'), value: 'inherit' as const },
+  { label: t('cli.approvalAlways'), value: 'always' as const },
+  { label: t('cli.approvalNever'), value: 'never' as const },
+])
+
 const form = reactive({
   name: '',
   command: '',
@@ -448,7 +467,7 @@ const form = reactive({
   workingDir: '',
   timeoutSeconds: 60 as number | null,
   enabled: true,
-  requireApproval: true,
+  approvalMode: 'inherit' as 'inherit' | 'always' | 'never',
   profilesStr: '',
 })
 const formTools = ref<ToolForm[]>([])
@@ -513,7 +532,7 @@ function resetForm() {
   form.workingDir = ''
   form.timeoutSeconds = 60
   form.enabled = true
-  form.requireApproval = true
+  form.approvalMode = 'inherit'
   form.profilesStr = ''
   formTools.value = [emptyTool()]
 }
@@ -534,7 +553,9 @@ function openEdit(row: CLIConnectorView) {
   form.workingDir = row.working_dir || ''
   form.timeoutSeconds = row.timeout_seconds || 60
   form.enabled = row.enabled !== false
-  form.requireApproval = row.require_approval !== false
+  // undefined = 未设置（跟随工具声明）；显式 false/true 才是覆盖
+  form.approvalMode =
+    row.require_approval === undefined ? 'inherit' : row.require_approval ? 'always' : 'never'
   form.profilesStr = (row.profiles || []).join(', ')
   formTools.value = (row.tools || []).map((tool) => ({
     name: tool.name,
@@ -558,7 +579,7 @@ function fillExample() {
     {
       name: 'pr_list',
       description: 'List pull requests of a repository',
-      argsStr: 'pr\nlist\n--repo\n{{repo}}\n--limit\n{{limit}}\n--state\n{{state}}\n{{?json}}--json\nnumber,title,state,url',
+      argsStr: 'pr\nlist\n--repo\n{{repo}}\n--limit\n{{limit}}\n--state\n{{state}}\n{{?json}}--json=number,title,state,url',
       readOnly: true,
       stdinParam: '',
       timeoutSeconds: 30,
@@ -606,7 +627,9 @@ function buildConnector(): CLIConnector {
     timeout_seconds: form.timeoutSeconds || undefined,
     enabled: form.enabled,
     profiles: form.profilesStr.split(',').map((p) => p.trim()).filter(Boolean),
-    require_approval: form.requireApproval,
+    // inherit 显式传 undefined：JSON.stringify 会丢掉该字段，后端保持 nil
+    require_approval:
+      form.approvalMode === 'inherit' ? undefined : form.approvalMode === 'always',
     tools,
   }
 }
@@ -736,6 +759,17 @@ onMounted(handleRefresh)
   gap: 6px;
   margin-top: 6px;
 }
+
+@media (prefers-color-scheme: dark) {
+  .cli-tool-desc {
+    color: #b6b6b6;
+  }
+
+  .cli-tool-args {
+    background: #1f1f1f;
+    color: #d8d8d8;
+  }
+}
 </style>
 
 <style>
@@ -772,5 +806,26 @@ onMounted(handleRefresh)
 .cli-output.is-error {
   background: #fff5f5;
   color: #d03050;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cli-tool-editor {
+    background: #1f1f1f;
+    border-color: #333;
+  }
+
+  .cli-output-label {
+    color: #7d7d7d;
+  }
+
+  .cli-output {
+    background: #1f1f1f;
+    color: #d8d8d8;
+  }
+
+  .cli-output.is-error {
+    background: #2a1a1c;
+    color: #ff8b8b;
+  }
 }
 </style>

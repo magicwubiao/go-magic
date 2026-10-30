@@ -22,7 +22,7 @@
 - [12. 消息网关（接外部聊天平台）](#12-消息网关接外部聊天平台)
 - [13. 技能系统](#13-技能系统)
 - [14. 工具与工具集](#14-工具与工具集)
-- [15. MCP 与 ACP](#15-mcp-与-acp)
+- [15. MCP、ACP 与 CLI 连接器](#15-mcpacp-与-cli-连接器)
 - [16. 定时任务（Cron）](#16-定时任务cron)
 - [17. 看板（Kanban）](#17-看板kanban)
 - [18. Token 用量](#18-token-用量)
@@ -1084,7 +1084,7 @@ docker compose exec magic printenv BROWSER_HEADLESS   # 为空 = 走默认 true
 
 ---
 
-## 15. MCP 与 ACP
+## 15. MCP、ACP 与 CLI 连接器
 
 ### 15.1 MCP（Model Context Protocol）
 
@@ -1217,6 +1217,58 @@ magic acp ping [agent]
 magic acp skills [agent]
 magic acp call helper summarize --params '{"text":"..."}'
 magic acp disconnect helper
+```
+
+### 15.3 CLI 连接器
+
+很多软件只提供命令行，没有 MCP server（`gh`、`kubectl`、`ffmpeg`、内部运维脚本）。把它们声明成「CLI 连接器」后，每个子命令展开成一个工具 `cli_<连接器>_<工具>`，模型可以直接调用。
+
+```jsonc
+"cli": {
+  "connectors": {
+    "gh": {
+      "command": "gh",                       // PATH 里的名字，或绝对路径
+      "description": "GitHub CLI",           // 会作为每个工具描述的前缀
+      "env": ["GH_TOKEN=ghp_xxx"],           // API 返回值一律掩码为 ***
+      "timeout_seconds": 60,
+      "require_approval": true,
+      "tools": [{
+        "name": "pr_list",
+        "description": "List pull requests of a repository",
+        "args": ["pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "{{?json}}--json=number,title,state"],
+        "read_only": true,
+        "params": [
+          {"name": "repo", "description": "owner/name", "required": true},
+          {"name": "limit", "type": "integer", "default": 20},
+          {"name": "json", "type": "boolean"}
+        ]
+      }]
+    }
+  }
+}
+```
+
+参数模板的两种写法：
+
+| 模板 | 含义 |
+| --- | --- |
+| `{{name}}` | 替换成参数值。整条 arg 只有一个占位符且值为空时，该 arg 连同前面紧邻的选项名（如 `--limit`）一起省略。 |
+| `{{?name}}--flag=...` | 条件开关：`name` 为真才保留后面的字面量，否则整条丢弃。 |
+
+**安全模型**：参数以 argv 数组直接交给 `exec`，**不经过 shell**，也不做分词——所以参数值里带 `;`、`|`、`$(...)` 不会被解释成命令。模板里出现的占位符必须先在 `params` 里声明，模型多给的键一律忽略。Windows 上 `.bat`/`.cmd` 会被拒绝（请指向 `.exe`，或显式写 `command: "cmd"` + `args: ["/c", ...]`）。
+
+**审批**：默认每次调用都要人工确认，只有声明了 `read_only: true` 的工具才免确认；连接器级 `require_approval` 优先于工具级声明（`false` 可整体放开，慎用）。
+
+**结果**：非零退出码不算失败，工具返回 `{exit_code, stdout, stderr, duration_ms}` 交给模型判断；输出超过 32KB 会截断并提示收窄查询；真超时返回 `exit_code: 124` 加一句建议。
+
+单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。网页「连接器 → CLI」页签里可以增删改、点卡片试跑（试跑真的会拉起子进程，但不保存）。
+
+```
+GET    /api/cli/connectors          列出全部（env 掩码）
+POST   /api/cli/connectors          新增（body 带 name）
+PUT    /api/cli/connectors/{name}   修改
+DELETE /api/cli/connectors/{name}   删除
+POST   /api/cli/test                试跑一次（不保存）
 ```
 
 ---

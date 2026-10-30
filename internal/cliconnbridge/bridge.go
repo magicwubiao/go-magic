@@ -34,6 +34,9 @@ func SyncToRegistry(mgr *cliconn.Manager, reg *tool.Registry, profile string) in
 	count := 0
 	for _, t := range mgr.ToolsForProfile(profile) {
 		reg.Register(t)
+		// 按工具设置超时：注册表没有条目时执行器会套默认的 60s，
+		// 连接器里配的 timeout_seconds 就白写了（构建/同步类命令常超过 60s）。
+		reg.SetTimeout(t.Name(), t.Timeout())
 		count++
 	}
 	return count

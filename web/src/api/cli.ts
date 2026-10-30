@@ -101,16 +101,19 @@ export async function removeCLIConnector(name: string): Promise<void> {
 /**
  * 试跑一次（不保存）。后端会真的拉起子进程，返回 stdout/exit_code。
  * 超时按连接器的 timeout_seconds 计算，因此这里给足请求时间。
+ *
+ * connector.name 会被一起带上：已保存的连接器，env 回显的是 ***，
+ * 后端据此把 *** 还原成磁盘真值再执行（否则拿 *** 当 token 跑必然 401）。
  */
 export async function testCLIConnector(
-  connector: CLIConnector,
+  connector: CLIConnector & { name?: string },
   tool: string,
   params: Record<string, unknown>,
 ): Promise<CLITestResult> {
   const timeoutMs = Math.max(30_000, ((connector.timeout_seconds || 60) + 10) * 1000)
   return request<CLITestResult>('/cli/test', {
     method: 'POST',
-    body: JSON.stringify({ connector, tool, params }),
+    body: JSON.stringify({ name: connector.name ?? '', connector, tool, params }),
     timeoutMs,
   })
 }

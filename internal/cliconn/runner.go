@@ -59,7 +59,7 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	cmd.WaitDelay = 3 * time.Second // ctx 取消后给子进程收尸的宽限
 
 	if len(conn.Env) > 0 {
-		cmd.Env = append(os.Environ(), conn.Env...)
+		cmd.Env = mergeEnv(os.Environ(), conn.Env)
 	}
 	if dir := ExpandWorkingDir(conn.WorkingDir); dir != "" {
 		cmd.Dir = dir
@@ -112,6 +112,36 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 		}
 	}
 	return res, nil
+}
+
+// mergeEnv 把连接器声明的环境变量覆盖到继承环境上。
+//
+// 不能直接 append：无论 Unix 的 getenv 还是 Windows 的环境块解析，遇到重名
+// 键都只认**第一个**，把连接器的值追加在最后等于永远不生效——用户明明在
+// 配置里填了新 token，命令却拿着进程继承的旧 token 在跑（很隐蔽的 401）。
+func mergeEnv(base, overrides []string) []string {
+	index := make(map[string]int, len(base)+len(overrides))
+	out := make([]string, 0, len(base)+len(overrides))
+
+	put := func(kv string) {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok || key == "" {
+			return
+		}
+		if i, seen := index[normalizeEnvKey(key)]; seen {
+			out[i] = kv // 同键就地覆盖，顺序不变
+			return
+		}
+		index[normalizeEnvKey(key)] = len(out)
+		out = append(out, kv)
+	}
+	for _, kv := range base {
+		put(kv)
+	}
+	for _, kv := range overrides {
+		put(kv)
+	}
+	return out
 }
 
 // checkExecutable 在启动前给出可读的错误，而不是让 exec 抛一个
@@ -174,6 +204,28 @@ func (w *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *cappedBuffer) Bytes() []byte  { return w.buf.Bytes() }
+func (w *cappedBuffer) Bytes() []byte {
+	if w.truncated {
+		return trimIncompleteRune(w.buf.Bytes())
+	}
+	return w.buf.Bytes()
+}
+
 func (w *cappedBuffer) Len() int       { return w.buf.Len() }
-func (w *cappedBuffer) String() string { return w.buf.String() }
+func (w *cappedBuffer) String() string { return string(w.Bytes()) }
+
+// trimIncompleteRune 去掉尾部"被截断的半个字符"。
+//
+// 截断是按字节做的，切点很容易落在一个多字节字符中间（中文输出尤其常见）。
+// 后果不只是少一个字：decodeOutput 看到 utf8.Valid=false 会去试 GB18030，
+// 于是**整段正常的中文输出被当成 GBK 转码**，变成一堆乱码。
+func trimIncompleteRune(b []byte) []byte {
+	for i := 0; i < utf8.UTFMax && i < len(b); i++ {
+		// 注意不能只看 size==1：合法的 ASCII 字符也返回 size==1，
+		// 判据必须是"RuneError + 单字节"这个非法序列的特征。
+		if r, size := utf8.DecodeLastRune(b[:len(b)-i]); !(r == utf8.RuneError && size == 1) {
+			return b[:len(b)-i]
+		}
+	}
+	return b
+}

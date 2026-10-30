@@ -216,3 +216,75 @@
   flex-direction: column;
   gap: 12px;
 }
+
+/*
+ * 深色模式：全站靠 prefers-color-scheme 跟随系统（见 App.vue / GoalList.vue）。
+ * 卡片、芯片、文字都是硬编码浅色值，不给一套深色取值的话，深色下整页会是
+ * 一片刺眼的白块 + 看不见的浅灰字。
+ */
+@media (prefers-color-scheme: dark) {
+  .conn-chip {
+    background: #2a2a2a;
+    color: #b6b6b6;
+  }
+
+  .conn-chip:hover {
+    background: #333;
+  }
+
+  .conn-chip.is-active {
+    background: #1c2c44;
+    border-color: #2f5c8f;
+    color: #79b8ff;
+  }
+
+  .conn-count {
+    color: #7d7d7d;
+  }
+
+  .conn-card {
+    background: #252525;
+    border-color: #333;
+  }
+
+  .conn-card:hover {
+    border-color: #454545;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  }
+
+  .conn-card.is-idle {
+    background: #1f1f1f;
+  }
+
+  .conn-card.is-error {
+    border-color: #6b2b33;
+  }
+
+  .conn-avatar {
+    background: #4a4f57;
+  }
+
+  .conn-name-text {
+    color: #e8e8e8;
+  }
+
+  .conn-sub {
+    color: #7d7d7d;
+  }
+
+  .conn-desc {
+    color: #b6b6b6;
+  }
+
+  .conn-desc.is-error {
+    color: #ff8b8b;
+  }
+
+  .conn-state {
+    color: #7d7d7d;
+  }
+
+  .conn-more {
+    color: #7d7d7d;
+  }
+}

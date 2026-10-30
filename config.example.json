@@ -159,7 +159,7 @@
           {
             "name": "pr_list",
             "description": "List pull requests of a repository",
-            "args": ["pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "--state", "{{state}}", "{{?json}}--json", "number,title,state,url"],
+            "args": ["pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "--state", "{{state}}", "{{?json}}--json=number,title,state,url"],
             "read_only": true,
             "params": [
               {"name": "repo", "description": "owner/name", "required": true},
