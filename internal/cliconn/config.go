@@ -89,6 +89,9 @@ type ToolSpec struct {
 	// Args 是参数模板。规则见 ExpandArgs：
 	//   - {{name}}            → 替换成参数值；整个 arg 只有一个占位符且值为空时省略该 arg
 	//   - 以 {{?name}} 开头    → 该参数为真时保留其后的字面量，否则整条 arg 丢弃
+	//   - {{env:NAME}}        → 替换成连接器 env 里 NAME 的最终值（含 ${...} 引用
+	//     展开与凭据合并）；未声明或值为空时报错。用于把 webhook/token 这类
+	//     "用户填的凭据"放进参数位——凭据只存 env，不落模板。
 	// 例：["pr", "list", "--limit", "{{limit}}", "{{?verbose}}--verbose"]
 	Args []string `json:"args,omitempty"`
 	// StdinParam 指定把哪个参数的值写进子进程 stdin（比如喂一段 diff、一份 JSON）。
@@ -208,12 +211,33 @@ func (c Connector) Validate() error {
 	}
 
 	// 公共 Args 里引用的参数在每个工具里都必须有声明，否则展开时静默变空值。
+	// 同时校验 {{env:NAME}} 引用：NAME 必须是连接器 env 里声明过的键，
+	// 拼错的变量名否则只会在运行时变成 "not declared" 错误。
+	envKeys := make(map[string]bool, len(c.Env))
+	for _, kv := range c.Env {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok {
+			envKeys[strings.TrimSpace(key)] = true
+		}
+	}
 	for i, spec := range c.Tools {
 		declared := spec.paramSet()
 		for _, arg := range c.Args {
 			for _, name := range Placeholders(arg).Values {
 				if !declared[name] {
 					return fmt.Errorf("tools[%d] %q: args refer to undeclared parameter %q", i, spec.Name, name)
+				}
+			}
+			for _, name := range EnvRefs(arg) {
+				if !envKeys[name] {
+					return fmt.Errorf("tools[%d] %q: args reference env %q that is not declared in connector env", i, spec.Name, name)
+				}
+			}
+		}
+		for _, arg := range spec.Args {
+			for _, name := range EnvRefs(arg) {
+				if !envKeys[name] {
+					return fmt.Errorf("tools[%d] %q: args reference env %q that is not declared in connector env", i, spec.Name, name)
 				}
 			}
 		}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dingtalk",
+  "version": "1.0.0",
+  "description": "通过钉钉群自定义机器人 Webhook，在钉钉群里发送文本或 Markdown 通知。安装后授权填入机器人 Webhook 地址即可使用。",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["dingtalk", "notification", "webhook"],
+  "examples": [
+    "@钉钉 在测试群里发一条消息：今晚十点发布新版本",
+    "@钉钉 给群里有一条 Markdown 通知，把本周的发布计划列成表格",
+    "@钉钉 修改“杭州发布会”项目公告，把对齐会日期更新为本周五",
+    "@钉钉 查看我待审批的报销单，并单独列出金额超过 5000 的记录"
+  ]
+}

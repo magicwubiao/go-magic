@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "connectors": {
+    "dingtalk": {
+      "command": "curl",
+      "description": "DingTalk group custom-robot webhook client. The webhook URL comes from the DINGTALK_WEBHOOK connector env (user fills it via the authorization form). Message body is passed via stdin to avoid quoting issues.",
+      "timeout_seconds": 30,
+      "env": ["DINGTALK_WEBHOOK="],
+      "tools": [
+        {
+          "name": "send_text",
+          "description": "Send a plain-text message to a DingTalk group via the custom robot webhook. The payload parameter must be the FULL JSON request body written to stdin, shaped exactly as {\"msgtype\":\"text\",\"text\":{\"content\":\"消息内容\"}}. Use \\n for line breaks inside content. Requires user approval.",
+          "args": ["-fsS", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", "{{env:DINGTALK_WEBHOOK}}"],
+          "params": [
+            {
+              "name": "payload",
+              "type": "string",
+              "description": "Full JSON request body, e.g. {\"msgtype\":\"text\",\"text\":{\"content\":\"hello\"}}",
+              "required": true
+            }
+          ],
+          "stdin_param": "payload"
+        },
+        {
+          "name": "send_markdown",
+          "description": "Send a Markdown message to a DingTalk group via the custom robot webhook. The payload parameter must be the FULL JSON request body written to stdin, shaped exactly as {\"msgtype\":\"markdown\",\"markdown\":{\"title\":\"标题\",\"text\":\"**支持的** Markdown 正文\"}}. The title shows in the notification bar. Requires user approval.",
+          "args": ["-fsS", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@-", "{{env:DINGTALK_WEBHOOK}}"],
+          "params": [
+            {
+              "name": "payload",
+              "type": "string",
+              "description": "Full JSON request body, e.g. {\"msgtype\":\"markdown\",\"markdown\":{\"title\":\"title\",\"text\":\"markdown body\"}}",
+              "required": true
+            }
+          ],
+          "stdin_param": "payload"
+        }
+      ]
+    }
+  }
+}

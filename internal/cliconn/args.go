@@ -20,12 +20,31 @@ var (
 	singlePlaceholderRe = regexp.MustCompile(`^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}$`)
 	// 条件前缀 {{?name}}：为真才保留其后的字面量
 	conditionPrefixRe = regexp.MustCompile(`^\{\{\?([A-Za-z_][A-Za-z0-9_]*)\}\}`)
+	// env 引用 {{env:NAME}}：展开成连接器 env 里 NAME 的当前值。
+	// 参数名与 env 键名共用同一字符集，":" 是专门用来区分两者的分隔符——
+	// 模板是配置作者写的（可信），参数值是模型给的（不可信），两者绝不能
+	// 混用一套取值来源，否则模型能借参数值把环境变量带进 argv。
+	envRefRe = regexp.MustCompile(`\{\{env:([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 )
 
 // PlaceholderSet 是一条模板里出现过的占位符，按用法分类。
 type PlaceholderSet struct {
 	Values     []string // {{name}}
 	Conditions []string // {{?name}}
+}
+
+// EnvRefs 返回一条模板里引用的全部 {{env:NAME}} 名字（保序去重）。
+// 供 Validate 校验"引用的 env 键必须在连接器 env 里声明过"。
+func EnvRefs(tmpl string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range envRefRe.FindAllStringSubmatch(tmpl, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, m[1])
+		}
+	}
+	return out
 }
 
 // Placeholders 解析一条模板里的占位符（保留出现顺序，去重）。
@@ -177,17 +196,27 @@ func containsFold(list []string, v string) bool {
 //   - "{{name}}"      → 值替换。整条 arg 只有这一个占位符且值为空时，该 arg 被省略
 //     （"--limit {{limit}}" 因此能表达"可选参数"）。
 //   - "{{?name}}"     开头 → 条件：name 为真时去掉标记保留其后字面量，否则整条丢弃。
+//   - "{{env:NAME}}"  → 展开成 env[NAME]（连接器 env 经 ${...} 引用与凭据合并后的
+//     最终值）。NAME 未声明或值为空时返回错误——env 引用几乎都是凭据/网 址
+//     （webhook、token），静默省略会让命令带着残缺参数跑起来，报错比猜好。
 //   - 其余情况按字面量处理，绝不分词。
 //
-// 未声明的占位符不会走到这里（Validate 已拦截）；真漏了也只会替换成空串，
-// 不会退化成"多一个参数"。
-func ExpandArgs(connargs []string, spec ToolSpec, r resolved) []string {
+// 未声明的参数占位符不会走到这里（Validate 已拦截）；真漏了也只会替换成空串，
+// 不会退化成"多一个参数"。env 值里不允许出现 "{{"（会在后续参数替换中被二次
+// 解析），出现即报错。
+func ExpandArgs(connargs []string, spec ToolSpec, r resolved, env map[string]string) ([]string, error) {
 	tmpls := make([]string, 0, len(connargs)+len(spec.Args))
 	tmpls = append(tmpls, connargs...)
 	tmpls = append(tmpls, spec.Args...)
 
 	out := make([]string, 0, len(tmpls))
 	for _, tmpl := range tmpls {
+		t, err := expandEnvRefs(tmpl, env)
+		if err != nil {
+			return nil, err
+		}
+		tmpl = t
+
 		if m := conditionPrefixRe.FindStringSubmatch(tmpl); m != nil {
 			if !r.truthy[m[1]] {
 				continue
@@ -221,7 +250,38 @@ func ExpandArgs(connargs []string, spec ToolSpec, r resolved) []string {
 
 		out = append(out, interpolate(tmpl, r))
 	}
-	return out
+	return out, nil
+}
+
+// expandEnvRefs 把一条模板里的 {{env:NAME}} 替换成 env[NAME]。
+// 键缺失或值为空都报错：env 引用的典型是 webhook/token，空值展开会把
+// 请求发到 "https://" 或某个占位 URL 上，问题暴露得越晚越难排查。
+func expandEnvRefs(tmpl string, env map[string]string) (string, error) {
+	if !strings.Contains(tmpl, "{{env:") {
+		return tmpl, nil
+	}
+	var firstErr error
+	out := envRefRe.ReplaceAllStringFunc(tmpl, func(match string) string {
+		name := envRefRe.FindStringSubmatch(match)[1]
+		val, ok := env[name]
+		if !ok {
+			firstErr = fmt.Errorf("args reference env %q but it is not declared in connector env", name)
+			return match
+		}
+		if strings.TrimSpace(val) == "" {
+			firstErr = fmt.Errorf("env %q is empty: fill its value in the connector settings (or write ${NAME:-default} in env)", name)
+			return match
+		}
+		if strings.Contains(val, "{{") {
+			firstErr = fmt.Errorf("env %q must not contain template syntax", name)
+			return match
+		}
+		return val
+	})
+	if firstErr != nil {
+		return "", firstErr
+	}
+	return out, nil
 }
 
 // interpolate 替换模板里所有 {{name}}（不做省略判断）。

@@ -8,7 +8,7 @@ import (
 // TestOfficialPacksExist 官方技能包清单:新增/删除包时同步更新本表。
 func TestOfficialPacksExist(t *testing.T) {
 	got := OfficialPackNames()
-	want := []string{"git", "github", "web-fetch"}
+	want := []string{"dingtalk", "git", "github", "web-fetch"}
 	if len(got) != len(want) {
 		t.Fatalf("official packs = %v, want %v", got, want)
 	}
@@ -91,6 +91,14 @@ func TestOfficialPacksMetadata(t *testing.T) {
 	}
 	if len(gh.RequiredEnv) != 1 || gh.RequiredEnv[0] != "GH_TOKEN" {
 		t.Errorf("github pack required_env = %v, want [GH_TOKEN]", gh.RequiredEnv)
+	}
+
+	dt, ok := byName["dingtalk"]
+	if !ok {
+		t.Fatal("dingtalk pack missing")
+	}
+	if len(dt.RequiredEnv) != 1 || dt.RequiredEnv[0] != "DINGTALK_WEBHOOK" {
+		t.Errorf("dingtalk pack required_env = %v, want [DINGTALK_WEBHOOK]", dt.RequiredEnv)
 	}
 }
 

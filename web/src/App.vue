@@ -128,6 +128,7 @@ import {
   ServerOutline,
   ShareSocialOutline,
   LogOutOutline,
+  ExtensionPuzzleOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -223,11 +224,12 @@ const menuOptions = computed(() => [
   { label: t('goals.title'), key: '/goals', icon: renderIcon(FlagOutline) },
   { type: 'divider' as const },
   { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
-  // 工具 / 技能 / 连接器收进同一段（连接器原在下方与插件、分身同组）；
-  // 插件入口先从导航隐藏（路由 /plugins 仍可直达，仅不再展示）。
+  // 工具 / 技能 / 连接器 / 插件收进同一段；插件页承载官方技能包
+  // （"技能+连接器、一键安装即用"），是 CLI 能力的首选入口。
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
+  { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },
   // Bot Mode 组：本机机器人 + 跨机 peer，独立成组与其余导航区分
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
@@ -237,7 +239,6 @@ const menuOptions = computed(() => [
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { type: 'divider' as const },
-  // 插件入口暂不展示（仅保留路由直达）
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
 ])
 

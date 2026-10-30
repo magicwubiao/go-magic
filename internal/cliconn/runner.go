@@ -44,7 +44,23 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	if err != nil {
 		return nil, err
 	}
-	argv := ExpandArgs(conn.Args, spec, resolved)
+
+	// 先展开 env（args 模板里的 {{env:NAME}} 引用它的最终值），再展开参数。
+	// 每次执行都展开一次，因此在 shell 里换了 token 不需要重启服务。
+	envList := conn.Env
+	var envMap map[string]string
+	if len(envList) > 0 {
+		var err error
+		envList, err = envref.ExpandList(conn.Env)
+		if err != nil {
+			return nil, fmt.Errorf("connector env: %w", err)
+		}
+		envMap = envMapFromList(envList)
+	}
+	argv, err := ExpandArgs(conn.Args, spec, resolved, envMap)
+	if err != nil {
+		return nil, err
+	}
 
 	timeout := time.Duration(conn.EffectiveTimeout(spec)) * time.Second
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -61,13 +77,8 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	cmd.WaitDelay = 3 * time.Second // ctx 取消后给子进程收尸的宽限
 
 	if len(conn.Env) > 0 {
-		// 展开 ${ENV} 引用：token 只放在环境里，配置文件里只留变量名。
-		// 每次执行都展开一次，因此在 shell 里换了 token 不需要重启服务。
-		env, err := envref.ExpandList(conn.Env)
-		if err != nil {
-			return nil, fmt.Errorf("connector env: %w", err)
-		}
-		cmd.Env = mergeEnv(os.Environ(), env)
+		// ${ENV} 引用已在上面展开过（{{env:NAME}} 与进程环境取同一份值）。
+		cmd.Env = mergeEnv(os.Environ(), envList)
 	}
 	if dir := ExpandWorkingDir(conn.WorkingDir); dir != "" {
 		cmd.Dir = dir
@@ -120,6 +131,23 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 		}
 	}
 	return res, nil
+}
+
+// envMapFromList 把 "KEY=VALUE" 列表转成 map（后出现者覆盖先出现者，
+// 与 mergeEnv 的覆盖语义一致）；不含 "=" 的条目跳过。
+func envMapFromList(list []string) map[string]string {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(list))
+	for _, kv := range list {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 // mergeEnv 把连接器声明的环境变量覆盖到继承环境上。

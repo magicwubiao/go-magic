@@ -82,7 +82,10 @@ func TestExpandArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveParams: %v", err)
 	}
-	got := ExpandArgs([]string{"--json"}, spec, r)
+	got, err := ExpandArgs([]string{"--json"}, spec, r, nil)
+	if err != nil {
+		t.Fatalf("ExpandArgs: %v", err)
+	}
 	want := []string{"--json", "list", "--limit", "5", "--verbose", "--q=a b"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ExpandArgs = %#v, want %#v", got, want)
@@ -93,10 +96,49 @@ func TestExpandArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveParams: %v", err)
 	}
-	got2 := ExpandArgs(nil, spec, r2)
+	got2, err := ExpandArgs(nil, spec, r2, nil)
+	if err != nil {
+		t.Fatalf("ExpandArgs: %v", err)
+	}
 	want2 := []string{"list", "--q="}
 	if !reflect.DeepEqual(got2, want2) {
 		t.Fatalf("ExpandArgs(empty) = %#v, want %#v", got2, want2)
+	}
+}
+
+// TestExpandArgsEnvRefs {{env:NAME}} 的三条路径：正常展开、未声明报错、空值报错。
+func TestExpandArgsEnvRefs(t *testing.T) {
+	spec := ToolSpec{
+		Name:        "post",
+		Description: "d",
+		Args:        []string{"-d", "{{payload}}", "{{env:WEBHOOK}}"},
+		Params:      []ParamSpec{{Name: "payload", Required: true}},
+	}
+	r, err := ResolveParams(spec, map[string]any{"payload": "hi"})
+	if err != nil {
+		t.Fatalf("ResolveParams: %v", err)
+	}
+
+	got, err := ExpandArgs(nil, spec, r, map[string]string{"WEBHOOK": "https://oapi.example/robot?x=1"})
+	if err != nil {
+		t.Fatalf("ExpandArgs: %v", err)
+	}
+	want := []string{"-d", "hi", "https://oapi.example/robot?x=1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExpandArgs = %#v, want %#v", got, want)
+	}
+
+	// 未声明：报错而不是静默替换。
+	if _, err := ExpandArgs(nil, spec, r, nil); err == nil {
+		t.Fatal("undeclared env ref should fail")
+	}
+	// 已声明但为空（凭据还没填）：报错。
+	if _, err := ExpandArgs(nil, spec, r, map[string]string{"WEBHOOK": ""}); err == nil {
+		t.Fatal("empty env value should fail")
+	}
+	// env 值里藏模板语法：报错（防止被二次解析成参数占位符）。
+	if _, err := ExpandArgs(nil, spec, r, map[string]string{"WEBHOOK": "{{limit}}"}); err == nil {
+		t.Fatal("env value containing template syntax should fail")
 	}
 }
 
