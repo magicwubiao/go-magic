@@ -51,6 +51,11 @@ func (h InstallHints) CommandsFor(goos string) []string {
 	}
 }
 
+// sameOnAllPlatforms 给三个平台同一组命令，省掉重复的三份 map。
+func sameOnAllPlatforms(cmds ...string) InstallHints {
+	return InstallHints{"windows": cmds, "darwin": cmds, "linux": cmds}
+}
+
 // Entry 是目录中的一个 CLI 工具条目。
 type Entry struct {
 	ID          string `json:"id"`
@@ -63,6 +68,18 @@ type Entry struct {
 	Connector cliconn.Connector `json:"connector"`
 	// Requires 描述必须由用户填写的环境变量。
 	Requires []Requirement `json:"requires,omitempty"`
+	// Detect 是版本探测参数（如 ["--version"]），空表示不探测。
+	// 只用于让用户确认"装的是哪一份、版本够不够"，服务端不解析版本号。
+	Detect []string `json:"detect,omitempty"`
+	// Login 是登录/授权命令（仅展示）。
+	//
+	// 这类命令几乎都是交互式的（等浏览器回调、问 region、要 MFA），
+	// 服务端无法代跑，也不该代跑——凭据必须经过用户自己的终端。
+	Login InstallHints `json:"login,omitempty"`
+	// Check 是"就绪"复检参数：退出码 0 表示已登录 / 服务可达。
+	// 与 Detect 分开，是因为有些工具装了但没配（docker 没有 daemon、
+	// kubectl 没有 context、aws 没有凭证），只看 PATH 会误报可用。
+	Check []string `json:"check,omitempty"`
 	// Install 是各平台的安装命令（仅展示）。
 	Install InstallHints `json:"install"`
 	DocsURL string       `json:"docs_url,omitempty"`
@@ -187,6 +204,9 @@ var ghEntry = Entry{
 		"darwin":  {"brew install gh"},
 		"linux":   {"sudo apt install gh", "sudo dnf install gh"},
 	},
+	Detect:  []string{"--version"},
+	Login:   sameOnAllPlatforms("gh auth login"),
+	Check:   []string{"auth", "status"},
 	DocsURL: "https://cli.github.com/manual/",
 	Tags:    []string{"git", "github", "pr"},
 }
@@ -248,6 +268,7 @@ var gitEntry = Entry{
 		"darwin":  {"brew install git"},
 		"linux":   {"sudo apt install git", "sudo dnf install git"},
 	},
+	Detect:  []string{"--version"},
 	DocsURL: "https://git-scm.com/docs",
 	Tags:    []string{"vcs", "commit"},
 }
@@ -291,6 +312,9 @@ var dockerEntry = Entry{
 		"darwin":  {"brew install --cask docker"},
 		"linux":   {"sudo apt install docker.io"},
 	},
+	Detect: []string{"--version"},
+	// docker 装了但 daemon 没起是很常见的状态，用 info 探一次比看 PATH 准。
+	Check:   []string{"info"},
 	DocsURL: "https://docs.docker.com/reference/cli/docker/",
 	Tags:    []string{"container"},
 }
@@ -344,6 +368,9 @@ var kubectlEntry = Entry{
 		"darwin":  {"brew install kubectl"},
 		"linux":   {"sudo snap install kubectl --classic"},
 	},
+	Detect: []string{"version", "--client"},
+	// 有 context 才说明这台机器真的指向了某个集群（本地判断，不连网）。
+	Check:   []string{"config", "current-context"},
 	DocsURL: "https://kubernetes.io/docs/reference/kubectl/",
 	Tags:    []string{"k8s", "cluster"},
 }
@@ -386,6 +413,7 @@ var jqEntry = Entry{
 		"darwin":  {"brew install jq"},
 		"linux":   {"sudo apt install jq", "sudo dnf install jq"},
 	},
+	Detect:  []string{"--version"},
 	DocsURL: "https://jqlang.github.io/jq/manual/",
 	Tags:    []string{"json"},
 }
@@ -434,6 +462,11 @@ var awsEntry = Entry{
 		"darwin":  {"brew install awscli"},
 		"linux":   {"sudo snap install aws-cli --classic"},
 	},
+	Detect: []string{"--version"},
+	Login:  sameOnAllPlatforms("aws configure"),
+	// 这一条会走网络：它同时验证"凭证存在"和"凭证可用"，失败原因
+	// （没配 / 过期 / 无网络）都归到同一条提示里。
+	Check:   []string{"sts", "get-caller-identity"},
 	DocsURL: "https://docs.aws.amazon.com/cli/",
 	Tags:    []string{"s3", "ec2"},
 }

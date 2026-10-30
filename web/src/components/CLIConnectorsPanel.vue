@@ -253,6 +253,17 @@
           </div>
         </div>
 
+        <!-- 本机状态：装没装、哪个版本、登录好没好。
+             ready 为 undefined 表示该条目没有检查项（git/jq 这类没有登录概念）。 -->
+        <div class="cli-catalog-status">
+          <span class="conn-chip">
+            {{ catalogDetail.installed ? (catalogDetail.version || t('cli.catalogInstalled')) : t('cli.catalogNeedsInstall') }}
+          </span>
+          <span v-if="catalogDetail.ready === true" class="conn-chip is-ok">{{ t('cli.catalogReadyOk') }}</span>
+          <span v-else-if="catalogDetail.ready === false" class="conn-chip is-warn">{{ t('cli.catalogNotReady') }}</span>
+          <span v-if="catalogDetail.ready_message" class="cli-catalog-note">{{ catalogDetail.ready_message }}</span>
+        </div>
+
         <n-alert v-if="!catalogDetail.installed" type="warning" :bordered="false">
           <div class="cli-install-hint">
             {{ t('cli.catalogNoBinary', { command: catalogDetail.connector.command }) }}
@@ -260,6 +271,47 @@
           <div v-for="cmd in catalogDetail.install_commands" :key="cmd" class="cli-install-cmd">
             <code>{{ cmd }}</code>
             <n-button text size="tiny" @click="copyText(cmd)">{{ t('cli.catalogCopy') }}</n-button>
+          </div>
+        </n-alert>
+
+        <!-- 登录引导：gh auth login / aws configure 都是交互式的，
+             服务端不能代跑，只给命令 + 复检。 -->
+        <n-alert
+          v-if="catalogDetail.login_commands?.length && catalogDetail.ready !== true"
+          type="info"
+          :bordered="false"
+        >
+          <div class="cli-install-hint">{{ t('cli.catalogLoginHint') }}</div>
+          <div v-for="cmd in catalogDetail.login_commands" :key="cmd" class="cli-install-cmd">
+            <code>{{ cmd }}</code>
+            <n-button text size="tiny" @click="copyText(cmd)">{{ t('cli.catalogCopy') }}</n-button>
+          </div>
+          <n-button
+            text
+            size="tiny"
+            style="margin-top: 6px;"
+            :loading="catalogChecking"
+            @click="checkCatalogEntry"
+          >
+            {{ t('cli.catalogCheckAgain') }}
+          </n-button>
+        </n-alert>
+
+        <!-- 装完当场自检的结论（不关弹窗，方便直接接着走登录流程） -->
+        <n-alert
+          v-if="catalogInstallResult"
+          :type="catalogInstallResult.ready === false ? 'warning' : 'success'"
+          :bordered="false"
+        >
+          <div class="cli-install-hint">
+            {{
+              catalogInstallResult.ready === false
+                ? t('cli.catalogInstalledNotReady', { name: catalogDetail.name })
+                : t('cli.catalogInstalledReady', { name: catalogDetail.name })
+            }}
+          </div>
+          <div v-if="catalogInstallResult.message" class="cli-catalog-note">
+            {{ catalogInstallResult.message }}
           </div>
         </n-alert>
 
@@ -303,10 +355,14 @@
           >
             {{ t('cli.catalogDocs') }}
           </a>
-          <n-button :loading="catalogLoading" @click="loadCatalog">
+          <n-button :loading="catalogChecking" @click="checkCatalogEntry">
             {{ t('cli.catalogRecheck') }}
           </n-button>
+          <n-button v-if="catalogInstallResult" type="primary" @click="closeCatalog">
+            {{ t('common.done') }}
+          </n-button>
           <n-button
+            v-else
             type="primary"
             :loading="catalogInstalling"
             :disabled="!catalogDetail.installed || catalogDetail.added"
@@ -537,6 +593,7 @@ import {
 import { useI18n } from 'vue-i18n'
 import { AddOutline, CreateOutline, EllipsisHorizontalOutline, GridOutline, PlayOutline, RefreshOutline, SearchOutline, SparklesOutline, TrashOutline } from '@vicons/ionicons5'
 import {
+  checkCLICatalogEntry,
   installCLICatalogEntry,
   listCLICatalog,
   listCLIConnectors,
@@ -667,11 +724,16 @@ const formTools = ref<ToolForm[]>([])
 const showCatalog = ref(false)
 const catalogLoading = ref(false)
 const catalogInstalling = ref(false)
+/** 就绪复检进行中（登录完点「复检」时用，与列表刷新区分开）。 */
+const catalogChecking = ref(false)
 const catalogEntries = ref<CLICatalogEntry[]>([])
 const catalogSearch = ref('')
 const catalogCategory = ref('all')
 /** 当前打开详情的条目（null = 显示列表）。 */
 const catalogDetail = ref<CLICatalogEntry | null>(null)
+/** 刚装完的自检结论：null = 还没装。留着结论而不是直接关弹窗，
+ *  用户可以顺着登录引导继续走，不用再翻回目录重进一次。 */
+const catalogInstallResult = ref<{ ready?: boolean; message?: string } | null>(null)
 /** 详情里填的凭据（key 是目录声明的环境变量名）。 */
 const catalogEnv = reactive<Record<string, string>>({})
 
@@ -728,8 +790,42 @@ async function loadCatalog() {
 
 function openCatalogDetail(entry: CLICatalogEntry) {
   catalogDetail.value = entry
+  catalogInstallResult.value = null
   // 凭据输入框每次重新打开都清空：不要把一个应用的 token 带进另一个
   for (const key of Object.keys(catalogEnv)) delete catalogEnv[key]
+}
+
+/** 关闭目录弹窗并回到列表视图（装完点「完成」时用）。 */
+function closeCatalog() {
+  showCatalog.value = false
+  catalogDetail.value = null
+  catalogInstallResult.value = null
+}
+
+/**
+ * 就绪复检：跑一次版本探测 + 登录/服务状态检查。
+ *
+ * 与 loadCatalog 的区别：这里不重拉整个目录，只问这一条——
+ * 用户刚在终端 `gh auth login` 完，等的就是这一次确认。
+ */
+async function checkCatalogEntry() {
+  const entry = catalogDetail.value
+  if (!entry) return
+  catalogChecking.value = true
+  try {
+    const fresh = await checkCLICatalogEntry(entry.id)
+    catalogDetail.value = fresh
+    if (catalogInstallResult.value) {
+      catalogInstallResult.value = { ready: fresh.ready, message: fresh.ready_message }
+    }
+    // 同步列表里的那一份，避免退回列表时还显示旧状态
+    const idx = catalogEntries.value.findIndex((e) => e.id === fresh.id)
+    if (idx >= 0) catalogEntries.value[idx] = fresh
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    catalogChecking.value = false
+  }
 }
 
 async function installCatalogEntry() {
@@ -737,11 +833,18 @@ async function installCatalogEntry() {
   if (!entry) return
   catalogInstalling.value = true
   try {
-    await installCLICatalogEntry(entry.id, entry.default_name, { ...catalogEnv })
-    message.success(t('cli.catalogInstalledOk', { name: entry.name }))
-    showCatalog.value = false
-    catalogDetail.value = null
+    const res = await installCLICatalogEntry(entry.id, entry.default_name, { ...catalogEnv })
+    catalogInstallResult.value = { ready: res.ready, message: res.ready_message }
+    // 不关弹窗：未就绪时正好接着展示登录命令。
+    if (res.ready === false) {
+      message.warning(t('cli.catalogInstalledNotReady', { name: entry.name }))
+    } else {
+      message.success(t('cli.catalogInstalledReady', { name: entry.name }))
+    }
+    // 安装会改变连接器列表（新卡片出现），先刷新背后的面板。
     await handleRefresh()
+    // 再复检一次：装上之后的结论比安装前的探测更有意义。
+    await checkCatalogEntry()
   } catch (e: any) {
     message.error(String(e?.message || e))
   } finally {
@@ -1140,6 +1243,24 @@ onMounted(handleRefresh)
 .cli-catalog-sub {
   font-size: 12px;
   color: #909399;
+}
+
+/* 状态行：版本 / 可用性 chip + 一句话说明（当前 context 或失败原因） */
+.cli-catalog-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cli-catalog-status .conn-chip {
+  cursor: default;
+}
+
+.cli-catalog-note {
+  font-size: 12px;
+  color: #909399;
+  word-break: break-all;
 }
 
 .cli-catalog-label {

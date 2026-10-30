@@ -12,6 +12,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/cliconnbridge"
+	"github.com/magicwubiao/go-magic/pkg/envref"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -201,11 +202,22 @@ func (s *Server) handleCLITest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// upsertCLIConnector 是新增/编辑的公共执行体：校验 → 落盘 → 更新内存 → 同步注册表。
+// upsertCLIConnector 是新增/编辑的 HTTP 包装：把 core 的错误映射成响应。
 func (s *Server) upsertCLIConnector(w http.ResponseWriter, name string, c cliconn.Connector) {
-	if err := cliconn.ValidateConnectorName(name); err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
+	status, err := s.upsertCLIConnectorCore(name, c)
+	if err != nil {
+		jsonError(w, status, err.Error())
 		return
+	}
+	jsonResponse(w, map[string]interface{}{"success": true, "name": name})
+}
+
+// upsertCLIConnectorCore 是新增/编辑的公共执行体：校验 → 落盘 → 更新内存 →
+// 同步注册表。返回 (HTTP 状态码, error)：目录安装需要在写完之后追加自检
+// 结果，所以不能像普通 handler 那样直接写响应。
+func (s *Server) upsertCLIConnectorCore(name string, c cliconn.Connector) (int, error) {
+	if err := cliconn.ValidateConnectorName(name); err != nil {
+		return http.StatusBadRequest, err
 	}
 	// 掩码还原：表单回填过的 *** 不能当成真值写回去，否则用户改个超时时间
 	// 就把 token 抹掉了。
@@ -215,16 +227,14 @@ func (s *Server) upsertCLIConnector(w http.ResponseWriter, name string, c clicon
 		c.Env = mergeMaskedServerEnv(nil, c.Env)
 	}
 	if err := c.Validate(); err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return
+		return http.StatusBadRequest, err
 	}
 
 	if err := s.persistCLIConnectors(map[string]cliconn.Connector{name: c}, nil); err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save config: %v", err))
-		return
+		return http.StatusInternalServerError, fmt.Errorf("failed to save config: %v", err)
 	}
 	s.applyCLIConnectors()
-	jsonResponse(w, map[string]interface{}{"success": true, "name": name})
+	return 0, nil
 }
 
 func (s *Server) deleteCLIConnector(w http.ResponseWriter, name string) {
@@ -252,14 +262,13 @@ func (s *Server) applyCLIConnectors() {
 		return
 	}
 	defs := s.cliConnectorConfigs()
-	mgr := cliconn.New(defs)
 
 	// 两个页签同时保存、或保存与启动并发时，cliMgr 的赋值与注册表同步必须整体
 	// 串行：否则 A 先把新工具注册进去、B 再用旧定义覆盖 cliMgr，注册表与
 	// 内存定义就会长期不一致（要等下一次保存才自愈）。
 	s.acquireServerMu("applyCLIConnectors")
+	mgr, count := cliconnbridge.BuildAndSync(defs, s.toolReg, s.activeProfile())
 	s.cliMgr = mgr
-	count := cliconnbridge.SyncToRegistry(mgr, s.toolReg, s.activeProfile())
 	s.releaseServerMu()
 
 	log.Infof("[CLI] connectors synced: %d connectors, %d tools", len(defs), count)
@@ -353,17 +362,24 @@ func (s *Server) listCLIConnectors() []cliConnectorView {
 }
 
 // maskCLIEnv 只回显 key，值一律 ***（env 里放的是 token）。
+//
+// 整值是 ${ENV} 引用时保留原文：引用本身不是秘密，遮掉反而让用户以为
+// 保存时把 token 写进了配置。
 func maskCLIEnv(env []string) []string {
 	if len(env) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		key, _, ok := strings.Cut(kv, "=")
+		key, value, ok := strings.Cut(kv, "=")
 		if !ok || strings.TrimSpace(key) == "" {
 			continue
 		}
-		out = append(out, strings.TrimSpace(key)+"="+maskedEnvValue)
+		shown := maskedEnvValue
+		if envref.IsReference(value) {
+			shown = strings.TrimSpace(value)
+		}
+		out = append(out, strings.TrimSpace(key)+"="+shown)
 	}
 	if len(out) == 0 {
 		return nil

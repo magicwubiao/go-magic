@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
+
+	"github.com/magicwubiao/go-magic/pkg/envref"
 )
 
 // Result 是一次 CLI 调用的结果。非零退出码不算"执行失败"——很多 CLI 用退出码
@@ -59,7 +61,13 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	cmd.WaitDelay = 3 * time.Second // ctx 取消后给子进程收尸的宽限
 
 	if len(conn.Env) > 0 {
-		cmd.Env = mergeEnv(os.Environ(), conn.Env)
+		// 展开 ${ENV} 引用：token 只放在环境里，配置文件里只留变量名。
+		// 每次执行都展开一次，因此在 shell 里换了 token 不需要重启服务。
+		env, err := envref.ExpandList(conn.Env)
+		if err != nil {
+			return nil, fmt.Errorf("connector env: %w", err)
+		}
+		cmd.Env = mergeEnv(os.Environ(), env)
 	}
 	if dir := ExpandWorkingDir(conn.WorkingDir); dir != "" {
 		cmd.Dir = dir

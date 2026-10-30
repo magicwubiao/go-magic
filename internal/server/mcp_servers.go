@@ -13,6 +13,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/connectors"
+	"github.com/magicwubiao/go-magic/pkg/envref"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -74,11 +75,13 @@ type mcpServerView struct {
 
 	// Enabled 表示启动时是否自动连接；nil 在 JSON 里序列化为 true 的等价物
 	// （视图层总是给出明确布尔值）。
-	Enabled         bool          `json:"enabled"`
-	Profiles        []string      `json:"profiles,omitempty"`
-	DisabledTools   []string      `json:"disabled_tools,omitempty"`
-	RequireApproval bool          `json:"require_approval,omitempty"`
-	OAuth           *mcpOAuthView `json:"oauth,omitempty"`
+	Enabled         bool     `json:"enabled"`
+	Profiles        []string `json:"profiles,omitempty"`
+	DisabledTools   []string `json:"disabled_tools,omitempty"`
+	RequireApproval bool     `json:"require_approval,omitempty"`
+	// Lazy 表示启动时不连接、首次调用才建连（工具清单来自缓存）。
+	Lazy  bool          `json:"lazy,omitempty"`
+	OAuth *mcpOAuthView `json:"oauth,omitempty"`
 }
 
 // mcpOAuthView 是连接器的 OAuth 状态视图。
@@ -592,6 +595,7 @@ func (s *Server) listMCPServers() []mcpServerView {
 			Profiles:        cfg.Profiles,
 			DisabledTools:   cfg.DisabledTools,
 			RequireApproval: cfg.RequireApproval,
+			Lazy:            cfg.Lazy,
 			State:           mcp.StateConfigured,
 		}
 		if cfg.OAuth != nil {
@@ -681,13 +685,19 @@ func stateFromKind(kind mcp.ErrorKind) string {
 
 // maskServerEnv 只暴露 key，值一律替换成 ***（与 bot env 同一套约定）。
 // 副作用是：如果某个环境变量的真实值恰好就是 "***"，编辑保存后会被还原成旧值。
+// maskServerEnv 只回显 key，值一律 ***；纯 ${ENV} 引用例外——它不含秘密，
+// 而且必须让用户看见"值从哪来"（被 *** 掉之后没人分得清是引用还是空值）。
 func maskServerEnv(env []string) map[string]string {
 	m := mcp.EnvSliceToMap(env)
 	if len(m) == 0 {
 		return nil
 	}
 	masked := make(map[string]string, len(m))
-	for k := range m {
+	for k, v := range m {
+		if envref.IsReference(v) {
+			masked[k] = strings.TrimSpace(v)
+			continue
+		}
 		masked[k] = maskedEnvValue
 	}
 	return masked
@@ -753,14 +763,19 @@ func maskServerSecret(secret string) string {
 	return maskedEnvValue
 }
 
-// maskServerHeaders 与 maskServerEnv 同一套约定：只回显 key，值一律 ***。
+// maskServerHeaders 与 maskServerEnv 同一套约定：只回显 key，值一律 ***；
+// 整值就是 ${ENV} 引用的保留原文（见 maskServerEnv）。
 // 认证头里放的是 token，列表接口会被任何已登录的浏览器读到。
 func maskServerHeaders(headers map[string]string) map[string]string {
 	if len(headers) == 0 {
 		return nil
 	}
 	masked := make(map[string]string, len(headers))
-	for k := range headers {
+	for k, v := range headers {
+		if envref.IsReference(v) {
+			masked[k] = strings.TrimSpace(v)
+			continue
+		}
 		masked[k] = maskedEnvValue
 	}
 	return masked

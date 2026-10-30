@@ -33,6 +33,8 @@ export interface MCPServer {
   /** 被屏蔽的工具（不注册给模型） */
   disabled_tools?: string[]
   require_approval?: boolean
+  /** 懒连接：启动不连接，首次调用才建连（工具清单来自上次缓存） */
+  lazy?: boolean
   /** OAuth 状态视图（配置了 oauth 才有） */
   oauth?: MCPOAuthView
 }
@@ -55,6 +57,7 @@ export interface MCPConfig {
   profiles?: string[]
   disabled_tools?: string[]
   require_approval?: boolean
+  lazy?: boolean
   /** 启用 OAuth 2.1 授权（发现/注册/PKCE/自动刷新） */
   oauth?: MCPOAuthConfig
 }
@@ -322,6 +325,7 @@ export function serverConfigToJSON(server: MCPServer): string {
   if (server.disabled_tools?.length) entry.disabled_tools = server.disabled_tools
   if (server.profiles?.length) entry.profiles = server.profiles
   if (server.require_approval) entry.require_approval = true
+  if (server.lazy) entry.lazy = true
   if (server.oauth) entry.oauth = server.oauth
   if (server.enabled === false) entry.enabled = false
   return JSON.stringify({ mcpServers: { [server.name]: entry } }, null, 2)

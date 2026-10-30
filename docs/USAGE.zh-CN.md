@@ -22,7 +22,7 @@
 - [12. 消息网关（接外部聊天平台）](#12-消息网关接外部聊天平台)
 - [13. 技能系统](#13-技能系统)
 - [14. 工具与工具集](#14-工具与工具集)
-- [15. MCP、ACP 与 CLI 连接器](#15-mcpacp-与-cli-连接器)
+- [15. MCP、ACP、CLI 连接器与插件](#15-mcpacpcli-连接器与插件)
 - [16. 定时任务（Cron）](#16-定时任务cron)
 - [17. 看板（Kanban）](#17-看板kanban)
 - [18. Token 用量](#18-token-用量)
@@ -1084,7 +1084,7 @@ docker compose exec magic printenv BROWSER_HEADLESS   # 为空 = 走默认 true
 
 ---
 
-## 15. MCP、ACP 与 CLI 连接器
+## 15. MCP、ACP、CLI 连接器与插件
 
 ### 15.1 MCP（Model Context Protocol）
 
@@ -1135,7 +1135,28 @@ magic mcp add github --transport http --url https://api.githubcopilot.com/mcp/ \
 | `enabled` | `false` = 启动时不自动连接（配置保留，可在页面手动连）。缺省视为 `true`。 |
 | `profiles` | 只在列出的分身里生效；留空 = 所有分身。 |
 | `require_approval` | 每次工具调用都要人工确认。用于没写 tool annotations 的 server。 |
+| `lazy` | 启动时不连接，只用上次缓存的工具清单注册影子工具，首次调用才建连（见下）。 |
 | `oauth` | 启用 OAuth 2.1 授权（见下节）。`true` 或 `{}` = 纯自动；也可带 `client_id` / `client_secret` / `scopes`。 |
+
+#### 凭据用引用，不写值
+
+`env` 和 `headers` 的值都支持 `${ENV_NAME}` 与 `${ENV_NAME:-默认值}` 引用，从**服务进程的环境变量**里取值：
+
+```jsonc
+"github": {
+  "transport": "http",
+  "url": "https://api.githubcopilot.com/mcp/",
+  "headers": { "Authorization": "Bearer ${GITHUB_MCP_TOKEN}" }
+}
+```
+
+展开只在内存里发生，配置文件中始终是引用形式——这样 `config.json` 可以进版本库、可以备份，不会因为一次同步把 token 带出去。纯引用的值在 API 里**不做 `***` 掩码**（它本身不是秘密，遮掉反而看不清值从哪来）；混合值（`Bearer ${TOKEN}`）仍按密钥处理。引用了没定义又没有默认值的变量会直接报 `auth` 类错误并列出变量名，不会带着空 token 去请求。
+
+#### 懒连接（lazy）
+
+`"lazy": true` 让 server 在启动时不建连，只用 `<magicHome>/mcp/tool_cache.json` 里上次成功连接时的工具清单注册"影子工具"，模型第一次调用时才真正握手。
+
+适合连接器多、或某个 server 启动很慢/经常挂的场景：冷启动不再被最慢的那个拖住，坏掉的 server 也不会把整轮启动等到超时。代价是首次调用多一次握手延迟。没有缓存时（从没连成功过）会自动退化成"先连一次"，否则工具面为空、永远触发不了首次调用。
 
 **审批**：MCP 工具按 `annotations` 判定——`destructiveHint` 或有副作用的 `openWorldHint` 会走人工确认（与 `bash` 同一条审批链路），`readOnlyHint` 直接放行。没写 annotations 的 server 默认放行，用 `require_approval: true` 兜底。
 
@@ -1250,7 +1271,17 @@ magic acp disconnect helper
 
 **降低门槛的入口——「快速导入」**：在网页「连接器 → CLI」的新建弹窗里，直接粘贴一条完整命令（`gh pr list --repo owner/repo --limit 20 --json`），后端会解析成工具草稿——第一个词是命令、子命令拼成工具名（`pr_list`）、带值的选项变成参数（按示例值推断类型）、独立的开关选项变成 boolean 条件参数。草稿填进表单后确认或微调即可，不用手写模板。对应接口 `POST /api/cli/parse`（无状态，不落盘）。
 
-**更省事的是「应用目录」**：网页「连接器 → CLI → 应用目录」里内置了 gh、git、docker、kubectl、jq、aws 六个条目。卡片会实时检测本机是否已安装该命令——已安装的直接填 token（需要的话）点「添加并启用」；没安装的给出当前平台的安装命令（winget / brew / apt），复制执行后点「重新检测」即可。目录只做检测与展示，**服务端不会执行任何安装命令**。
+**更省事的是「应用目录」**：网页「连接器 → CLI → 应用目录」里内置了 gh、git、docker、kubectl、jq、aws 六个条目。卡片会实时检测本机是否已安装该命令（并读出版本，如 `gh version 2.40.0`）——已安装的直接填 token（需要的话）点「添加并启用」；没安装的给出当前平台的安装命令（winget / brew / apt），复制执行后点「重新检测」即可。目录只做检测与展示，**服务端不会执行任何安装命令**。
+
+装完会**当场自检一次**：除了版本，还会跑该条目的就绪检查（`gh auth status`、`docker info`、`kubectl config current-context`、`aws sts get-caller-identity`），弹窗里直接显示「可用 / 未就绪 + 原因」。未就绪时同时给出登录命令（`gh auth login`、`aws configure`）——这类命令是交互式的（等浏览器回调、问 region、要 MFA），必须由用户在自己的终端执行，服务端只展示命令并提供「我已登录，复检」按钮。对应接口 `POST /api/cli/catalog/check`。
+
+`env` 的值同样支持 `${ENV_NAME}` 引用（每次执行时展开，改了 shell 里的 token 不需要重启）：
+
+```jsonc
+"env": ["GH_TOKEN=${GH_TOKEN}"]
+```
+
+命令行侧可以用 `magic cli list` 查看已配置的连接器与展开后的工具名（`cli_<connector>_<tool>`），排查"模型为什么看不到某个工具"时最直接。
 
 参数模板的两种写法：
 
@@ -1274,6 +1305,55 @@ PUT    /api/cli/connectors/{name}   修改
 DELETE /api/cli/connectors/{name}   删除
 POST   /api/cli/test                试跑一次（不保存）
 ```
+
+### 15.4 插件（plugin.json）
+
+插件不是新的运行时概念，只是**一份清单**：把技能、CLI 连接器、MCP server 打包，一次安装写进 `config.json`。安装完它们仍然走各自既有的注册/连接路径。
+
+放进 `<magicHome>/plugins/<name>/plugin.json` 即可被发现（单层扫描，不递归）：
+
+```jsonc
+{
+  "name": "github-workflow",
+  "version": "1.0.0",
+  "description": "PR review helpers",
+  "connectors": {
+    "gh": {
+      "command": "gh",
+      "env": ["GH_TOKEN=${GH_TOKEN}"],
+      "tools": [
+        {"name": "pr_list", "description": "List PRs", "args": ["pr", "list", "--limit", "{{limit}}"],
+         "read_only": true, "params": [{"name": "limit", "type": "integer", "default": 20}]}
+      ]
+    }
+  },
+  "mcp_servers": {
+    "docs": {"url": "https://example.com/mcp", "transport": "http", "lazy": true}
+  },
+  "skills": ["pr-review"],
+  "requires_env": ["GH_TOKEN"]
+}
+```
+
+```bash
+magic plugin list                 # 已安装 + 目录里可安装的
+magic plugin install <path|name>   # 安装（--force 覆盖同名连接器）
+magic plugin remove <name>         # 卸载
+```
+
+```
+GET    /api/plugins                列表（含 conflicts / missing_env / missing_skills）
+POST   /api/plugins/install        安装 {"name"|"path", "overwrite"}
+DELETE /api/plugins/{name}         卸载
+```
+
+约定：
+
+- **不覆盖**：清单里的连接器与现有配置重名时默认 409，要显式 `overwrite`。
+- **凭据不落盘**：`requires_env` 声明需要哪些变量，安装前检查；配置里只允许写 `${ENV}` 引用。
+- **卸载只删"还是插件当初写进去的那一份"**：用户改过的连接器会保留，并在响应/输出里列出 `kept`。
+- **清单未知字段直接报错**：作者把 `connectors` 写成 `connector` 时会立刻失败，而不是"装上了但什么都没生效"。
+- 不做远端 marketplace / 版本解析 / 签名校验：没有分发基建时做这些只会是半成品。
 
 ---
 

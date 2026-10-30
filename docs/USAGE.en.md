@@ -22,7 +22,7 @@
 - [12. Messaging Gateways](#12-messaging-gateways)
 - [13. Skills System](#13-skills-system)
 - [14. Tools & Toolsets](#14-tools--toolsets)
-- [15. MCP, ACP & CLI Connectors](#15-mcp-acp--cli-connectors)
+- [15. MCP, ACP, CLI Connectors & Plugins](#15-mcp-acp-cli-connectors--plugins)
 - [16. Scheduled Tasks (Cron)](#16-scheduled-tasks-cron)
 - [17. Kanban Board](#17-kanban-board)
 - [18. Token Usage & Budget](#18-token-usage--budget)
@@ -1103,7 +1103,7 @@ first when debugging; it is faster than reading logs.
 
 ---
 
-## 15. MCP, ACP & CLI Connectors
+## 15. MCP, ACP, CLI Connectors & Plugins
 
 ### 15.1 MCP (Model Context Protocol)
 
@@ -1154,7 +1154,28 @@ Optional per-connector fields:
 | `enabled` | `false` = do not auto-connect on startup (config is kept). Defaults to `true`. |
 | `profiles` | Only active in the listed profiles; empty = all profiles. |
 | `require_approval` | Require confirmation for every tool call (for servers without tool annotations). |
+| `lazy` | Do not connect at startup; register tools from the last cached list and connect on first call (see below). |
 | `oauth` | Enable OAuth 2.1 authorization (see below). `true` or `{}` = fully automatic; or pass `client_id` / `client_secret` / `scopes`. |
+
+#### Reference credentials instead of writing them
+
+Values in `env` and `headers` support `${ENV_NAME}` and `${ENV_NAME:-default}`, resolved from the **server process environment**:
+
+```jsonc
+"github": {
+  "transport": "http",
+  "url": "https://api.githubcopilot.com/mcp/",
+  "headers": { "Authorization": "Bearer ${GITHUB_MCP_TOKEN}" }
+}
+```
+
+Expansion happens in memory only, so `config.json` always holds the reference — safe to commit or back up. A value that is *only* a reference is not masked as `***` in the API (it is not a secret, and masking it hides where the value comes from); mixed values such as `Bearer ${TOKEN}` are still treated as secrets. A reference to an undefined variable with no default fails immediately as an `auth` error listing the missing names, instead of sending an empty token.
+
+#### Lazy connect
+
+`"lazy": true` skips the connection at startup. Tools are registered from the last successful `tools/list`, cached in `<magicHome>/mcp/tool_cache.json`, and the real handshake happens on the first tool call.
+
+Useful with many connectors, or a slow/flaky server: startup no longer waits for the slowest one, and a broken server cannot stall it. The cost is one handshake of extra latency on first use. With no cache yet (never connected), it falls back to connecting eagerly — otherwise the tool surface would be empty and the first call could never happen.
 
 **Approval**: MCP tools are classified from `annotations` — `destructiveHint`, or a non-read-only `openWorldHint`, goes through the same confirmation flow as `bash`; `readOnlyHint` passes through. Servers without annotations pass through by default; use `require_approval: true` to opt in.
 
@@ -1272,7 +1293,17 @@ Plenty of tools only ship a command line and no MCP server (`gh`, `kubectl`, `ff
 
 **The low-friction entry — "quick import"**: in the Connectors → CLI add dialog, paste a full command (`gh pr list --repo owner/repo --limit 20 --json`) and the backend turns it into a tool draft — first word is the command, subcommands form the tool name (`pr_list`), value-taking options become parameters (type inferred from the example value), standalone switch options become boolean conditional parameters. The draft lands in the form for review/tweaks; no need to write templates by hand. Backed by `POST /api/cli/parse` (stateless, nothing persisted).
 
-**Even simpler: the app catalog.** Connectors → CLI → App catalog ships six curated entries (gh, git, docker, kubectl, jq, aws). Each card checks whether the command is already on this machine: if it is, fill in the token (when required) and click "Add & enable"; if not, the card shows install commands for your platform (winget / brew / apt) — copy, run, then click "Re-check". The server never runs an installer itself.
+**Even simpler: the app catalog.** Connectors → CLI → App catalog ships six curated entries (gh, git, docker, kubectl, jq, aws). Each card checks whether the command is already on this machine (and shows the version, e.g. `gh version 2.40.0`): if it is, fill in the token (when required) and click "Add & enable"; if not, the card shows install commands for your platform (winget / brew / apt) — copy, run, then click "Re-check". The server never runs an installer itself.
+
+After installing, the entry is **self-checked on the spot**: besides the version, its readiness command runs (`gh auth status`, `docker info`, `kubectl config current-context`, `aws sts get-caller-identity`) and the dialog shows "Ready / Not ready + reason". When not ready it also shows the sign-in command (`gh auth login`, `aws configure`) — those are interactive (browser callback, region prompt, MFA) and must run in your own terminal; the server only displays the command and offers an "I have signed in, check again" button. Backed by `POST /api/cli/catalog/check`.
+
+`env` values support `${ENV_NAME}` references too (expanded per execution, so rotating the token in your shell needs no restart):
+
+```jsonc
+"env": ["GH_TOKEN=${GH_TOKEN}"]
+```
+
+On the command line, `magic cli list` shows the configured connectors and the expanded tool names (`cli_<connector>_<tool>`) — the fastest way to answer "why can't the model see this tool".
 
 Two template forms:
 
@@ -1296,6 +1327,55 @@ PUT    /api/cli/connectors/{name}   update
 DELETE /api/cli/connectors/{name}   delete
 POST   /api/cli/test                dry run (not saved)
 ```
+
+### 15.4 Plugins (plugin.json)
+
+A plugin is not a new runtime concept — it is **a manifest** that bundles skills, CLI connectors and MCP servers so one install writes all of them into `config.json`. Afterwards they go through the exact same registration and connection paths as anything else.
+
+Drop it at `<magicHome>/plugins/<name>/plugin.json` (single-level scan, no recursion):
+
+```jsonc
+{
+  "name": "github-workflow",
+  "version": "1.0.0",
+  "description": "PR review helpers",
+  "connectors": {
+    "gh": {
+      "command": "gh",
+      "env": ["GH_TOKEN=${GH_TOKEN}"],
+      "tools": [
+        {"name": "pr_list", "description": "List PRs", "args": ["pr", "list", "--limit", "{{limit}}"],
+         "read_only": true, "params": [{"name": "limit", "type": "integer", "default": 20}]}
+      ]
+    }
+  },
+  "mcp_servers": {
+    "docs": {"url": "https://example.com/mcp", "transport": "http", "lazy": true}
+  },
+  "skills": ["pr-review"],
+  "requires_env": ["GH_TOKEN"]
+}
+```
+
+```bash
+magic plugin list                  # installed + discoverable
+magic plugin install <path|name>    # install (--force overwrites existing connectors)
+magic plugin remove <name>          # uninstall
+```
+
+```
+GET    /api/plugins                list (with conflicts / missing_env / missing_skills)
+POST   /api/plugins/install        install {"name"|"path", "overwrite"}
+DELETE /api/plugins/{name}         uninstall
+```
+
+Rules:
+
+- **No silent overwrite**: a connector whose name already exists returns 409 unless `overwrite` is set.
+- **No secrets on disk**: `requires_env` declares what the user must provide; configs may only hold `${ENV}` references.
+- **Uninstall only removes what the plugin wrote**: connectors you have edited since are kept, and listed as `kept` in the output.
+- **Unknown manifest fields are a hard error**: `connector` instead of `connectors` fails immediately instead of "installed but nothing happened".
+- No remote marketplace, version resolution or signature checks — without distribution infrastructure those would only be half-built.
 
 ---
 

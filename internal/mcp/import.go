@@ -328,6 +328,10 @@ func normalizeServerConfig(name string, raw interface{}) (ServerConfig, bool, er
 	if v, ok := m["require_approval"].(bool); ok {
 		cfg.RequireApproval = v
 	}
+	// lazy：本项目扩展字段（启动不连接，首次调用才建连）。
+	if v, ok := m["lazy"].(bool); ok {
+		cfg.Lazy = v
+	}
 	if v, ok := m["enabled"].(bool); ok {
 		enabled := v
 		cfg.Enabled = &enabled

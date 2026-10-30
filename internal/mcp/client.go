@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/magicwubiao/go-magic/pkg/envref"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -186,6 +187,13 @@ type ServerConfig struct {
 	// 语义必须是"照旧连接"，否则升级后所有连接器都会静默离线）。
 	Enabled *bool `json:"enabled,omitempty"`
 
+	// Lazy 让该 server 启动时不连接：只用上一次缓存下来的工具清单注册
+	// "影子工具"，等模型第一次调用时再真正拉起进程/建连。
+	//
+	// 解决两个具体问题：连接器多了以后冷启动要等最慢的那个；一个挂掉的
+	// server 会把整轮启动拖到超时。代价是首次调用会多一次握手的延迟。
+	Lazy bool `json:"lazy,omitempty"`
+
 	// Profiles 限定该连接器只在指定分身里生效；空 = 所有分身。切换分身
 	// 需要重启本来就是既有约定，因此这里只需在启动连接时过滤。
 	Profiles []string `json:"profiles,omitempty"`
@@ -270,6 +278,15 @@ type Manager struct {
 	// healthStop 关闭时停止后台健康巡检。
 	healthStop chan struct{}
 	healthOnce sync.Once
+
+	// deferred 是"懒连接"的 server 配置：启动时不连，只登记，首次调用时补连。
+	deferred map[string]ServerConfig
+	// cached 是磁盘缓存下来的工具清单，供给懒连接的影子工具。
+	cached map[string][]Tool
+	// toolCachePath 是缓存文件路径（空 = 不落盘，测试与 CLI 的临时 Manager）。
+	toolCachePath string
+	// lazyLocks 按 server 名做单飞：同一个 server 的并发首次调用只连一次。
+	lazyLocks keyedMutex
 }
 
 // failureRecord 是一条连接失败记录：错误文本 + 分类。
@@ -296,6 +313,8 @@ func NewManager() *Manager {
 		reconnecting:   make(map[string]bool),
 		disabled:       make(map[string]map[string]bool),
 		stats:          make(map[string]*ToolStat),
+		deferred:       make(map[string]ServerConfig),
+		cached:         make(map[string][]Tool),
 		reconnectDelay: DefaultReconnectDelay,
 	}
 }
@@ -454,23 +473,46 @@ func (m *Manager) connect(name string, config ServerConfig) error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if _, exists := m.clients[name]; exists {
 		// 并发窗口里另一个调用赢了这场竞争: 放弃自己刚建的连接，
 		// 否则会泄漏一个 transport(stdio 情况下还留着子进程)。
+		m.mu.Unlock()
 		_ = client.transport.Close()
 		return fmt.Errorf("MCP server '%s' already connected", name)
 	}
 
 	m.clearFailureLocked(name)
 	m.clients[name] = client
+	tools := client.snapshotTools()
+	m.mu.Unlock()
+
+	// 连上之后刷新工具缓存：这是懒连接下次启动时的"影子工具"来源。
+	// 放在锁外——写盘是 IO，不能攥着 Manager.mu。
+	m.rememberTools(name, tools)
 	return nil
+}
+
+// snapshotTools 复制一份当前工具清单（读锁内）。
+func (c *Client) snapshotTools() []Tool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]Tool, 0, len(c.tools))
+	for _, tool := range c.tools {
+		out = append(out, tool)
+	}
+	return out
 }
 
 // buildClient 建好 transport 并完成 initialize 握手(含工具发现)。
 // 全程不持有 Manager.mu —— 这是连接不再阻塞其它操作的关键。
 func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error) {
+	// 先把 ${ENV} 引用展开成真值。必须在构造 transport 之前：stdio 的 env
+	// 直接进子进程环境、远程的 headers 直接进请求头，展开晚了就变成
+	// 字面量 "${GH_TOKEN}" 发出去（服务端只会回 401，且极难定位）。
+	if err := expandServerSecrets(&config); err != nil {
+		return nil, fmt.Errorf("server %q: %w", name, err)
+	}
+
 	// oauth 在构造后基本不再变化，快照一份避免无锁读竞争。
 	m.mu.RLock()
 	oauth := m.oauth
@@ -565,6 +607,33 @@ func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error)
 	return client, nil
 }
 
+// expandServerSecrets 把 env / headers 里的 ${NAME} 引用展开成真值。
+//
+// ServerConfig 是值传递，展开只影响这一份副本：磁盘上的 config.json 仍旧
+// 保留引用形式，不会被某次连接"顺手"写成明文。
+//
+// 缺变量归到 auth 类：那正是"要去补凭据"的场景，UI 靠这个分类亮按钮，
+// 归成 network/unknown 会把人引到查网络的方向上。
+func expandServerSecrets(cfg *ServerConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	env, err := envref.ExpandList(cfg.Env)
+	if err != nil {
+		return WrapKind(ErrKindAuth, err)
+	}
+	cfg.Env = env
+
+	if len(cfg.Headers) > 0 {
+		headers, herr := envref.ExpandMap(cfg.Headers)
+		if herr != nil {
+			return WrapKind(ErrKindAuth, herr)
+		}
+		cfg.Headers = headers
+	}
+	return nil
+}
+
 // ConnectStdio connects to an MCP server using stdio transport
 func (m *Manager) ConnectStdio(name string, config ServerConfig) error {
 	config.Transport = "stdio"
@@ -594,10 +663,18 @@ func (m *Manager) Disconnect(name string) error {
 	m.mu.Lock()
 	client, exists := m.clients[name]
 	if !exists {
+		// 懒连接还没连过的 server 也要能"断开"：把登记清掉，
+		// 否则用户点了断开，下一次工具调用又把它连回来了。
+		_, deferred := m.deferred[name]
+		delete(m.deferred, name)
 		m.mu.Unlock()
+		if deferred {
+			return nil
+		}
 		return fmt.Errorf("MCP server '%s' not found", name)
 	}
 	delete(m.clients, name)
+	delete(m.deferred, name)
 	m.clearFailureLocked(name)
 	m.mu.Unlock()
 
@@ -610,8 +687,19 @@ func (m *Manager) ListServers() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	names := make([]string, 0, len(m.clients))
+	// 懒连接的 server 也要出现在这里：注册表靠它来遍历并注册影子工具。
+	// 漏掉的话，lazy 的 server 在启动阶段会从工具列表里彻底消失，
+	// 直到有人手动连一次——那就不叫懒加载，而叫"没装上"。
+	seen := make(map[string]struct{}, len(m.clients)+len(m.deferred))
+	names := make([]string, 0, len(m.clients)+len(m.deferred))
 	for name := range m.clients {
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	for name := range m.deferred {
+		if _, ok := seen[name]; ok {
+			continue
+		}
 		names = append(names, name)
 	}
 	return names
@@ -633,13 +721,29 @@ func (m *Manager) ListTools() []Tool {
 	return allTools
 }
 
-// ListToolsByServer lists tools available from a specific server
+// ListToolsByServer lists tools available from a specific server.
+//
+// 懒加载的 server 还没连上时返回缓存的工具清单（影子工具）：名字、描述、
+// schema 都是真的，只是背后没有活连接。真正的 tools/list 会在首次调用
+// 触发连接后覆盖这份缓存。
 func (m *Manager) ListToolsByServer(name string) ([]Tool, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	client, exists := m.clients[name]
+	_, deferred := m.deferred[name]
+	cached, hasCache := m.cached[name]
+	m.mu.RUnlock()
+
 	if !exists {
+		if deferred && hasCache {
+			out := make([]Tool, len(cached))
+			copy(out, cached)
+			return out, nil
+		}
+		if deferred {
+			// 没有缓存 = 从没连成功过。返回空清单而不是错误：调用方
+			// （注册表同步）不该因为一个还没连过的 server 就整体失败。
+			return nil, nil
+		}
 		return nil, fmt.Errorf("MCP server '%s' not found", name)
 	}
 
@@ -657,10 +761,23 @@ func (m *Manager) ListToolsByServer(name string) ([]Tool, error) {
 func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arguments map[string]interface{}) (interface{}, error) {
 	m.mu.RLock()
 	client, exists := m.clients[serverName]
-	if !exists {
-		return nil, fmt.Errorf("MCP server '%s' not found", serverName)
-	}
 	m.mu.RUnlock()
+
+	if !exists {
+		// 懒连接：第一次真正要用的时候才建连。失败原样返回，让模型/用户
+		// 看到真实的握手错误（认证、网络），而不是一句 "not found"。
+		if m.IsDeferred(serverName) {
+			if err := m.EnsureConnected(serverName); err != nil {
+				return nil, fmt.Errorf("MCP server '%s' is not connected (lazy connect failed): %w", serverName, err)
+			}
+			m.mu.RLock()
+			client, exists = m.clients[serverName]
+			m.mu.RUnlock()
+		}
+		if !exists {
+			return nil, fmt.Errorf("MCP server '%s' not found", serverName)
+		}
+	}
 
 	return client.callTool(ctx, toolName, arguments)
 }
@@ -1090,11 +1207,17 @@ func (t *MCPTool) IsReadOnly() bool {
 func (m *Manager) ServerRequiresApproval(name string) bool {
 	m.mu.RLock()
 	client, ok := m.clients[name]
+	deferred, isDeferred := m.deferred[name]
 	m.mu.RUnlock()
-	if !ok {
-		return false
+	if ok {
+		return client.config.RequireApproval
 	}
-	return client.config.RequireApproval
+	// 懒连接的 server 还没连上：配置里的 require_approval 同样必须生效，
+	// 否则"启动时不连"会顺手变成"启动时不审批"。
+	if isDeferred {
+		return deferred.RequireApproval
+	}
+	return false
 }
 
 // isConnected reports whether a server is currently connected.
@@ -1214,6 +1337,16 @@ func (m *Manager) ConnectConfigured(servers map[string]ServerConfig) error {
 			continue
 		}
 
+		// 懒连接：只登记，不建连。工具面靠缓存里的清单撑着；没有缓存的
+		// server 会落到正常连接分支（见 shouldDefer）。
+		if m.shouldDefer(name, cfg) {
+			m.deferServer(name, cfg)
+			log.Infof("[MCP] server %q is lazy: deferred until first call", name)
+			continue
+		}
+		// 从 lazy 改回 eager：清掉登记，走正常连接。
+		m.undefer(name)
+
 		wg.Add(1)
 		go func(name string, cfg ServerConfig) {
 			defer wg.Done()
@@ -1238,6 +1371,14 @@ func (m *Manager) ConnectConfigured(servers map[string]ServerConfig) error {
 	}
 
 	wg.Wait()
+
+	// 配置里已经删掉的 server，缓存也一起清掉：否则下次启动会凭空冒出
+	// 一批已经卸载的连接器的工具，模型还会去调它们。
+	keep := make(map[string]struct{}, len(servers))
+	for name := range servers {
+		keep[name] = struct{}{}
+	}
+	m.pruneCache(keep)
 
 	if len(failures) > 0 {
 		sort.Strings(failures)
@@ -1502,6 +1643,9 @@ func (m *Manager) RefreshTools(name string) error {
 		return fmt.Errorf("failed to refresh tools: %w", err)
 	}
 
+	// 刷新后同步缓存：否则懒连接下次启动拿到的还是旧清单，
+	// 用户"刷新了工具"却在重启后看不到变化。
+	m.rememberTools(name, client.snapshotTools())
 	return nil
 }
 

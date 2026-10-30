@@ -692,6 +692,10 @@ Your working directory is: %s
 		if err := s.mcpMgr.SetTokenStore(filepath.Join(magicHome, "mcp", "oauth_tokens.json")); err != nil {
 			log.Warnf("[MCP] failed to init OAuth token store: %v", err)
 		}
+		// 工具清单缓存：懒连接的 server 靠它在启动时注册"影子工具"。
+		if err := s.mcpMgr.SetToolCachePath(filepath.Join(magicHome, "mcp", "tool_cache.json")); err != nil {
+			log.Warnf("[MCP] failed to init tool cache: %v", err)
+		}
 		// 自动授权：连接时缺 token 会自动发起 OAuth 流程，这里弹浏览器。
 		// 用户在授权页完成登录后走下面的 OnOAuthAuthorized 自动重连，
 		// 全程不需要在 UI 里手动点任何按钮。
@@ -1684,9 +1688,13 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/cli/connectors", withCORS(requireAuth(s.handleCLIConnectors)))
 	mux.HandleFunc("/api/cli/connectors/", withCORS(requireAuth(s.handleCLIConnectorByID)))
 	mux.HandleFunc("/api/cli/catalog", withCORS(requireAuth(s.handleCLICatalog)))
+	mux.HandleFunc("/api/cli/catalog/check", withCORS(requireAuth(s.handleCLICatalogCheck)))
 	mux.HandleFunc("/api/cli/catalog/install", withCORS(requireAuth(s.handleCLICatalogInstall)))
 	mux.HandleFunc("/api/cli/parse", withCORS(requireAuth(s.handleCLIParse)))
 	mux.HandleFunc("/api/cli/test", withCORS(requireAuth(s.handleCLITest)))
+	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handlePlugins)))
+	mux.HandleFunc("/api/plugins/install", withCORS(requireAuth(s.handlePluginInstall)))
+	mux.HandleFunc("/api/plugins/", withCORS(requireAuth(s.handlePluginByName)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))

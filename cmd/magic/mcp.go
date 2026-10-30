@@ -28,6 +28,11 @@ func newMCPManager() *mcp.Manager {
 	if err := mgr.SetTokenStore(filepath.Join(config.GetMagicHome(), "mcp", "oauth_tokens.json")); err != nil {
 		fmt.Fprintf(os.Stderr, "[MCP] OAuth token store init failed (OAuth connectors unavailable): %v\n", err)
 	}
+	// CLI 侧也共享同一份工具缓存：网页里连过一次的 server，在 TUI/网关里
+	// 启动时也能直接拿到影子工具，不用先等一轮握手。
+	if err := mgr.SetToolCachePath(filepath.Join(config.GetMagicHome(), "mcp", "tool_cache.json")); err != nil {
+		fmt.Fprintf(os.Stderr, "[MCP] tool cache init failed (lazy servers will connect eagerly): %v\n", err)
+	}
 	return mgr
 }
 

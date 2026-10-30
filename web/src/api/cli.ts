@@ -106,8 +106,16 @@ export interface CLICatalogEntry {
   /** 命令在本机 PATH 上找得到 */
   installed: boolean
   install_path?: string
+  /** 版本探测的首行输出（如 "gh version 2.40.0"） */
+  version?: string
   /** 当前平台的安装命令（仅展示，服务端不执行） */
   install_commands: string[]
+  /** 当前平台的登录命令（仅展示，服务端不执行） */
+  login_commands?: string[]
+  /** 就绪检查结论：undefined 表示该条目没有检查项或尚未检查 */
+  ready?: boolean
+  /** 就绪检查的一句话说明（当前 context / 失败原因） */
+  ready_message?: string
   /** 同名连接器已存在 */
   added: boolean
 }
@@ -125,15 +133,27 @@ export async function listCLICatalog(): Promise<{
 }
 
 /**
+ * 对一个目录条目做完整复检（版本 + 登录/服务状态）。
+ * 只传目录 ID：命令与参数全部来自内置目录。
+ */
+export async function checkCLICatalogEntry(id: string): Promise<CLICatalogEntry> {
+  return request('/cli/catalog/check', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  })
+}
+
+/**
  * 一键添加目录条目：服务端校验命令存在、写入 config.json、注册工具。
  * env 只接受目录声明过的键。
+ * 返回里带上装完的自检结果，前端可以直接展示"可用/不可用 + 原因"。
  */
 export async function installCLICatalogEntry(
   id: string,
   name: string,
   env: Record<string, string>,
-): Promise<void> {
-  return request<void>('/cli/catalog/install', {
+): Promise<{ success: boolean; name: string; ready?: boolean; ready_message?: string }> {
+  return request('/cli/catalog/install', {
     method: 'POST',
     body: JSON.stringify({ id, name, env }),
   })

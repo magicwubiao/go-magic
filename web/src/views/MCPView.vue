@@ -351,6 +351,11 @@
                   <n-switch v-model:value="formData.requireApproval" size="small" />
                   <n-text style="font-size: 13px;">{{ t('mcp.requireApproval') }}</n-text>
                 </n-space>
+                <n-space align="center" size="small">
+                  <n-switch v-model:value="formData.lazy" size="small" />
+                  <n-text style="font-size: 13px;">{{ t('mcp.lazyToggle') }}</n-text>
+                </n-space>
+                <n-text depth="3" style="font-size: 12px;">{{ t('mcp.lazyHint') }}</n-text>
                 <n-input
                   v-model:value="formData.profilesStr"
                   size="small"
@@ -559,6 +564,8 @@ const formData = reactive({
   requireApproval: false,
   /** 启动时自动连接 */
   autoConnect: true,
+  /** 懒连接：启动不连，首次调用才建连（工具清单来自上次缓存） */
+  lazy: false,
   /** 启用 OAuth 2.1 授权（仅远程连接器有意义） */
   useOAuth: false,
   oauthClientId: '',
@@ -1349,6 +1356,7 @@ function resetForm() {
     profilesStr: '',
     requireApproval: false,
     autoConnect: true,
+    lazy: false,
     useOAuth: false,
     oauthClientId: '',
     oauthClientSecret: '',
@@ -1379,6 +1387,7 @@ function openEditModal(row: MCPServer) {
     profilesStr: (row.profiles || []).join(', '),
     requireApproval: !!row.require_approval,
     autoConnect: row.enabled !== false,
+    lazy: !!row.lazy,
     useOAuth: !!row.oauth?.enabled,
     // client_secret 是 *** 掩码回显，原样回传时后端还原成磁盘真值
     oauthClientId: row.oauth?.client_id || '',
@@ -1459,6 +1468,7 @@ async function doSave() {
     enabled: formData.autoConnect,
     profiles: profiles.length ? profiles : undefined,
     require_approval: formData.requireApproval || undefined,
+    lazy: formData.lazy || undefined,
     oauth: buildOAuthConfig(),
   }
 

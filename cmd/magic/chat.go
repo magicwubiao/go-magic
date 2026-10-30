@@ -67,6 +67,12 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// agent 也能调用这些工具；退出 chat 时断开所有 MCP server 连接。
 	defer bridgeConfiguredMCPTools(registry, cfg)()
 
+	// 桥接 CLI 连接器（cli_<connector>_<tool>）。CLI 工具是"调用时才起子进程"，
+	// 没有长连接需要断开，因此不需要清理函数。
+	if n := bridgeConfiguredCLITools(registry, cfg); n > 0 {
+		fmt.Printf("[CLI] %d CLI connector tool(s) available\n", n)
+	}
+
 	// Initialize session store
 	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 	os.MkdirAll(filepath.Dir(dbPath), 0755)

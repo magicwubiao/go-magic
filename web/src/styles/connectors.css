@@ -52,6 +52,17 @@
   color: #1f6feb;
 }
 
+/* 状态芯片（可用 / 未就绪）：不可点，只表达结论 */
+.conn-chip.is-ok {
+  background: #e8f7ee;
+  color: #18a058;
+}
+
+.conn-chip.is-warn {
+  background: #fdf2e3;
+  color: #d98b0b;
+}
+
 .conn-toolbar-actions {
   margin-left: auto;
 }
@@ -236,6 +247,16 @@
     background: #1c2c44;
     border-color: #2f5c8f;
     color: #79b8ff;
+  }
+
+  .conn-chip.is-ok {
+    background: #1b3327;
+    color: #63d68d;
+  }
+
+  .conn-chip.is-warn {
+    background: #3a2d16;
+    color: #e0a94b;
   }
 
   .conn-count {

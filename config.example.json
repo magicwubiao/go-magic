@@ -152,7 +152,7 @@
       "gh": {
         "command": "gh",
         "description": "GitHub CLI",
-        "env": ["GH_TOKEN=ghp_xxx"],
+        "env": ["GH_TOKEN=${GH_TOKEN}"],
         "timeout_seconds": 60,
         "require_approval": true,
         "tools": [

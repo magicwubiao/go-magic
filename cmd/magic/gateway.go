@@ -221,6 +221,9 @@ func (h *gatewayAgentHandler) applyConfig(cfg *config.Config) {
 	// 桥接 config 中配置的独立 MCP server（mcp_<server>_<tool>），让 messaging
 	// gateway 的 agent 也能调用这些工具。
 	bridgeConfiguredMCPTools(h.registry, cfg)
+	// 同源桥接 CLI 连接器（cli_<connector>_<tool>）：网关与 TUI 必须看到
+	// 同一份工具，否则"网页里能用、微信里不能用"会变成难解释的差异。
+	bridgeConfiguredCLITools(h.registry, cfg)
 
 	// 审批策略接入主配置——与 web server / bot mode 共用
 	// approval.NewManagerFromAppConfig 的映射。不接的话 agent 用内置默认钩子
