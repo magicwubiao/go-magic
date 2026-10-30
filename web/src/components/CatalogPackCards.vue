@@ -85,7 +85,7 @@
               :loading="installingId === pack.id"
               @click="install(pack)"
             >
-              {{ t('agentplugins.officialInstall') }}
+              {{ t('agentplugins.catalogInstallAction') }}
             </n-button>
           </div>
         </div>
@@ -193,7 +193,7 @@
             :loading="installingId === detail.id"
             @click="installFromDetail"
           >
-            {{ detail.installed ? t('agentplugins.catalogInstalled') : t('agentplugins.officialInstall') }}
+            {{ detail.installed ? t('agentplugins.catalogInstalled') : t('agentplugins.catalogInstallAction') }}
           </n-button>
         </n-space>
       </template>

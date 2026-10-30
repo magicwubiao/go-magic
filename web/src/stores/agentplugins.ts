@@ -1,14 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as agentPluginsApi from '@/api/agentplugins'
-import type { AgentPlugin, OfficialPack } from '@/api/agentplugins'
+import type { AgentPlugin } from '@/api/agentplugins'
 
 export const useAgentPluginsStore = defineStore('agentplugins', () => {
   const plugins = ref<AgentPlugin[]>([])
   const loading = ref(false)
   const scanDir = ref('')
-  // 官方技能包(内嵌"技能+连接器",一键安装)。
-  const officialPacks = ref<OfficialPack[]>([])
 
   // 安装/卸载/启停操作的进行中状态(按插件名记录),用于禁用对应按钮。
   const pending = ref<Record<string, boolean>>({})
@@ -32,25 +30,10 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     loading.value = true
     try {
       plugins.value = await agentPluginsApi.getAgentPlugins()
-      // 官方包列表一并刷新(installed 状态依赖插件目录)。
-      officialPacks.value = await agentPluginsApi.getOfficialPacks().catch(() => [])
     } catch {
       plugins.value = []
     } finally {
       loading.value = false
-    }
-  }
-
-  // 一键安装官方技能包:后端物化并 reload,这里同步插件与官方包两个列表。
-  async function installOfficial(name: string) {
-    pending.value[name] = true
-    try {
-      const res = await agentPluginsApi.installOfficialPack(name)
-      plugins.value = await agentPluginsApi.getAgentPlugins()
-      officialPacks.value = await agentPluginsApi.getOfficialPacks().catch(() => [])
-      return res
-    } finally {
-      pending.value[name] = false
     }
   }
 
@@ -135,7 +118,6 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     plugins,
     loading,
     scanDir,
-    officialPacks,
     pending,
     installing,
     activePlugins,
@@ -143,7 +125,6 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     totalSkills,
     totalMCPTools,
     loadPlugins,
-    installOfficial,
     reload,
     install,
     uninstall,

@@ -59,7 +59,7 @@ func TestCLICatalogInstallValidation(t *testing.T) {
 		t.Fatalf("unknown id: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	// 连接器名不合法要在落盘前拦住（名字同时是工具前缀）。
-	if rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", `{"id": "git", "name": "bad name!"}`); rec.Code != http.StatusBadRequest {
+	if rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", `{"id": "jq", "name": "bad name!"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid name: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if s.cfg.Cli != nil {
@@ -67,12 +67,14 @@ func TestCLICatalogInstallValidation(t *testing.T) {
 	}
 }
 
-// 明文凭据防线：gh 条目声明了可选的 GH_TOKEN。提交 ghp_ 开头的明文要被拦下
-// （config.json 会长期落盘），改用 ${VAR} 引用或显式 allow_plaintext 才放行。
+// 明文凭据防线：supabase 条目声明了可选的 SUPABASE_ACCESS_TOKEN。提交 sbp_
+// 开头的明文要被拦下（config.json 会长期落盘），改用 ${VAR} 引用或显式
+// allow_plaintext 才放行。
 func TestCLICatalogInstallRejectsPlaintextSecret(t *testing.T) {
 	s, home := newCLITestServer(t)
 
-	body := `{"id": "gh", "env": {"GH_TOKEN": "ghp_0123456789abcdefghijklmnopqrstuvwxyz"}}`
+	const token = "sbp_0123456789abcdefghijklmnopqrstuvwxyz"
+	body := `{"id": "supabase", "env": {"SUPABASE_ACCESS_TOKEN": "` + token + `"}}`
 	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", body)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("plaintext token: status = %d, body = %s", rec.Code, rec.Body.String())
@@ -84,24 +86,24 @@ func TestCLICatalogInstallRejectsPlaintextSecret(t *testing.T) {
 		t.Fatal("rejected install must not persist anything")
 	}
 
-	// ${VAR} 引用不是明文，直接放行（gh 没装时会走到"命令不存在"，那是另一条错误）。
-	// overwrite=true：这台机器可能已经装过 gh，别让 409 盖住要验证的结论。
+	// ${VAR} 引用不是明文，直接放行（supabase 没装时会走到"命令不存在"，那是另一条错误）。
+	// overwrite=true：这台机器可能已经装过 supabase，别让 409 盖住要验证的结论。
 	rec = doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install",
-		`{"id": "gh", "env": {"GH_TOKEN": "${GH_TOKEN}"}, "overwrite": true}`)
+		`{"id": "supabase", "env": {"SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"}, "overwrite": true}`)
 	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "plaintext") {
 		t.Fatalf("env reference must pass the plaintext check, body = %s", rec.Body.String())
 	}
 
 	// 显式 allow_plaintext 是逃生口：不再被明文检查拦（命令不存在时是别的报错）。
-	body = `{"id": "gh", "env": {"GH_TOKEN": "ghp_0123456789abcdefghijklmnopqrstuvwxyz"}, "allow_plaintext": true, "overwrite": true}`
+	body = `{"id": "supabase", "env": {"SUPABASE_ACCESS_TOKEN": "` + token + `"}, "allow_plaintext": true, "overwrite": true}`
 	rec = doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", body)
 	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "plaintext") {
 		t.Fatalf("allow_plaintext must bypass the check, body = %s", rec.Body.String())
 	}
 
-	// gh 已安装且放行明文时，配置里就是明文（用户被明确告知过后果）。
-	// gh 没装时，请求应在命令检测处停下，报错必须是"找不到命令"而不是明文检查。
-	if _, err := exec.LookPath("gh"); err == nil {
+	// supabase 已安装且放行明文时，配置里就是明文（用户被明确告知过后果）。
+	// supabase 没装时，请求应在命令检测处停下，报错必须是"找不到命令"而不是明文检查。
+	if _, err := exec.LookPath("supabase"); err == nil {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("allow_plaintext install: status = %d, body = %s", rec.Code, rec.Body.String())
 		}
@@ -109,11 +111,11 @@ func TestCLICatalogInstallRejectsPlaintextSecret(t *testing.T) {
 		if cfg.Cli == nil {
 			t.Fatal("cli section was not persisted")
 		}
-		conn, ok := cfg.Cli.Connectors["gh"]
+		conn, ok := cfg.Cli.Connectors["supabase"]
 		if !ok {
-			t.Fatalf("connector %q missing from persisted config", "gh")
+			t.Fatalf("connector %q missing from persisted config", "supabase")
 		}
-		want := "GH_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+		want := "SUPABASE_ACCESS_TOKEN=" + token
 		found := false
 		for _, kv := range conn.Env {
 			if kv == want {
@@ -124,18 +126,18 @@ func TestCLICatalogInstallRejectsPlaintextSecret(t *testing.T) {
 			t.Fatalf("plaintext env %q not persisted, env = %v", want, conn.Env)
 		}
 	} else if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not found") {
-		t.Fatalf("gh missing: expect a not-found error, got status = %d, body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("supabase missing: expect a not-found error, got status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
-// 成功路径：挑一个本机确实存在的命令（git），装完要落盘并注册工具。
+// 成功路径：挑一个本机确实存在的命令（ffmpeg），装完要落盘并注册工具。
 func TestCLICatalogInstallRegistersTools(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed on this machine")
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed on this machine")
 	}
 	s, home := newCLITestServer(t)
 
-	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", `{"id": "git"}`)
+	rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", `{"id": "ffmpeg"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -148,7 +150,7 @@ func TestCLICatalogInstallRegistersTools(t *testing.T) {
 	}
 	var entry clicatalog.Entry
 	for _, e := range clicatalog.All() {
-		if e.ID == "git" {
+		if e.ID == "ffmpeg" {
 			entry = e
 		}
 	}
@@ -174,7 +176,7 @@ func TestCLICatalogInstallRegistersTools(t *testing.T) {
 	}
 
 	// 重复安装要 409，避免把用户改过的配置冲掉。
-	if rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", `{"id": "git"}`); rec.Code != http.StatusConflict {
+	if rec := doCLIRequest(t, s, http.MethodPost, "/api/cli/catalog/install", `{"id": "ffmpeg"}`); rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate install: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }

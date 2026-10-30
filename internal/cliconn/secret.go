@@ -20,6 +20,8 @@ var secretPrefixes = []string{
 	"AIza", "ya29.",
 	// GitLab / DigitalOcean / npm / PyPI / HuggingFace
 	"glpat-", "dop_v1_", "npm_", "pypi-", "hf_",
+	// Supabase / Vercel / Cloudflare API token
+	"sbp_", "v1.", "cf_",
 	// Stripe live keys
 	"sk_live_", "rk_live_",
 	// 常见 HTTP 认证头直接当值填

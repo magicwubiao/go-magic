@@ -88,26 +88,37 @@ type Entry struct {
 
 // Category 是目录分类（label 交给前端 locale）。
 type Category struct {
-	ID   string `json:"id"`
-	Sort int    `json:"-"`
+	ID string `json:"id"`
+	// Label 是分类的展示文案（英文），物化成插件时随 CategoryLabel 下发。
+	Label string `json:"-"`
+	Sort  int    `json:"-"`
 }
 
 var categories = []Category{
-	{ID: "dev", Sort: 1},
-	{ID: "data", Sort: 2},
-	{ID: "cloud", Sort: 3},
+	{ID: "dev", Label: "Development", Sort: 1},
+	{ID: "data", Label: "Data", Sort: 2},
+	{ID: "cloud", Label: "Cloud", Sort: 3},
+	{ID: "media", Label: "Media", Sort: 4},
 }
 
 // Categories 返回全部分类。
 func Categories() []Category { return categories }
 
 var entries = []Entry{
-	ghEntry,
-	gitEntry,
 	dockerEntry,
 	kubectlEntry,
+	helmEntry,
 	jqEntry,
+	yqEntry,
+	rgEntry,
 	awsEntry,
+	aliyunEntry,
+	tccliEntry,
+	wranglerEntry,
+	vercelEntry,
+	ytdlpEntry,
+	ffmpegEntry,
+	supabaseEntry,
 }
 
 // All 返回按分类与名字排好序的目录条目。
@@ -141,136 +152,6 @@ func categorySort(id string) int {
 		}
 	}
 	return 99
-}
-
-// tokenHelp 是各平台通用的 PAT 申请地址（GitHub 专用）。
-const ghTokenHelp = "https://github.com/settings/tokens"
-
-var ghEntry = Entry{
-	ID:          "gh",
-	Name:        "GitHub CLI",
-	Description: "List and inspect pull requests and issues of a repository.",
-	Category:    "dev",
-	DefaultName: "gh",
-	Connector: cliconn.Connector{
-		Command:     "gh",
-		Description: "GitHub CLI (gh)",
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "pr_list",
-				Description: "List pull requests of a repository.",
-				Args:        []string{"pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "--state", "{{state}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "owner/name", Required: true},
-					{Name: "limit", Type: "integer", Description: "max rows", Default: 20},
-					{Name: "state", Enum: []string{"open", "closed", "merged", "all"}, Default: "open"},
-				},
-			},
-			{
-				Name:        "pr_view",
-				Description: "Show one pull request: title, description, checks and diff summary.",
-				Args:        []string{"pr", "view", "{{number}}", "--repo", "{{repo}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "number", Type: "integer", Description: "PR number", Required: true},
-					{Name: "repo", Description: "owner/name", Required: true},
-				},
-			},
-			{
-				Name:        "issue_list",
-				Description: "List issues of a repository.",
-				Args:        []string{"issue", "list", "--repo", "{{repo}}", "--limit", "{{limit}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "owner/name", Required: true},
-					{Name: "limit", Type: "integer", Default: 20},
-				},
-			},
-		},
-	},
-	// token 可选：gh 自己会读 keychain / gh auth login 的凭据。
-	// 把它设成必填会让"已经登录过 gh"的用户白白多一步，甚至让安装失败。
-	Requires: []Requirement{{
-		Key:         "GH_TOKEN",
-		Label:       "Personal access token (optional if you already ran gh auth login)",
-		Secret:      true,
-		Required:    false,
-		Placeholder: "ghp_...",
-		HelpURL:     ghTokenHelp,
-	}},
-	Install: InstallHints{
-		"windows": {"winget install --id GitHub.cli -e"},
-		"darwin":  {"brew install gh"},
-		"linux":   {"sudo apt install gh", "sudo dnf install gh"},
-	},
-	Detect:  []string{"--version"},
-	Login:   sameOnAllPlatforms("gh auth login"),
-	Check:   []string{"auth", "status"},
-	DocsURL: "https://cli.github.com/manual/",
-	Tags:    []string{"git", "github", "pr"},
-}
-
-var gitEntry = Entry{
-	ID:          "git",
-	Name:        "Git",
-	Description: "Inspect a repository: status, recent commits, diffs.",
-	Category:    "dev",
-	DefaultName: "git",
-	Connector: cliconn.Connector{
-		Command:     "git",
-		Description: "Git version control",
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "status",
-				Description: "Show short status of the working tree.",
-				Args:        []string{"-C", "{{dir}}", "status", "--short", "--branch"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{{
-					Name:        "dir",
-					Description: "repository path; omit to use the server working directory",
-				}},
-			},
-			{
-				Name:        "log",
-				Description: "List recent commits, one line each.",
-				Args:        []string{"-C", "{{dir}}", "log", "--oneline", "--decorate", "--max-count", "{{limit}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "dir", Description: "repository path; omit to use the server working directory"},
-					{Name: "limit", Type: "integer", Default: 20},
-				},
-			},
-			{
-				Name:        "diff",
-				Description: "Show a diff of the working tree (or staged changes).",
-				Args:        []string{"-C", "{{dir}}", "diff", "--stat", "{{?cached}}--cached"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "dir", Description: "repository path; omit to use the server working directory"},
-					{Name: "cached", Type: "boolean", Description: "show staged changes instead"},
-				},
-			},
-			{
-				Name:        "show",
-				Description: "Show one commit with its diff summary.",
-				Args:        []string{"-C", "{{dir}}", "show", "--stat", "{{ref}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "dir", Description: "repository path; omit to use the server working directory"},
-					{Name: "ref", Description: "commit/branch/tag", Default: "HEAD"},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id Git.Git -e"},
-		"darwin":  {"brew install git"},
-		"linux":   {"sudo apt install git", "sudo dnf install git"},
-	},
-	Detect:  []string{"--version"},
-	DocsURL: "https://git-scm.com/docs",
-	Tags:    []string{"vcs", "commit"},
 }
 
 var dockerEntry = Entry{
@@ -469,4 +350,465 @@ var awsEntry = Entry{
 	Check:   []string{"sts", "get-caller-identity"},
 	DocsURL: "https://docs.aws.amazon.com/cli/",
 	Tags:    []string{"s3", "ec2"},
+}
+
+// ===== 以下为扩充批次：海内外常用工具 =====
+
+var helmEntry = Entry{
+	ID:          "helm",
+	Name:        "Helm",
+	Description: "List releases and read their values and history on a Kubernetes cluster.",
+	Category:    "dev",
+	DefaultName: "helm",
+	Connector: cliconn.Connector{
+		Command:     "helm",
+		Description: "Helm package manager for Kubernetes",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "list",
+				Description: "List releases in a namespace (or all namespaces).",
+				Args:        []string{"list", "-n", "{{namespace}}", "{{?all}}--all-namespaces"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "namespace", Default: "default"},
+					{Name: "all", Type: "boolean", Description: "list every namespace"},
+				},
+			},
+			{
+				Name:        "values",
+				Description: "Show the (user-supplied) values of a release.",
+				Args:        []string{"get", "values", "{{release}}", "-n", "{{namespace}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "release", Required: true},
+					{Name: "namespace", Default: "default"},
+				},
+			},
+			{
+				Name:        "history",
+				Description: "Show revision history of a release.",
+				Args:        []string{"history", "{{release}}", "-n", "{{namespace}}", "--max", "{{limit}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "release", Required: true},
+					{Name: "namespace", Default: "default"},
+					{Name: "limit", Type: "integer", Default: 10},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"winget install --id Helm.Helm -e"},
+		"darwin":  {"brew install helm"},
+		"linux":   {"sudo snap install helm --classic"},
+	},
+	Detect:  []string{"version", "--short"},
+	Check:   []string{"list", "-A"},
+	DocsURL: "https://helm.sh/docs/",
+	Tags:    []string{"k8s", "charts"},
+}
+
+var yqEntry = Entry{
+	ID:          "yq",
+	Name:        "yq",
+	Description: "Filter and reshape YAML (and JSON) documents without writing code.",
+	Category:    "data",
+	DefaultName: "yq",
+	Connector: cliconn.Connector{
+		Command:     "yq",
+		Description: "yq YAML/JSON processor (mikefarah)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "query",
+				Description: "Apply a yq expression to a YAML/JSON document passed on stdin.",
+				Args:        []string{"{{expression}}"},
+				StdinParam:  "input",
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "expression", Description: "yq expression, e.g. .items[].name", Required: true},
+					{Name: "input", Description: "YAML or JSON document", Required: true},
+				},
+			},
+			{
+				Name:        "to_json",
+				Description: "Convert a YAML document on stdin to JSON.",
+				Args:        []string{"-o=json"},
+				StdinParam:  "input",
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "input", Description: "YAML document", Required: true},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"winget install --id MikeFarah.yq -e"},
+		"darwin":  {"brew install yq"},
+		"linux":   {"sudo snap install yq", "sudo apt install yq"},
+	},
+	Detect:  []string{"--version"},
+	DocsURL: "https://mikefarah.gitbook.io/yq/",
+	Tags:    []string{"yaml", "json"},
+}
+
+var rgEntry = Entry{
+	ID:          "rg",
+	Name:        "ripgrep",
+	Description: "Fast text search across files, respecting .gitignore.",
+	Category:    "data",
+	DefaultName: "rg",
+	Connector: cliconn.Connector{
+		Command:     "rg",
+		Description: "ripgrep recursive search",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "search",
+				Description: "Search a pattern under a directory; returns matching lines with numbers.",
+				Args:        []string{"-n", "--max-count", "{{max}}", "-e", "{{pattern}}", "{{path}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "pattern", Description: "regex to search", Required: true},
+					{Name: "path", Description: "file or directory; omit for current directory"},
+					{Name: "max", Type: "integer", Description: "max matches per file", Default: 20},
+				},
+			},
+			{
+				Name:        "count",
+				Description: "Count matches per file under a directory.",
+				Args:        []string{"--count-matches", "-e", "{{pattern}}", "{{path}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "pattern", Description: "regex to search", Required: true},
+					{Name: "path", Description: "file or directory; omit for current directory"},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"winget install --id BurntSushi.ripgrep.MSVC -e"},
+		"darwin":  {"brew install ripgrep"},
+		"linux":   {"sudo apt install ripgrep", "sudo dnf install ripgrep"},
+	},
+	Detect:  []string{"--version"},
+	DocsURL: "https://github.com/BurntSushi/ripgrep",
+	Tags:    []string{"search", "grep"},
+}
+
+var aliyunEntry = Entry{
+	ID:          "aliyun",
+	Name:        "Alibaba Cloud CLI",
+	Description: "Inspect ECS instances, OSS buckets and the caller identity on Alibaba Cloud.",
+	Category:    "cloud",
+	DefaultName: "aliyun",
+	Connector: cliconn.Connector{
+		Command:     "aliyun",
+		Description: "Alibaba Cloud CLI (uses credentials from aliyun configure)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "whoami",
+				Description: "Show the caller identity of the configured credentials.",
+				Args:        []string{"sts", "GetCallerIdentity"},
+				ReadOnly:    true,
+			},
+			{
+				Name:        "ecs_instances",
+				Description: "List ECS instances in a region (id, status, type).",
+				Args:        []string{"ecs", "DescribeInstances", "--RegionId", "{{region}}", "--PageSize", "{{limit}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "region", Description: "region id, e.g. cn-hangzhou", Required: true},
+					{Name: "limit", Type: "integer", Default: 20},
+				},
+			},
+			{
+				Name:        "oss_ls",
+				Description: "List OSS buckets, or objects under an oss:// path.",
+				Args:        []string{"oss", "ls", "{{path}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "path", Description: "omit to list buckets; oss://bucket/prefix to list objects"},
+				},
+			},
+		},
+	},
+	// 凭据走 aliyun configure / 环境变量由用户自己管理，目录不代存 token。
+	Install: InstallHints{
+		"windows": {"winget install --id AlibabaCloud.AliyunCLI -e"},
+		"darwin":  {"brew install aliyun-cli"},
+		"linux":   {"sudo snap install aliyun-cli --classic"},
+	},
+	Detect:  []string{"version"},
+	Login:   sameOnAllPlatforms("aliyun configure"),
+	Check:   []string{"configure", "list"},
+	DocsURL: "https://help.aliyun.com/zh/cli/",
+	Tags:    []string{"alibaba", "ecs", "oss"},
+}
+
+var tccliEntry = Entry{
+	ID:          "tccli",
+	Name:        "Tencent Cloud CLI",
+	Description: "Inspect CVM instances and zones on Tencent Cloud.",
+	Category:    "cloud",
+	DefaultName: "tccli",
+	Connector: cliconn.Connector{
+		Command:     "tccli",
+		Description: "Tencent Cloud CLI (uses credentials from tccli configure)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "cvm_instances",
+				Description: "List CVM instances in a region.",
+				Args:        []string{"cvm", "describe-instances", "--region", "{{region}}", "--limit", "{{limit}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "region", Description: "region, e.g. ap-guangzhou", Required: true},
+					{Name: "limit", Type: "integer", Default: 20},
+				},
+			},
+			{
+				Name:        "cvm_zones",
+				Description: "List availability zones of a region.",
+				Args:        []string{"cvm", "describe-zones", "--region", "{{region}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "region", Description: "region, e.g. ap-guangzhou", Required: true},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"pip install tccli"},
+		"darwin":  {"pip3 install tccli"},
+		"linux":   {"pip install tccli"},
+	},
+	Detect:  []string{"--version"},
+	Login:   sameOnAllPlatforms("tccli configure"),
+	Check:   []string{"configure", "list"},
+	DocsURL: "https://cloud.tencent.com/document/product/440",
+	Tags:    []string{"tencent", "cvm"},
+}
+
+var wranglerEntry = Entry{
+	ID:          "wrangler",
+	Name:        "Cloudflare Wrangler",
+	Description: "Inspect Cloudflare Workers deployments and KV namespaces.",
+	Category:    "cloud",
+	DefaultName: "wrangler",
+	Connector: cliconn.Connector{
+		Command:     "wrangler",
+		Description: "Cloudflare Workers CLI (uses credentials from wrangler login)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "whoami",
+				Description: "Show the logged-in Cloudflare account.",
+				Args:        []string{"whoami"},
+				ReadOnly:    true,
+			},
+			{
+				Name:        "deployments",
+				Description: "List deployments of the Worker in the current directory (or --name).",
+				Args:        []string{"deployments", "list", "{{?name}}--name", "{{name}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "name", Description: "worker name; omit to use ./wrangler.toml"},
+				},
+			},
+			{
+				Name:        "kv_namespaces",
+				Description: "List KV namespaces of the account.",
+				Args:        []string{"kv", "namespace", "list"},
+				ReadOnly:    true,
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"npm install -g wrangler"},
+		"darwin":  {"npm install -g wrangler", "brew install cloudflare-wrangler"},
+		"linux":   {"npm install -g wrangler"},
+	},
+	Detect:  []string{"--version"},
+	Login:   sameOnAllPlatforms("wrangler login"),
+	Check:   []string{"whoami"},
+	DocsURL: "https://developers.cloudflare.com/workers/wrangler/commands/",
+	Tags:    []string{"cloudflare", "workers", "kv"},
+}
+
+var vercelEntry = Entry{
+	ID:          "vercel",
+	Name:        "Vercel CLI",
+	Description: "List projects and recent deployments on Vercel.",
+	Category:    "cloud",
+	DefaultName: "vercel",
+	Connector: cliconn.Connector{
+		Command:     "vercel",
+		Description: "Vercel CLI (uses credentials from vercel login)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "whoami",
+				Description: "Show the logged-in account.",
+				Args:        []string{"whoami"},
+				ReadOnly:    true,
+			},
+			{
+				Name:        "projects",
+				Description: "List projects of the current team.",
+				Args:        []string{"projects", "ls"},
+				ReadOnly:    true,
+			},
+			{
+				Name:        "deployments",
+				Description: "List recent deployments, optionally filtered by project.",
+				Args:        []string{"ls", "{{project}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "project", Description: "project name; omit to list all"},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"npm install -g vercel"},
+		"darwin":  {"npm install -g vercel", "brew install vercel-cli"},
+		"linux":   {"npm install -g vercel"},
+	},
+	Detect:  []string{"--version"},
+	Login:   sameOnAllPlatforms("vercel login"),
+	Check:   []string{"whoami"},
+	DocsURL: "https://vercel.com/docs/cli",
+	Tags:    []string{"deploy", "hosting"},
+}
+
+var ytdlpEntry = Entry{
+	ID:          "yt-dlp",
+	Name:        "yt-dlp",
+	Description: "Probe a video URL for formats and metadata, or download media.",
+	Category:    "media",
+	DefaultName: "yt-dlp",
+	Connector: cliconn.Connector{
+		Command:     "yt-dlp",
+		Description: "yt-dlp video downloader",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "info",
+				Description: "Print title, duration and available formats of a video as JSON.",
+				Args:        []string{"-J", "--no-playlist", "{{url}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "url", Description: "video page URL", Required: true},
+				},
+			},
+			{
+				Name:           "download",
+				Description:    "Download a video to a directory. Requires approval because it writes files.",
+				Args:           []string{"--no-playlist", "-o", "{{output}}", "{{url}}"},
+				TimeoutSeconds: 300,
+				Params: []cliconn.ParamSpec{
+					{Name: "url", Description: "video page URL", Required: true},
+					{Name: "output", Description: "output path template, e.g. ~/Downloads/%(title)s.%(ext)s", Default: "%(title)s.%(ext)s"},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"winget install --id yt-dlp.yt-dlp -e"},
+		"darwin":  {"brew install yt-dlp"},
+		"linux":   {"sudo apt install yt-dlp", "sudo pip install yt-dlp"},
+	},
+	Detect:  []string{"--version"},
+	DocsURL: "https://github.com/yt-dlp/yt-dlp",
+	Tags:    []string{"video", "download"},
+}
+
+var ffmpegEntry = Entry{
+	ID:          "ffmpeg",
+	Name:        "FFmpeg",
+	Description: "Convert media files and extract audio tracks locally.",
+	Category:    "media",
+	DefaultName: "ffmpeg",
+	Connector: cliconn.Connector{
+		Command:     "ffmpeg",
+		Description: "FFmpeg media converter",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:           "convert",
+				Description:    "Transcode a media file to another container/codec. Requires approval because it writes files.",
+				Args:           []string{"-y", "-i", "{{input}}", "{{output}}"},
+				TimeoutSeconds: 300,
+				Params: []cliconn.ParamSpec{
+					{Name: "input", Description: "source media file", Required: true},
+					{Name: "output", Description: "target file, e.g. out.mp4", Required: true},
+				},
+			},
+			{
+				Name:           "extract_audio",
+				Description:    "Extract the audio track of a media file into an MP3. Requires approval because it writes files.",
+				Args:           []string{"-y", "-i", "{{input}}", "-vn", "{{output}}"},
+				TimeoutSeconds: 300,
+				Params: []cliconn.ParamSpec{
+					{Name: "input", Description: "source media file", Required: true},
+					{Name: "output", Description: "target audio file, e.g. out.mp3", Required: true},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"winget install --id Gyan.FFmpeg -e"},
+		"darwin":  {"brew install ffmpeg"},
+		"linux":   {"sudo apt install ffmpeg", "sudo dnf install ffmpeg"},
+	},
+	Detect:  []string{"-version"},
+	DocsURL: "https://ffmpeg.org/ffmpeg.html",
+	Tags:    []string{"audio", "video", "convert"},
+}
+
+var supabaseEntry = Entry{
+	ID:          "supabase",
+	Name:        "Supabase CLI",
+	Description: "Inspect Supabase projects, branches and database migrations.",
+	Category:    "cloud",
+	DefaultName: "supabase",
+	Connector: cliconn.Connector{
+		Command:     "supabase",
+		Description: "Supabase CLI (uses the access token from supabase login or SUPABASE_ACCESS_TOKEN)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "projects",
+				Description: "List projects of the logged-in account.",
+				Args:        []string{"projects", "list", "--output", "json"},
+				ReadOnly:    true,
+			},
+			{
+				Name:        "orgs",
+				Description: "List organizations of the logged-in account.",
+				Args:        []string{"orgs", "list"},
+				ReadOnly:    true,
+			},
+			{
+				Name:        "db_diff",
+				Description: "Diff the local schema changes against a linked database.",
+				Args:        []string{"db", "diff", "{{?linked}}--linked"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "linked", Type: "boolean", Description: "diff against the linked remote database"},
+				},
+			},
+		},
+	},
+	Requires: []Requirement{{
+		Key:         "SUPABASE_ACCESS_TOKEN",
+		Label:       "Personal access token (optional if supabase login already ran)",
+		Secret:      true,
+		Required:    false,
+		Placeholder: "sbp_...",
+		HelpURL:     "https://supabase.com/dashboard/account/tokens",
+	}},
+	Install: InstallHints{
+		"windows": {"winget install --id Supabase.CLI -e", "npm install -g supabase"},
+		"darwin":  {"brew install supabase/tap/supabase"},
+		"linux":   {"npm install -g supabase"},
+	},
+	Detect:  []string{"--version"},
+	Login:   sameOnAllPlatforms("supabase login"),
+	Check:   []string{"projects", "list"},
+	DocsURL: "https://supabase.com/docs/guides/local-development/cli/getting-started",
+	Tags:    []string{"postgres", "bass"},
 }

@@ -48,8 +48,8 @@ func TestEntriesAreValidConnectors(t *testing.T) {
 }
 
 func TestGetAndSort(t *testing.T) {
-	if _, ok := Get("gh"); !ok {
-		t.Fatal("gh entry not found")
+	if _, ok := Get("jq"); !ok {
+		t.Fatal("jq entry not found")
 	}
 	if _, ok := Get("nope"); ok {
 		t.Fatal("unknown id must not resolve")

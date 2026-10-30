@@ -187,8 +187,6 @@ func (s *Server) unregisterAgentPluginArtifacts(plugins map[string]*agentplugin.
 //
 //	GET    /api/agent-plugins              — 返回所有插件加载摘要
 //	POST   /api/agent-plugins/reload       — 重新扫描并加载(先停旧的 MCP)
-//	GET    /api/agent-plugins/official     — 官方技能包列表(含 installed 状态)
-//	POST   /api/agent-plugins/official/install — 一键安装官方技能包(body {"name"})
 //	GET    /api/agent-plugins/catalog      — 目录插件包列表(kind=mcp|cli,含 installed)
 //	POST   /api/agent-plugins/catalog/install — 目录条目物化成插件(body {"kind","id","args"})
 //	POST   /api/agent-plugins/install      — 上传 zip 安装插件(multipart "file" + "name")
@@ -213,12 +211,6 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 		return
 	case rest == "reload" && r.Method == http.MethodPost:
 		s.reloadAgentPlugins(w, r)
-		return
-	case rest == "official" && r.Method == http.MethodGet:
-		s.listOfficialPacks(w)
-		return
-	case rest == "official/install" && r.Method == http.MethodPost:
-		s.installOfficialPack(w, r)
 		return
 	case rest == "catalog" && r.Method == http.MethodGet:
 		s.listAgentPluginCatalog(w, r)
@@ -331,59 +323,6 @@ func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 
 	// 一致性检查:目录名 ≠ manifest.name 时只告警不阻断(规范允许),
 	// 但后续卸载/启停均按 manifest.name 解析,用户应知晓。
-	var warnings []string
-	if m, merr := agentplugin.InspectManifest(dir); merr == nil && m != nil && m.Name != filepath.Base(dir) {
-		warnings = append(warnings, fmt.Sprintf(
-			"directory name %q differs from manifest.name %q; uninstall/enable/disable resolve by manifest.name",
-			filepath.Base(dir), m.Name))
-	}
-
-	// 重新加载以激活新插件(串行化)。
-	s.swapAgentPlugins()
-
-	resp := map[string]any{
-		"ok":   true,
-		"name": name,
-		"dir":  dir,
-	}
-	if len(warnings) > 0 {
-		resp["warnings"] = warnings
-	}
-	jsonResponse(w, resp)
-}
-
-// listOfficialPacks 返回内嵌官方技能包列表与各自是否已安装。
-func (s *Server) listOfficialPacks(w http.ResponseWriter) {
-	jsonResponse(w, agentplugin.OfficialPacks())
-}
-
-// installOfficialPack 一键安装官方技能包:物化到扫描目录后立即 reload。
-// 已存在同名插件时返回 409(与 CLI 应用目录的重复安装语义一致)。
-func (s *Server) installOfficialPack(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
-		http.Error(w, "invalid json body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		http.Error(w, "missing 'name'", http.StatusBadRequest)
-		return
-	}
-
-	dir, err := agentplugin.InstallOfficial(name)
-	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-		http.Error(w, "install failed: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// 一致性检查:目录名 ≠ manifest.name 时只告警不阻断(与 zip 安装同一策略)。
 	var warnings []string
 	if m, merr := agentplugin.InspectManifest(dir); merr == nil && m != nil && m.Name != filepath.Base(dir) {
 		warnings = append(warnings, fmt.Sprintf(

@@ -60,18 +60,6 @@ export interface AgentPluginsReloadResult {
   skills: number
 }
 
-// 官方技能包(内嵌于二进制的"技能 + CLI 连接器"插件)的展示元信息。
-export interface OfficialPack {
-  name: string
-  version?: string
-  description?: string
-  examples?: string[]
-  skills?: string[]
-  /** 非空 = 安装后需要用户在"授权"表单里填的凭据 */
-  required_env?: string[]
-  installed: boolean
-}
-
 export interface AgentPluginInstallResult {
   ok: boolean
   name: string
@@ -79,7 +67,7 @@ export interface AgentPluginInstallResult {
 }
 
 // 目录插件包：内置 MCP 连接器目录 / CLI 应用目录里的条目，安装后就是一个
-// 真正的 Agent Plugin（与官方技能包同构，可启用/禁用/卸载/授权）。
+// 真正的 Agent Plugin（可启用/禁用/卸载/授权）。
 export interface CatalogPack {
   kind: 'mcp' | 'cli'
   id: string
@@ -113,19 +101,6 @@ export interface CatalogInstallResult extends AgentPluginInstallResult {
 // 返回所有已加载的 Agent Plugin 摘要。
 export async function getAgentPlugins(): Promise<AgentPlugin[]> {
   return request('/agent-plugins')
-}
-
-// 官方技能包列表(含 installed 状态)。
-export async function getOfficialPacks(): Promise<OfficialPack[]> {
-  return request('/agent-plugins/official')
-}
-
-// 一键安装官方技能包。重复安装返回 409,由调用方提示先卸载。
-export async function installOfficialPack(name: string): Promise<AgentPluginInstallResult> {
-  return request('/agent-plugins/official/install', {
-    method: 'POST',
-    body: JSON.stringify({ name }),
-  })
 }
 
 // 目录插件包列表（kind=mcp|cli，含 installed 状态）。

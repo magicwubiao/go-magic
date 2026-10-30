@@ -176,6 +176,14 @@ var toolCategories = []ToolCategory{
 		Description: "Tools exposed by external command-line programs",
 		Tools:       []string{},
 	},
+	{
+		// 插件工具（ap_<plugin>_<server>_<tool> 与 ap_<plugin>_cli_<connector>_<tool>），
+		// 按前缀归类：插件面取决于用户安装了哪些 Agent Plugin，无法静态列举。
+		ID:          "plugins",
+		Label:       "Plugins",
+		Description: "Tools provided by installed Agent Plugins",
+		Tools:       []string{},
+	},
 }
 
 // OtherCategoryID 未登记工具的兜底分组 id（前端 "Other"）。
@@ -196,7 +204,7 @@ func buildCategoryIndex() map[string]string {
 
 // CategoryOfTool 返回工具所属分类 id；未登记的非 MCP/CLI 工具返回 ""，
 // 调用方应把它归入 OtherCategoryID。MCP 桥接工具按 mcp_ 前缀识别，
-// CLI 连接器工具按 cli_ 前缀识别。
+// CLI 连接器工具按 cli_ 前缀识别，插件工具按 ap_ 前缀识别。
 func CategoryOfTool(name string) string {
 	if id, ok := categoryIndex[name]; ok {
 		return id
@@ -206,6 +214,9 @@ func CategoryOfTool(name string) string {
 	}
 	if strings.HasPrefix(name, "cli_") {
 		return "cli"
+	}
+	if strings.HasPrefix(name, "ap_") {
+		return "plugins"
 	}
 	return ""
 }

@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/pkg/clicatalog"
@@ -44,8 +45,8 @@ const catalogPackExtKey = "io.github.magicwubiao.catalog"
 
 // CatalogPack 是目录中的一条可安装插件（列表用，不含命令细节之外的敏感信息）。
 type CatalogPack struct {
-	Kind        string `json:"kind"` // mcp | cli
-	ID          string `json:"id"`
+	Kind string `json:"kind"` // mcp | cli
+	ID   string `json:"id"`
 	// Name 是物化后的插件名，也是目录名（前端据此判断"已安装"）。
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
@@ -116,28 +117,46 @@ func mcpCatalogPacks() []CatalogPack {
 // cliCatalogPacks 把 CLI 应用目录转成插件列表。
 func cliCatalogPacks() []CatalogPack {
 	entries := clicatalog.All()
+	labels := map[string]string{}
+	for _, c := range clicatalog.Categories() {
+		labels[c.ID] = c.Label
+	}
+	// LookPath 在 Windows 上要扫完整条 PATH（找不到的命令最慢，每条几百毫秒），
+	// 串行跑 14 条就是好几秒——前端"CLI 应用渲染慢"就是它。并行探测取最慢一条。
+	found := make([]bool, len(entries))
+	var wg sync.WaitGroup
+	for i, e := range entries {
+		wg.Add(1)
+		go func(i int, bin string) {
+			defer wg.Done()
+			_, err := exec.LookPath(bin)
+			found[i] = err == nil
+		}(i, e.Connector.Command)
+	}
+	wg.Wait()
+
 	out := make([]CatalogPack, 0, len(entries))
-	for _, e := range entries {
+	for i, e := range entries {
 		conn := buildCLIConnector(e)
 		tools := make([]string, 0, len(conn.Tools))
 		for _, t := range conn.Tools {
 			tools = append(tools, t.Name)
 		}
 		bin := e.Connector.Command
-		_, lookErr := exec.LookPath(bin)
 		out = append(out, CatalogPack{
-			Kind:        CatalogKindCLI,
-			ID:          e.ID,
-			Name:        CatalogPackName(CatalogKindCLI, e.ID),
-			DisplayName: e.Name,
-			Description: e.Description,
-			Category:    e.Category,
-			Tags:        e.Tags,
-			RequiredEnv: envPlaceholderKeys(conn.Env),
-			Tools:       tools,
+			Kind:          CatalogKindCLI,
+			ID:            e.ID,
+			Name:          CatalogPackName(CatalogKindCLI, e.ID),
+			DisplayName:   e.Name,
+			Description:   e.Description,
+			Category:      e.Category,
+			CategoryLabel: labels[e.Category],
+			Tags:          e.Tags,
+			RequiredEnv:   envPlaceholderKeys(conn.Env),
+			Tools:         tools,
 
 			Binary:          bin,
-			BinaryFound:     lookErr == nil,
+			BinaryFound:     found[i],
 			InstallCommands: e.Install.CommandsFor(runtime.GOOS),
 			LoginCommands:   e.Login.CommandsFor(runtime.GOOS),
 			DocsURL:         e.DocsURL,
@@ -148,8 +167,7 @@ func cliCatalogPacks() []CatalogPack {
 }
 
 // CatalogPackName 返回目录条目物化后的插件名（kind-id）。
-//
-// 前缀把两类目录分开，也避免了与官方技能包（git / github / dingtalk…）撞名。
+// 前缀把两类目录分开，避免与手工创建的插件或连接器撞名。
 func CatalogPackName(kind, id string) string {
 	return kind + "-" + sanitizePackSegment(id)
 }

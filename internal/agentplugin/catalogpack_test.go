@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/pkg/clicatalog"
 	"github.com/magicwubiao/go-magic/pkg/connectors"
 )
@@ -134,16 +135,17 @@ func TestInstallCatalogPackMCP(t *testing.T) {
 	}
 }
 
-// 安装 CLI 条目：cli.json 单连接器，Requires 落成空 env 占位。
+// 安装 CLI 条目：cli.json 单连接器（目录现役条目均无凭据占位，
+// Requires → env 占位的映射由 TestBuildCLIConnectorEnvPlaceholders 单独覆盖）。
 func TestInstallCatalogPackCLI(t *testing.T) {
 	isolatedHome(t)
 
-	dir, name, _, err := InstallCatalogPack(CatalogKindCLI, "gh", nil)
+	dir, name, _, err := InstallCatalogPack(CatalogKindCLI, "jq", nil)
 	if err != nil {
 		t.Fatalf("InstallCatalogPack: %v", err)
 	}
-	if name != "cli-gh" {
-		t.Fatalf("name = %q, want cli-gh", name)
+	if name != "cli-jq" {
+		t.Fatalf("name = %q, want cli-jq", name)
 	}
 	if _, err := os.Stat(filepath.Join(dir, cliConfigName)); err != nil {
 		t.Fatalf("cli.json missing: %v", err)
@@ -157,11 +159,36 @@ func TestInstallCatalogPackCLI(t *testing.T) {
 		t.Fatalf("cli connectors = %d, want 1", len(p.CLIConnectors))
 	}
 	conn := p.CLIConnectors[0]
-	if conn.Connector.Command != "gh" {
+	if conn.Connector.Command != "jq" {
 		t.Errorf("command = %q", conn.Connector.Command)
 	}
-	if keys := envPlaceholderKeys(conn.Connector.Env); len(keys) == 0 {
-		t.Errorf("expected credential placeholders, got env %v", conn.Connector.Env)
+	if keys := envPlaceholderKeys(conn.Connector.Env); len(keys) != 0 {
+		t.Errorf("expected no credential placeholders, got env %v", conn.Connector.Env)
+	}
+}
+
+// Requires → 空 env 占位的映射：目录里的条目都是零凭据的，用合成条目验证。
+func TestBuildCLIConnectorEnvPlaceholders(t *testing.T) {
+	e := clicatalog.Entry{
+		ID:          "fake",
+		DefaultName: "fake",
+		Connector: cliconn.Connector{
+			Command:     "fake",
+			Description: "fake",
+			Tools: []cliconn.ToolSpec{{
+				Name:        "ping",
+				Description: "ping",
+				Args:        []string{"ping"},
+			}},
+		},
+		Requires: []clicatalog.Requirement{
+			{Key: "FAKE_TOKEN", Label: "token", Secret: true},
+			{Key: "FAKE_REGION", Label: "region"},
+		},
+	}
+	conn := buildCLIConnector(e)
+	if keys := envPlaceholderKeys(conn.Env); len(keys) != 2 || keys[0] != "FAKE_REGION" || keys[1] != "FAKE_TOKEN" {
+		t.Errorf("envPlaceholderKeys(%v) = %v, want [FAKE_REGION FAKE_TOKEN]", conn.Env, keys)
 	}
 }
 
@@ -191,11 +218,11 @@ func TestInstallCatalogPackArgsOverride(t *testing.T) {
 // {{KEY}} → ${CRED:KEY} 的转换只认合法参数名，普通文本原样保留。
 func TestCatalogParamToCredRef(t *testing.T) {
 	cases := map[string]string{
-		"--jira-url={{JIRA_URL}}":        "--jira-url=${CRED:JIRA_URL}",
-		"{{A}}{{B}}":                     "${CRED:A}${CRED:B}",
-		"plain-arg":                      "plain-arg",
-		"weird{{not a param}}":           "weird{{not a param}}",
-		"braces {{}}":                    "braces {{}}",
+		"--jira-url={{JIRA_URL}}": "--jira-url=${CRED:JIRA_URL}",
+		"{{A}}{{B}}":              "${CRED:A}${CRED:B}",
+		"plain-arg":               "plain-arg",
+		"weird{{not a param}}":    "weird{{not a param}}",
+		"braces {{}}":             "braces {{}}",
 	}
 	for in, want := range cases {
 		if got := catalogParamToCredRef(in); got != want {
@@ -207,12 +234,12 @@ func TestCatalogParamToCredRef(t *testing.T) {
 // 插件名归一化：目录 ID 可能带大写/下划线，plugin 名只允许小写字母数字点连字符。
 func TestSanitizePackSegment(t *testing.T) {
 	cases := map[string]string{
-		"gh":            "gh",
-		"AWS_CLI":       "aws-cli",
-		"brave-search":  "brave-search",
-		"a__b":          "a-b",
-		"---x---":       "x",
-		"中文":            "pack",
+		"gh":           "gh",
+		"AWS_CLI":      "aws-cli",
+		"brave-search": "brave-search",
+		"a__b":         "a-b",
+		"---x---":      "x",
+		"中文":           "pack",
 	}
 	for in, want := range cases {
 		if got := sanitizePackSegment(in); got != want {

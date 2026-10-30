@@ -14,64 +14,9 @@
       </n-button>
     </div>
 
-    <n-spin v-if="store.loading && !store.plugins.length && !store.officialPacks.length" style="margin: 48px 0;" />
+    <n-spin v-if="store.loading && !store.plugins.length" style="margin: 48px 0;" />
 
     <template v-else>
-      <!-- ===== 官方技能包 ===== -->
-      <div class="ap-section">
-        <div class="ap-section-head">
-          <n-icon size="16" color="#2080f0"><component :is="RocketOutline" /></n-icon>
-          <span class="ap-section-title">{{ t('agentplugins.officialTitle') }}</span>
-          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.officialSubtitle') }}</n-text>
-        </div>
-        <n-grid
-          v-if="store.officialPacks.length"
-          cols="1 s:2 l:3"
-          responsive="screen"
-          :x-gap="12"
-          :y-gap="12"
-        >
-          <n-gi v-for="pack in store.officialPacks" :key="pack.name">
-            <div class="official-pack">
-              <div class="official-pack-head">
-                <span class="official-pack-name">{{ pack.name }}</span>
-                <n-tag v-if="pack.version" size="tiny" :bordered="false">v{{ pack.version }}</n-tag>
-                <n-tag v-if="pack.installed" size="tiny" :bordered="false" type="success">
-                  {{ t('agentplugins.officialInstalled') }}
-                </n-tag>
-              </div>
-              <div class="official-pack-desc">{{ pack.description }}</div>
-              <div v-if="pack.examples && pack.examples.length" class="official-pack-examples">
-                <div v-for="(ex, i) in pack.examples.slice(0, 2)" :key="i" class="official-pack-example">
-                  {{ ex }}
-                </div>
-              </div>
-              <div class="official-pack-foot">
-                <n-text
-                  v-if="pack.required_env && pack.required_env.length && !pack.installed"
-                  type="warning"
-                  style="font-size: 12px;"
-                >
-                  {{ t('agentplugins.officialNeedCreds', { keys: pack.required_env.join(', ') }) }}
-                </n-text>
-                <span v-else />
-                <n-button
-                  v-if="!pack.installed"
-                  size="tiny"
-                  type="primary"
-                  secondary
-                  :loading="!!store.pending[pack.name]"
-                  @click="handleInstallOfficial(pack.name)"
-                >
-                  {{ t('agentplugins.officialInstall') }}
-                </n-button>
-              </div>
-            </div>
-          </n-gi>
-        </n-grid>
-        <n-empty v-else :description="t('agentplugins.noPlugins')" style="padding: 16px 0;" />
-      </div>
-
       <!-- ===== MCP 连接器：目录条目即插件，装上进"已安装" ===== -->
       <div class="ap-section">
         <div class="ap-section-head">
@@ -441,7 +386,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NAvatar, NButton, NCollapseTransition, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NModal, NPopconfirm, NSpace, NSpin, NSwitch, NTag, NText, NTooltip } from 'naive-ui'
+import { NAlert, NAvatar, NButton, NCollapseTransition, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NPopconfirm, NSpace, NSpin, NSwitch, NTag, NText, NTooltip } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   RefreshOutline,
@@ -450,7 +395,6 @@ import {
   ChevronUpOutline,
   CloudUploadOutline,
   TrashOutline,
-  RocketOutline,
   ServerOutline,
   TerminalOutline,
 } from '@vicons/ionicons5'
@@ -570,15 +514,6 @@ async function onCatalogInstalled(payload: { name: string; requiredEnv: string[]
   expanded[payload.name] = true
   if (payload.requiredEnv.length) {
     await openCredentials(payload.name)
-  }
-}
-
-async function handleInstallOfficial(name: string) {
-  try {
-    await store.installOfficial(name)
-    message.success(t('agentplugins.installed', { name }))
-  } catch (e: any) {
-    message.error(e.message || t('agentplugins.officialInstallFailed'))
   }
 }
 
@@ -721,60 +656,6 @@ onMounted(async () => {
 }
 .ap-section-spacer {
   flex: 1;
-}
-
-/* ===== 官方技能包卡 ===== */
-.official-pack {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  padding: 12px 14px;
-  border: 1px solid #e5e6eb;
-  border-radius: 10px;
-  background: #fafafa;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-.official-pack:hover {
-  border-color: #2080f0;
-  box-shadow: 0 2px 10px rgba(32, 128, 240, 0.08);
-}
-.official-pack-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.official-pack-name {
-  font-weight: 600;
-  font-size: 14px;
-}
-.official-pack-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #909399;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.official-pack-examples {
-  margin-top: 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: rgba(32, 128, 240, 0.06);
-}
-.official-pack-example {
-  font-size: 12px;
-  color: #5a6b8a;
-  padding: 3px 0;
-}
-.official-pack-foot {
-  margin-top: auto;
-  padding-top: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 28px;
 }
 
 /* ===== 拖拽安装瘦条 ===== */
@@ -975,20 +856,6 @@ onMounted(async () => {
 
 /* ===== 深色模式 ===== */
 @media (prefers-color-scheme: dark) {
-  .official-pack {
-    background: #1f1f1f;
-    border-color: #333;
-  }
-  .official-pack:hover {
-    border-color: #4a7dc0;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
-  }
-  .official-pack-examples {
-    background: rgba(80, 148, 240, 0.12);
-  }
-  .official-pack-example {
-    color: #9ab4d8;
-  }
   .drop-strip {
     background: #1f1f1f;
     border-color: #3a3a3a;
