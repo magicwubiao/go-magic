@@ -1,120 +1,134 @@
 <template>
-  <div>
-    <n-space justify="space-between" style="margin-bottom: 24px;" align="center">
+  <div class="ap-page">
+    <!-- 页头：只留一个动作（重新扫描已含列表刷新），不再放两个相似按钮 -->
+    <div class="ap-header">
       <div>
-        <h2 style="margin: 0;">{{ t('agentplugins.title') }}</h2>
+        <h2 class="ap-title">{{ t('agentplugins.title') }}</h2>
         <n-text depth="3" style="font-size: 12px;">
           {{ t('agentplugins.subtitle') }}
         </n-text>
       </div>
-      <n-space>
-        <n-button @click="handleReload" :loading="store.loading">
-          <template #icon>
-            <component :is="RefreshOutline" />
-          </template>
-          {{ t('agentplugins.reload') }}
-        </n-button>
-        <n-button @click="handleRefresh" :loading="store.loading">
-          <template #icon>
-            <component :is="RefreshCircleOutline" />
-          </template>
-          {{ t('common.refresh') }}
-        </n-button>
-      </n-space>
-    </n-space>
+      <n-button size="small" :loading="store.loading" @click="handleReload">
+        <template #icon><component :is="RefreshOutline" /></template>
+        {{ t('agentplugins.reload') }}
+      </n-button>
+    </div>
 
-    <!-- 官方技能包:内嵌"技能+连接器"组合,一键安装、授权即可用,无需手写配置 -->
-    <n-card style="margin-bottom: 24px;" size="small">
-      <template #header>
-        <n-space align="center" :size="8">
-          <n-icon size="18"><component :is="RocketOutline" /></n-icon>
-          <span>{{ t('agentplugins.officialTitle') }}</span>
-        </n-space>
-      </template>
-      <template #header-extra>
-        <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.officialSubtitle') }}</n-text>
-      </template>
-      <n-grid
-        v-if="store.officialPacks.length"
-        cols="1 s:2 l:3"
-        responsive="screen"
-        :x-gap="12"
-        :y-gap="12"
-      >
-        <n-gi v-for="pack in store.officialPacks" :key="pack.name">
-          <div class="official-pack">
-            <div class="official-pack-head">
-              <span class="official-pack-name">{{ pack.name }}</span>
-              <n-tag v-if="pack.version" size="tiny" type="default">v{{ pack.version }}</n-tag>
-              <n-tag v-if="pack.installed" size="tiny" type="success">
-                {{ t('agentplugins.officialInstalled') }}
-              </n-tag>
-            </div>
-            <n-text depth="3" style="font-size: 12px; display: block; margin-top: 4px;">
-              {{ pack.description }}
-            </n-text>
-            <div v-if="pack.examples && pack.examples.length" class="official-pack-examples">
-              <div v-for="(ex, i) in pack.examples.slice(0, 2)" :key="i" class="official-pack-example">
-                {{ ex }}
+    <n-spin v-if="store.loading && !store.plugins.length && !store.officialPacks.length" style="margin: 48px 0;" />
+
+    <template v-else>
+      <!-- ===== 官方技能包 ===== -->
+      <div class="ap-section">
+        <div class="ap-section-head">
+          <n-icon size="16" color="#2080f0"><component :is="RocketOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.officialTitle') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.officialSubtitle') }}</n-text>
+        </div>
+        <n-grid
+          v-if="store.officialPacks.length"
+          cols="1 s:2 l:3"
+          responsive="screen"
+          :x-gap="12"
+          :y-gap="12"
+        >
+          <n-gi v-for="pack in store.officialPacks" :key="pack.name">
+            <div class="official-pack">
+              <div class="official-pack-head">
+                <span class="official-pack-name">{{ pack.name }}</span>
+                <n-tag v-if="pack.version" size="tiny" :bordered="false">v{{ pack.version }}</n-tag>
+                <n-tag v-if="pack.installed" size="tiny" :bordered="false" type="success">
+                  {{ t('agentplugins.officialInstalled') }}
+                </n-tag>
+              </div>
+              <div class="official-pack-desc">{{ pack.description }}</div>
+              <div v-if="pack.examples && pack.examples.length" class="official-pack-examples">
+                <div v-for="(ex, i) in pack.examples.slice(0, 2)" :key="i" class="official-pack-example">
+                  {{ ex }}
+                </div>
+              </div>
+              <div class="official-pack-foot">
+                <n-text
+                  v-if="pack.required_env && pack.required_env.length && !pack.installed"
+                  type="warning"
+                  style="font-size: 12px;"
+                >
+                  {{ t('agentplugins.officialNeedCreds', { keys: pack.required_env.join(', ') }) }}
+                </n-text>
+                <span v-else />
+                <n-button
+                  v-if="!pack.installed"
+                  size="tiny"
+                  type="primary"
+                  secondary
+                  :loading="!!store.pending[pack.name]"
+                  @click="handleInstallOfficial(pack.name)"
+                >
+                  {{ t('agentplugins.officialInstall') }}
+                </n-button>
               </div>
             </div>
-            <div class="official-pack-foot">
-              <n-text
-                v-if="pack.required_env && pack.required_env.length"
-                type="warning"
-                style="font-size: 12px;"
-              >
-                {{ t('agentplugins.officialNeedCreds', { keys: pack.required_env.join(', ') }) }}
-              </n-text>
-              <span v-else />
-              <n-button
-                v-if="!pack.installed"
-                size="tiny"
-                type="primary"
-                secondary
-                :loading="!!store.pending[pack.name]"
-                @click="handleInstallOfficial(pack.name)"
-              >
-                {{ t('agentplugins.officialInstall') }}
+          </n-gi>
+        </n-grid>
+        <n-empty v-else :description="t('agentplugins.noPlugins')" style="padding: 16px 0;" />
+      </div>
+
+      <!-- ===== 应用目录（原连接器页的 MCP 目录 / CLI 应用目录迁到这里） ===== -->
+      <div class="ap-section">
+        <div class="ap-section-head">
+          <n-icon size="16"><component :is="GridOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.catalogTitle') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.catalogSubtitle') }}</n-text>
+        </div>
+        <n-grid cols="1 s:2" responsive="screen" :x-gap="12" :y-gap="12">
+          <n-gi>
+            <div class="ap-catalog-card" @click="showMCPCatalog = true">
+              <div class="ap-catalog-text">
+                <div class="ap-catalog-name">{{ t('agentplugins.catalogMcp') }}</div>
+                <div class="ap-catalog-desc">{{ t('agentplugins.catalogMcpDesc') }}</div>
+              </div>
+              <n-button size="tiny" secondary @click.stop="showMCPCatalog = true">
+                {{ t('agentplugins.catalogBrowse') }}
               </n-button>
             </div>
-          </div>
-        </n-gi>
-      </n-grid>
-      <n-empty v-else :description="t('agentplugins.noPlugins')" style="padding: 16px 0;" />
-    </n-card>
+          </n-gi>
+          <n-gi>
+            <div class="ap-catalog-card" @click="showCLICatalog = true">
+              <div class="ap-catalog-text">
+                <div class="ap-catalog-name">{{ t('agentplugins.catalogCli') }}</div>
+                <div class="ap-catalog-desc">{{ t('agentplugins.catalogCliDesc') }}</div>
+              </div>
+              <n-button size="tiny" secondary @click.stop="showCLICatalog = true">
+                {{ t('agentplugins.catalogBrowse') }}
+              </n-button>
+            </div>
+          </n-gi>
+        </n-grid>
+      </div>
 
-    <n-spin v-if="store.loading && !store.plugins.length" />
-    <template v-else>
-      <!-- Overview Statistics -->
-      <n-grid :cols="4" :x-gap="12" style="margin-bottom: 24px;">
-        <n-gi>
-          <n-card hoverable>
-            <n-statistic :label="t('agentplugins.totalPlugins')" :value="store.plugins.length" />
-          </n-card>
-        </n-gi>
-        <n-gi>
-          <n-card hoverable>
-            <n-statistic :label="t('agentplugins.activePlugins')" :value="store.activePlugins.length" />
-          </n-card>
-        </n-gi>
-        <n-gi>
-          <n-card hoverable>
-            <n-statistic :label="t('agentplugins.totalSkills')" :value="store.totalSkills" />
-          </n-card>
-        </n-gi>
-        <n-gi>
-          <n-card hoverable>
-            <n-statistic :label="t('agentplugins.totalMCPTools')" :value="store.totalMCPTools" />
-          </n-card>
-        </n-gi>
-      </n-grid>
+      <!-- ===== 已安装插件 ===== -->
+      <div class="ap-section">
+        <div class="ap-section-head">
+          <n-icon size="16"><component :is="ExtensionPuzzleOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.installedTitle') }}</span>
+          <n-text v-if="store.plugins.length" depth="3" style="font-size: 12px;">
+            {{ t('agentplugins.installedSummary', {
+              total: store.plugins.length,
+              active: store.activePlugins.length,
+              skills: store.totalSkills,
+              tools: store.totalMCPTools,
+            }) }}
+          </n-text>
+          <span class="ap-section-spacer" />
+          <n-button size="tiny" quaternary @click="triggerFileInput">
+            <template #icon><component :is="CloudUploadOutline" /></template>
+            {{ t('agentplugins.installZip') }}
+          </n-button>
+        </div>
 
-      <!-- Drag & Drop Install Zone -->
-      <n-card style="margin-bottom: 24px;" :bordered="true">
+        <!-- 拖拽安装：瘦条，不再占一整卡 -->
         <div
-          class="drop-zone"
-          :class="{ 'drop-zone--active': isDragging }"
+          class="drop-strip"
+          :class="{ 'drop-strip--active': isDragging }"
           @dragenter.prevent="onDragEnter"
           @dragover.prevent="onDragOver"
           @dragleave.prevent="onDragLeave"
@@ -128,338 +142,273 @@
             style="display: none;"
             @change="onFilePicked"
           />
-          <n-space vertical align="center" :size="8">
-            <n-icon size="36" :color="isDragging ? '#2080f0' : '#909399'">
-              <component :is="CloudUploadOutline" />
-            </n-icon>
-            <n-text :type="isDragging ? 'primary' : undefined" strong>
-              {{ isDragging ? t('agentplugins.dropHere') : t('agentplugins.dragToInstall') }}
-            </n-text>
-            <n-text depth="3" style="font-size: 12px;">
-              {{ t('agentplugins.dropHint') }}
-            </n-text>
-            <n-button
-              v-if="store.installing"
-              type="primary"
-              loading
-              size="small"
-              :disabled="true"
-            >
-              {{ t('agentplugins.installing') }}
-            </n-button>
-          </n-space>
+          <n-icon size="16" :color="isDragging ? '#2080f0' : undefined">
+            <component :is="CloudUploadOutline" />
+          </n-icon>
+          <span>{{ isDragging ? t('agentplugins.dropHere') : t('agentplugins.dragToInstall') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.dropHint') }}</n-text>
+          <n-spin v-if="store.installing" :size="14" style="margin-left: auto;" />
         </div>
-      </n-card>
 
-      <!-- Scan Dir Hint -->
-      <n-alert v-if="store.scanDir" type="info" style="margin-bottom: 16px;" :show-icon="true">
-        {{ t('agentplugins.scanDir') }}: <n-text code>{{ store.scanDir }}</n-text>
-      </n-alert>
+        <n-alert v-if="store.scanDir" type="info" style="margin-top: 8px;" :show-icon="false">
+          <span style="font-size: 12px;">{{ t('agentplugins.scanDir') }}: <n-text code>{{ store.scanDir }}</n-text></span>
+        </n-alert>
 
-      <!-- Empty State -->
-      <n-empty v-if="!store.plugins.length" :description="t('agentplugins.noPlugins')" style="padding: 48px 0;" />
+        <n-empty
+          v-if="!store.plugins.length"
+          :description="t('agentplugins.noPlugins')"
+          style="padding: 40px 0;"
+        />
 
-      <!-- Plugin Cards -->
-      <n-grid :cols="1" :y-gap="16">
-        <n-gi v-for="plugin in store.plugins" :key="plugin.name">
-          <n-card hoverable>
-            <!-- Header -->
-            <template #header>
-              <n-space align="center" :size="8">
-                <n-avatar
-                  v-if="plugin.icon"
-                  :src="`/api/agent-plugins-icon/${encodeURIComponent(plugin.name)}`"
-                  :size="22"
-                  object-fit="contain"
-                  round
-                >
-                  <n-icon size="16"><component :is="ExtensionPuzzleOutline" /></n-icon>
-                </n-avatar>
-                <n-icon v-else size="18"><component :is="ExtensionPuzzleOutline" /></n-icon>
-                <span style="font-weight: 600;">{{ plugin.name }}</span>
-                <n-tag v-if="plugin.version" size="small" type="default">v{{ plugin.version }}</n-tag>
-                <n-tag v-if="plugin.rejected" size="small" type="error">{{ t('agentplugins.rejected') }}</n-tag>
-                <n-tag v-else-if="!plugin.enabled" size="small" type="warning">{{ t('agentplugins.disabled') }}</n-tag>
-                <n-tag v-else size="small" type="success">{{ t('agentplugins.loaded') }}</n-tag>
-                <n-tag v-if="plugin.mcp_disabled" size="small" type="warning">{{ t('agentplugins.mcpDisabled') }}</n-tag>
-              </n-space>
-            </template>
-
-            <!-- Header Extra: enable/disable switch + uninstall -->
-            <template #header-extra>
-              <n-space align="center" :size="12">
-                <n-tooltip>
-                  <template #trigger>
-                    <n-switch
-                      :value="plugin.enabled"
-                      :disabled="plugin.rejected || store.pending[plugin.name]"
-                      :loading="store.pending[plugin.name]"
-                      @update:value="(v: boolean) => handleToggle(plugin.name, v)"
-                    />
-                  </template>
-                  {{ plugin.enabled ? t('agentplugins.clickToDisable') : t('agentplugins.clickToEnable') }}
-                </n-tooltip>
-                <n-popconfirm @positive-click="handleUninstall(plugin.name)">
-                  <template #trigger>
-                    <n-button
-                      text
-                      size="small"
-                      type="error"
-                      :loading="store.pending[plugin.name]"
-                      :disabled="store.pending[plugin.name]"
-                    >
-                      <template #icon>
-                        <component :is="TrashOutline" />
-                      </template>
-                      {{ t('agentplugins.uninstall') }}
-                    </n-button>
-                  </template>
-                  {{ t('agentplugins.confirmUninstall', { name: plugin.name }) }}
-                </n-popconfirm>
-                <n-button text size="small" @click="toggleExpand(plugin.name)">
-                  <template #icon>
-                    <component :is="expanded[plugin.name] ? ChevronUpOutline : ChevronDownOutline" />
-                  </template>
-                  {{ expanded[plugin.name] ? t('common.collapse') : t('common.expand') }}
-                </n-button>
-              </n-space>
-            </template>
-
-            <!-- Description -->
-            <n-text depth="3" v-if="plugin.description">{{ plugin.description }}</n-text>
-
-            <!-- Example Prompts ("你可以这样问") -->
-            <div
-              v-if="plugin.examples && plugin.examples.length"
-              class="ap-examples"
+        <!-- 插件行卡：一行摘要，点开看详情 -->
+        <div v-for="plugin in store.plugins" :key="plugin.name" class="ap-plugin">
+          <div class="ap-plugin-row" @click="toggleExpand(plugin.name)">
+            <n-avatar
+              v-if="plugin.icon"
+              :src="`/api/agent-plugins-icon/${encodeURIComponent(plugin.name)}`"
+              :size="24"
+              object-fit="contain"
+              round
+              class="ap-plugin-icon"
             >
-              <div class="ap-examples-title">{{ t('agentplugins.examplesTitle') }}</div>
-              <div
-                v-for="(ex, i) in plugin.examples"
-                :key="i"
-                class="ap-example-item"
+              <n-icon size="14"><component :is="ExtensionPuzzleOutline" /></n-icon>
+            </n-avatar>
+            <span v-else class="ap-plugin-icon ap-plugin-icon--ph">
+              <n-icon size="14"><component :is="ExtensionPuzzleOutline" /></n-icon>
+            </span>
+
+            <span class="ap-plugin-name">{{ plugin.name }}</span>
+            <n-tag v-if="plugin.version" size="tiny" :bordered="false">v{{ plugin.version }}</n-tag>
+            <n-tag v-if="plugin.rejected" size="tiny" :bordered="false" type="error">
+              {{ t('agentplugins.rejected') }}
+            </n-tag>
+            <n-tag v-else-if="!plugin.enabled" size="tiny" :bordered="false" type="warning">
+              {{ t('agentplugins.disabled') }}
+            </n-tag>
+            <n-tag v-else size="tiny" :bordered="false" type="success">
+              {{ t('agentplugins.loaded') }}
+            </n-tag>
+            <n-tag v-if="plugin.mcp_disabled" size="tiny" :bordered="false" type="warning">
+              {{ t('agentplugins.mcpDisabled') }}
+            </n-tag>
+
+            <span class="ap-plugin-stats">{{ pluginStats(plugin) }}</span>
+
+            <span class="ap-plugin-actions" @click.stop>
+              <n-tooltip>
+                <template #trigger>
+                  <n-switch
+                    size="small"
+                    :value="plugin.enabled"
+                    :disabled="plugin.rejected || !!store.pending[plugin.name]"
+                    :loading="!!store.pending[plugin.name]"
+                    @update:value="(v: boolean) => handleToggle(plugin.name, v)"
+                  />
+                </template>
+                {{ plugin.enabled ? t('agentplugins.clickToDisable') : t('agentplugins.clickToEnable') }}
+              </n-tooltip>
+              <n-popconfirm @positive-click="handleUninstall(plugin.name)">
+                <template #trigger>
+                  <n-button
+                    text
+                    size="tiny"
+                    type="error"
+                    :loading="!!store.pending[plugin.name]"
+                    :disabled="!!store.pending[plugin.name]"
+                  >
+                    <template #icon><component :is="TrashOutline" /></template>
+                  </n-button>
+                </template>
+                {{ t('agentplugins.confirmUninstall', { name: plugin.name }) }}
+              </n-popconfirm>
+              <component
+                :is="expanded[plugin.name] ? ChevronUpOutline : ChevronDownOutline"
+                class="ap-plugin-chevron"
+              />
+            </span>
+          </div>
+
+          <!-- 摘要行：描述 + 示例问法（pill），默认可见 -->
+          <div v-if="!expanded[plugin.name]" class="ap-plugin-brief">
+            <span v-if="plugin.description" class="ap-plugin-desc">{{ plugin.description }}</span>
+            <span
+              v-for="(ex, i) in (plugin.examples || []).slice(0, 3)"
+              :key="i"
+              class="ap-example-pill"
+            >{{ ex }}</span>
+          </div>
+
+          <!-- 展开详情 -->
+          <n-collapse-transition :show="!!expanded[plugin.name]">
+            <div class="ap-plugin-detail">
+              <n-alert
+                v-if="plugin.fatal_error"
+                type="error"
+                style="margin-bottom: 12px;"
+                :show-icon="true"
               >
-                <n-text depth="2" style="font-size: 13px;">{{ ex }}</n-text>
+                <template #header>{{ t('agentplugins.fatalError') }}</template>
+                {{ plugin.fatal_error }}
+              </n-alert>
+              <n-alert
+                v-if="!plugin.enabled && !plugin.rejected"
+                type="warning"
+                style="margin-bottom: 12px;"
+                :show-icon="true"
+              >
+                {{ t('agentplugins.disabledHint') }}
+              </n-alert>
+              <div v-if="plugin.description" class="ap-detail-desc">{{ plugin.description }}</div>
+
+              <!-- 示例问法 -->
+              <div v-if="plugin.examples && plugin.examples.length" class="ap-detail-sec">
+                <div class="ap-detail-label">{{ t('agentplugins.examplesTitle') }}</div>
+                <div class="ap-example-pills">
+                  <span v-for="(ex, i) in plugin.examples" :key="i" class="ap-example-pill">{{ ex }}</span>
+                </div>
+              </div>
+
+              <!-- 路径 -->
+              <div class="ap-detail-sec">
+                <div class="ap-detail-rows">
+                  <div class="ap-detail-row">
+                    <span class="ap-detail-key">{{ t('agentplugins.root') }}</span>
+                    <n-text code class="ap-detail-code">{{ plugin.root }}</n-text>
+                  </div>
+                  <div class="ap-detail-row">
+                    <span class="ap-detail-key">{{ t('agentplugins.dataDir') }}</span>
+                    <n-text code class="ap-detail-code">{{ plugin.data_dir }}</n-text>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 技能 -->
+              <div v-if="plugin.skills && plugin.skills.length" class="ap-detail-sec">
+                <div class="ap-detail-label">{{ t('agentplugins.skillsList') }}</div>
+                <div class="ap-detail-tags">
+                  <n-tag v-for="sk in plugin.skills" :key="sk" size="small" type="info" :bordered="false">
+                    {{ sk }}
+                  </n-tag>
+                </div>
+              </div>
+
+              <!-- MCP 服务器 -->
+              <div v-if="plugin.mcp_servers && plugin.mcp_servers.length" class="ap-detail-sec">
+                <div class="ap-detail-label">{{ t('agentplugins.mcpServersList') }}</div>
+                <div v-for="m in plugin.mcp_servers" :key="m.name" class="ap-entry">
+                  <div class="ap-entry-head">
+                    <span class="ap-entry-name">{{ m.name }}</span>
+                    <n-tag size="tiny" :bordered="false" :type="m.type === 'stdio' ? 'info' : 'warning'">
+                      {{ m.type }}
+                    </n-tag>
+                    <n-tag
+                      v-if="m.error_kind === 'auth'"
+                      size="tiny"
+                      :bordered="false"
+                      type="warning"
+                    >
+                      {{ t('agentplugins.unauthorized') }}
+                    </n-tag>
+                    <n-tag
+                      v-else
+                      size="tiny"
+                      :bordered="false"
+                      :type="m.error ? 'error' : (m.connected ? 'success' : 'default')"
+                    >
+                      {{ m.error ? t('agentplugins.entryError') : (m.connected ? t('agentplugins.connected') : t('agentplugins.disconnected')) }}
+                    </n-tag>
+                    <span class="ap-entry-spacer" />
+                    <n-button
+                      v-if="m.error_kind === 'auth' || (m.required_env && m.required_env.length && !m.connected)"
+                      size="tiny"
+                      type="primary"
+                      secondary
+                      :loading="!!store.pending[plugin.name]"
+                      @click="openCredentials(plugin.name)"
+                    >
+                      {{ t('agentplugins.authorize') }}
+                    </n-button>
+                    <n-button
+                      v-else-if="m.error"
+                      size="tiny"
+                      secondary
+                      :loading="!!store.pending[plugin.name]"
+                      @click="handleConnect(plugin.name, m.name)"
+                    >
+                      {{ t('agentplugins.retry') }}
+                    </n-button>
+                  </div>
+                  <div class="ap-entry-desc">
+                    <span class="ap-entry-meta">{{ t('agentplugins.toolCount') }}: {{ m.tools }}</span>
+                    <span
+                      v-if="m.required_env && m.required_env.length && !m.connected"
+                      class="ap-entry-warn"
+                    >
+                      {{ t('agentplugins.needCredentials', { keys: m.required_env.join(', ') }) }}
+                    </span>
+                    <span v-if="m.error" class="ap-entry-err">{{ m.error }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- CLI 连接器（cli.json 扩展组件） -->
+              <div v-if="plugin.cli_connectors && plugin.cli_connectors.length" class="ap-detail-sec">
+                <div class="ap-detail-label">{{ t('agentplugins.cliList') }}</div>
+                <div v-for="c in plugin.cli_connectors" :key="c.name" class="ap-entry">
+                  <div class="ap-entry-head">
+                    <span class="ap-entry-name">{{ c.name }}</span>
+                    <n-tag size="tiny" :bordered="false" type="info">{{ c.command }}</n-tag>
+                    <n-tag size="tiny" :bordered="false" :type="c.error ? 'error' : 'success'">
+                      {{ c.error ? t('agentplugins.entryError') : t('agentplugins.cliRegistered', { count: c.tools?.length || 0 }) }}
+                    </n-tag>
+                    <span class="ap-entry-spacer" />
+                    <n-button
+                      v-if="c.required_env && c.required_env.length"
+                      size="tiny"
+                      type="primary"
+                      secondary
+                      :loading="!!store.pending[plugin.name]"
+                      @click="openCredentials(plugin.name)"
+                    >
+                      {{ t('agentplugins.authorize') }}
+                    </n-button>
+                  </div>
+                  <div class="ap-entry-desc">
+                    <span v-if="c.tools && c.tools.length" class="ap-entry-meta">{{ c.tools.join(' · ') }}</span>
+                    <span
+                      v-if="c.required_env && c.required_env.length"
+                      class="ap-entry-warn"
+                    >
+                      {{ t('agentplugins.needCredentials', { keys: c.required_env.join(', ') }) }}
+                    </span>
+                    <span v-if="c.error" class="ap-entry-err">{{ c.error }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 警告 -->
+              <div v-if="plugin.warnings && plugin.warnings.length" class="ap-detail-sec">
+                <div class="ap-detail-label">{{ t('agentplugins.warnings') }}</div>
+                <n-alert
+                  v-for="(w, i) in plugin.warnings"
+                  :key="i"
+                  type="warning"
+                  :show-icon="false"
+                  style="margin-bottom: 6px;"
+                >
+                  <span style="font-size: 12px;">{{ w }}</span>
+                </n-alert>
               </div>
             </div>
+          </n-collapse-transition>
+        </div>
+      </div>
 
-            <!-- Disabled Hint -->
-            <n-alert
-              v-if="!plugin.enabled && !plugin.rejected"
-              type="warning"
-              style="margin-top: 12px;"
-              :show-icon="true"
-            >
-              {{ t('agentplugins.disabledHint') }}
-            </n-alert>
+      <!-- 应用目录弹窗（从连接器页迁入） -->
+      <CLICatalogModal v-model:show="showCLICatalog" />
+      <MCPCatalogModal v-model:show="showMCPCatalog" />
 
-            <!-- Fatal Error -->
-            <n-alert
-              v-if="plugin.fatal_error"
-              type="error"
-              style="margin-top: 12px;"
-              :show-icon="true"
-            >
-              <template #header>{{ t('agentplugins.fatalError') }}</template>
-              {{ plugin.fatal_error }}
-            </n-alert>
-
-            <!-- Quick Stats -->
-            <n-space style="margin-top: 12px;" :size="24">
-              <n-statistic :label="t('agentplugins.skills')" :value="plugin.skills?.length || 0" />
-              <n-statistic :label="t('agentplugins.mcpServers')" :value="plugin.mcp_servers?.length || 0" />
-              <n-statistic
-                :label="t('agentplugins.mcpConnected')"
-                :value="plugin.mcp_servers?.filter(m => m.connected).length || 0"
-              />
-              <n-statistic
-                v-if="plugin.cli_connectors && plugin.cli_connectors.length"
-                :label="t('agentplugins.cliConnectors')"
-                :value="plugin.cli_connectors.reduce((n, c) => n + (c.tools?.length || 0), 0)"
-              />
-            </n-space>
-
-            <!-- Expanded Details -->
-            <n-collapse-transition :show="!!expanded[plugin.name]">
-              <div style="margin-top: 16px;">
-                <n-descriptions :column="1" label-placement="left" bordered size="small">
-                  <n-descriptions-item :label="t('agentplugins.root')">
-                    <n-text code>{{ plugin.root }}</n-text>
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('agentplugins.dataDir')">
-                    <n-text code>{{ plugin.data_dir }}</n-text>
-                  </n-descriptions-item>
-                </n-descriptions>
-
-                <!-- Skills -->
-                <n-card
-                  v-if="plugin.skills && plugin.skills.length"
-                  size="small"
-                  :title="t('agentplugins.skillsList')"
-                  style="margin-top: 12px;"
-                >
-                  <n-space>
-                    <n-tag v-for="sk in plugin.skills" :key="sk" size="small" type="info">
-                      {{ sk }}
-                    </n-tag>
-                  </n-space>
-                </n-card>
-
-                <!-- MCP Servers -->
-                <n-card
-                  v-if="plugin.mcp_servers && plugin.mcp_servers.length"
-                  size="small"
-                  :title="t('agentplugins.mcpServersList')"
-                  style="margin-top: 12px;"
-                >
-                  <n-list bordered>
-                    <n-list-item v-for="m in plugin.mcp_servers" :key="m.name">
-                      <n-thing>
-                        <template #header>
-                          <n-space align="center" :size="6">
-                            <span>{{ m.name }}</span>
-                            <n-tag size="tiny" :type="m.type === 'stdio' ? 'info' : 'warning'">
-                              {{ m.type }}
-                            </n-tag>
-                            <n-tag
-                              v-if="m.error_kind === 'auth'"
-                              size="tiny"
-                              type="warning"
-                            >
-                              {{ t('agentplugins.unauthorized') }}
-                            </n-tag>
-                            <n-tag
-                              v-else
-                              size="tiny"
-                              :type="m.error ? 'error' : (m.connected ? 'success' : 'default')"
-                            >
-                              {{ m.error ? t('agentplugins.entryError') : (m.connected ? t('agentplugins.connected') : t('agentplugins.disconnected')) }}
-                            </n-tag>
-                          </n-space>
-                        </template>
-                        <template #header-extra>
-                          <n-space :size="8">
-                            <n-button
-                              v-if="m.error_kind === 'auth' || (m.required_env && m.required_env.length && !m.connected)"
-                              size="tiny"
-                              type="primary"
-                              secondary
-                              :loading="!!store.pending[plugin.name]"
-                              @click="openCredentials(plugin.name)"
-                            >
-                              {{ t('agentplugins.authorize') }}
-                            </n-button>
-                            <n-button
-                              v-else-if="m.error"
-                              size="tiny"
-                              secondary
-                              :loading="!!store.pending[plugin.name]"
-                              @click="handleConnect(plugin.name, m.name)"
-                            >
-                              {{ t('agentplugins.retry') }}
-                            </n-button>
-                          </n-space>
-                        </template>
-                        <template #description>
-                          <n-space vertical :size="4">
-                            <n-text depth="3" style="font-size: 12px;">
-                              {{ t('agentplugins.toolCount') }}: {{ m.tools }}
-                            </n-text>
-                            <n-text
-                              v-if="m.required_env && m.required_env.length && !m.connected"
-                              type="warning"
-                              style="font-size: 12px;"
-                            >
-                              {{ t('agentplugins.needCredentials', { keys: m.required_env.join(', ') }) }}
-                            </n-text>
-                            <n-text v-if="m.error" type="error" style="font-size: 12px;">
-                              {{ m.error }}
-                            </n-text>
-                          </n-space>
-                        </template>
-                      </n-thing>
-                    </n-list-item>
-                  </n-list>
-                </n-card>
-
-                <!-- CLI Connectors (cli.json, 本实现的扩展组件) -->
-                <n-card
-                  v-if="plugin.cli_connectors && plugin.cli_connectors.length"
-                  size="small"
-                  :title="t('agentplugins.cliList')"
-                  style="margin-top: 12px;"
-                >
-                  <n-list bordered>
-                    <n-list-item v-for="c in plugin.cli_connectors" :key="c.name">
-                      <n-thing>
-                        <template #header>
-                          <n-space align="center" :size="6">
-                            <span>{{ c.name }}</span>
-                            <n-tag size="tiny" type="info">{{ c.command }}</n-tag>
-                            <n-tag size="tiny" :type="c.error ? 'error' : 'success'">
-                              {{ c.error ? t('agentplugins.entryError') : t('agentplugins.cliRegistered', { count: c.tools?.length || 0 }) }}
-                            </n-tag>
-                          </n-space>
-                        </template>
-                        <template #header-extra>
-                          <n-button
-                            v-if="c.required_env && c.required_env.length"
-                            size="tiny"
-                            type="primary"
-                            secondary
-                            :loading="!!store.pending[plugin.name]"
-                            @click="openCredentials(plugin.name)"
-                          >
-                            {{ t('agentplugins.authorize') }}
-                          </n-button>
-                        </template>
-                        <template #description>
-                          <n-space vertical :size="4">
-                            <n-text v-if="c.tools && c.tools.length" depth="3" style="font-size: 12px;">
-                              {{ c.tools.join(' · ') }}
-                            </n-text>
-                            <n-text
-                              v-if="c.required_env && c.required_env.length"
-                              type="warning"
-                              style="font-size: 12px;"
-                            >
-                              {{ t('agentplugins.needCredentials', { keys: c.required_env.join(', ') }) }}
-                            </n-text>
-                            <n-text v-if="c.error" type="error" style="font-size: 12px;">
-                              {{ c.error }}
-                            </n-text>
-                          </n-space>
-                        </template>
-                      </n-thing>
-                    </n-list-item>
-                  </n-list>
-                </n-card>
-
-                <!-- Warnings -->
-                <n-card
-                  v-if="plugin.warnings && plugin.warnings.length"
-                  size="small"
-                  :title="t('agentplugins.warnings')"
-                  style="margin-top: 12px;"
-                >
-                  <n-space vertical>
-                    <n-alert
-                      v-for="(w, i) in plugin.warnings"
-                      :key="i"
-                      type="warning"
-                      :show-icon="false"
-                    >
-                      {{ w }}
-                    </n-alert>
-                  </n-space>
-                </n-card>
-              </div>
-            </n-collapse-transition>
-          </n-card>
-        </n-gi>
-      </n-grid>
-
-      <!-- Credentials Modal(授权表单) -->
+      <!-- 凭据授权弹窗 -->
       <n-modal
         v-model:show="credModal.show"
         preset="card"
@@ -509,25 +458,32 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NAvatar, NButton, NCard, NCollapseTransition, NDescriptions, NDescriptionsItem, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NList, NListItem, NModal, NPopconfirm, NSpace, NSpin, NStatistic, NSwitch, NTag, NText, NThing, NTooltip } from 'naive-ui'
+import { NAlert, NAvatar, NButton, NCollapseTransition, NEmpty, NForm, NFormItem, NGi, NGrid, NIcon, NInput, NModal, NPopconfirm, NSpace, NSpin, NSwitch, NTag, NText, NTooltip } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   RefreshOutline,
-  RefreshCircleOutline,
   ExtensionPuzzleOutline,
   ChevronDownOutline,
   ChevronUpOutline,
   CloudUploadOutline,
   TrashOutline,
   RocketOutline,
+  GridOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
+import type { AgentPlugin } from '@/api/agentplugins'
+import CLICatalogModal from '@/components/CLICatalogModal.vue'
+import MCPCatalogModal from '@/components/MCPCatalogModal.vue'
 
 const { t } = useI18n()
 const message = useMessage()
 const store = useAgentPluginsStore()
 
-// 每个插件卡片的展开状态(默认展开首个)。
+// 应用目录弹窗（原连接器页入口，迁到插件页）
+const showCLICatalog = ref(false)
+const showMCPCatalog = ref(false)
+
+// 每个插件卡片的展开状态(默认全部收起,保持页面干净)。
 const expanded = reactive<Record<string, boolean>>({})
 
 // 拖拽安装状态。
@@ -540,24 +496,28 @@ function toggleExpand(name: string) {
   expanded[name] = !expanded[name]
 }
 
-async function handleRefresh() {
-  try {
-    await store.loadPlugins()
-    message.success(t('common.refreshed'))
-  } catch (e: any) {
-    message.error(e.message || t('agentplugins.loadFailed'))
+/** 插件行的内联统计："技能 2 · MCP 1/2 · CLI 工具 5"。 */
+function pluginStats(plugin: AgentPlugin): string {
+  const parts: string[] = []
+  const skills = plugin.skills?.length || 0
+  if (skills) parts.push(t('agentplugins.skills') + ' ' + skills)
+  const servers = plugin.mcp_servers || []
+  if (servers.length) {
+    const ok = servers.filter((m) => m.connected).length
+    parts.push('MCP ' + ok + '/' + servers.length)
   }
+  const cliTools = (plugin.cli_connectors || []).reduce((n, c) => n + (c.tools?.length || 0), 0)
+  if (cliTools) parts.push('CLI ' + cliTools)
+  return parts.join(' · ')
 }
 
 async function handleReload() {
   try {
+    // reload 本身就会回读插件列表,一个动作覆盖"重扫 + 刷新"。
     const res = await store.reload()
     message.success(
       t('agentplugins.reloaded', { count: res.count, skills: res.skills }),
     )
-    if (store.plugins.length > 0) {
-      expanded[store.plugins[0].name] = true
-    }
   } catch (e: any) {
     message.error(e.message || t('agentplugins.reloadFailed'))
   }
@@ -613,9 +573,8 @@ async function handleInstall(file: File) {
   try {
     const res = await store.install(file)
     message.success(t('agentplugins.installed', { name: res.name }))
-    if (store.plugins.length > 0) {
-      expanded[res.name] = true
-    }
+    // 刚装的插件展开详情,方便确认装上了什么。
+    expanded[res.name] = true
   } catch (e: any) {
     message.error(e.message || t('agentplugins.installFailed'))
   }
@@ -741,26 +700,79 @@ async function handleConnect(name: string, server: string) {
 
 onMounted(async () => {
   await store.loadPlugins()
-  if (store.plugins.length > 0) {
-    expanded[store.plugins[0].name] = true
-  }
 })
 </script>
 
 <style scoped>
-/* 官方技能包卡片 */
+/* ===== 页面骨架 ===== */
+.ap-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.ap-title {
+  margin: 0 0 2px;
+  font-size: 20px;
+}
+.ap-section {
+  margin-bottom: 28px;
+}
+.ap-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ap-section-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.ap-section-spacer {
+  flex: 1;
+}
+
+/* ===== 应用目录入口卡 ===== */
+.ap-catalog-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  background: #fafafa;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.ap-catalog-card:hover {
+  border-color: #2080f0;
+  box-shadow: 0 2px 10px rgba(32, 128, 240, 0.08);
+}
+.ap-catalog-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+.ap-catalog-desc {
+  font-size: 12px;
+  color: #909399;
+}
+
+/* ===== 官方技能包卡 ===== */
 .official-pack {
   height: 100%;
   display: flex;
   flex-direction: column;
   padding: 12px 14px;
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #fafafa;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 .official-pack:hover {
   border-color: #2080f0;
+  box-shadow: 0 2px 10px rgba(32, 128, 240, 0.08);
 }
 .official-pack-head {
   display: flex;
@@ -770,6 +782,15 @@ onMounted(async () => {
 .official-pack-name {
   font-weight: 600;
   font-size: 14px;
+}
+.official-pack-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .official-pack-examples {
   margin-top: 8px;
@@ -791,42 +812,279 @@ onMounted(async () => {
   gap: 8px;
   min-height: 28px;
 }
-.drop-zone {
-  border: 2px dashed #d0d0d0;
+
+/* ===== 拖拽安装瘦条 ===== */
+.drop-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1.5px dashed #d0d0d0;
   border-radius: 8px;
-  padding: 32px 16px;
-  text-align: center;
+  font-size: 13px;
   cursor: pointer;
-  transition: border-color 0.2s, background-color 0.2s;
+  color: #606266;
   background: #fafafa;
+  transition: border-color 0.2s, background-color 0.2s;
+  user-select: none;
 }
-.drop-zone:hover {
+.drop-strip:hover,
+.drop-strip--active {
   border-color: #2080f0;
-  background: #f5faff;
+  background: #f0f8ff;
+  color: #2080f0;
 }
-.drop-zone--active {
-  border-color: #2080f0;
-  background: #e8f4ff;
-}
-/* 示例问法("你可以这样问")区块 */
-.ap-examples {
+
+/* ===== 插件行卡 ===== */
+.ap-plugin {
   margin-top: 12px;
-  padding: 12px 16px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgba(32, 128, 240, 0.08), rgba(32, 128, 240, 0.03));
-  border: 1px solid rgba(32, 128, 240, 0.15);
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
-.ap-examples-title {
+.ap-plugin:hover {
+  border-color: #c8d3e8;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+.ap-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.ap-plugin-icon {
+  flex-shrink: 0;
+}
+.ap-plugin-icon--ph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #f0f2f5;
+  color: #909399;
+}
+.ap-plugin-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.ap-plugin-stats {
+  flex: 1;
+  min-width: 100px;
+  text-align: right;
+  font-size: 12px;
+  color: #909399;
+}
+.ap-plugin-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.ap-plugin-chevron {
+  /* 裸 <component :is> 渲染的 SVG 没有固有尺寸,必须显式约束,否则撑满整行 */
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: #909399;
+}
+/* 收起态摘要行：描述 + 前三个示例 pill */
+.ap-plugin-brief {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 14px 10px 46px;
+}
+.ap-plugin-desc {
+  font-size: 12px;
+  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+.ap-example-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #4a6da7;
+  background: rgba(32, 128, 240, 0.08);
+  border: 1px solid rgba(32, 128, 240, 0.14);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 展开详情 ===== */
+.ap-plugin-detail {
+  padding: 4px 14px 14px 46px;
+  border-top: 1px solid #f0f1f4;
+  margin-top: 0;
+}
+.ap-detail-desc {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #606266;
+}
+.ap-detail-sec {
+  margin-top: 14px;
+}
+.ap-detail-label {
   font-size: 12px;
   font-weight: 600;
-  color: #2080f0;
+  color: #909399;
   margin-bottom: 8px;
 }
-.ap-example-item {
-  padding: 6px 0;
-  border-bottom: 1px dashed rgba(32, 128, 240, 0.12);
+.ap-detail-pills,
+.ap-detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-.ap-example-item:last-child {
+.ap-detail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ap-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.ap-detail-key {
+  color: #909399;
+  flex-shrink: 0;
+  width: 64px;
+}
+.ap-detail-code {
+  font-size: 12px;
+  word-break: break-all;
+}
+/* MCP / CLI 条目行 */
+.ap-entry {
+  padding: 8px 0;
+  border-bottom: 1px dashed #ebedf0;
+}
+.ap-entry:last-child {
   border-bottom: none;
+}
+.ap-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ap-entry-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ap-entry-spacer {
+  flex: 1;
+}
+.ap-entry-desc {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.ap-entry-meta {
+  color: #909399;
+}
+.ap-entry-warn {
+  color: #d48806;
+}
+.ap-entry-err {
+  color: #d03050;
+  word-break: break-all;
+}
+
+/* ===== 深色模式 ===== */
+@media (prefers-color-scheme: dark) {
+  .official-pack {
+    background: #1f1f1f;
+    border-color: #333;
+  }
+  .official-pack:hover {
+    border-color: #4a7dc0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  }
+  .official-pack-examples {
+    background: rgba(80, 148, 240, 0.12);
+  }
+  .official-pack-example {
+    color: #9ab4d8;
+  }
+  .drop-strip {
+    background: #1f1f1f;
+    border-color: #3a3a3a;
+    color: #b8b8b8;
+  }
+  .drop-strip:hover,
+  .drop-strip--active {
+    border-color: #4a7dc0;
+    background: #1c2733;
+    color: #78a9ff;
+  }
+  .ap-plugin {
+    background: #18181c;
+    border-color: #2c2c30;
+  }
+  .ap-catalog-card {
+    background: #1f1f1f;
+    border-color: #333;
+  }
+  .ap-catalog-card:hover {
+    border-color: #4a7dc0;
+  }
+  .ap-catalog-desc {
+    color: #7d7d7d;
+  }
+  .ap-plugin:hover {
+    border-color: #3d4a63;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  }
+  .ap-plugin-icon--ph {
+    background: #26262b;
+    color: #7d7d7d;
+  }
+  .ap-plugin-stats,
+  .ap-detail-label,
+  .ap-detail-key,
+  .ap-entry-meta,
+  .ap-plugin-desc,
+  .ap-plugin-chevron {
+    color: #7d7d7d;
+  }
+  .ap-detail-desc {
+    color: #b8b8b8;
+  }
+  .ap-plugin-detail {
+    border-top-color: #26262b;
+  }
+  .ap-entry {
+    border-bottom-color: #26262b;
+  }
+  .ap-example-pill {
+    color: #9ab4d8;
+    background: rgba(80, 148, 240, 0.12);
+    border-color: rgba(80, 148, 240, 0.2);
+  }
+  .ap-entry-warn {
+    color: #e0a030;
+  }
+  .ap-entry-err {
+    color: #e05c74;
+  }
 }
 </style>

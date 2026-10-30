@@ -77,10 +77,6 @@
         </div>
 
         <n-space :size="8" class="conn-toolbar-actions">
-          <n-button size="small" @click="openCatalogModal">
-            <template #icon><component :is="GridOutline" /></template>
-            {{ t('mcp.catalogButton') }}
-          </n-button>
           <n-button size="small" type="primary" @click="openAddModal">
             <template #icon><component :is="AddOutline" /></template>
             {{ t('mcp.addServer') }}
@@ -406,73 +402,13 @@
         </n-space>
       </template>
     </n-modal>
-
-    <!--
-      从目录添加：内置一批常见 MCP server 的命令/参数/需要的凭据，
-      用户只需挑一个、填自己的 token。终结点仍是 POST /api/mcp/servers，
-      与手工填写完全同一条路径，目录不引入新的运行时概念。
-    -->
-    <n-modal
-      v-model:show="showCatalogModal"
-      :title="t('mcp.catalogTitle')"
-      preset="card"
-      class="modal-responsive"
-      style="width: 720px; max-width: 96vw; max-height: 85vh;"
-    >
-      <n-input
-        v-model:value="catalogQuery"
-        clearable
-        :placeholder="t('mcp.catalogSearch')"
-        style="margin-bottom: 12px;"
-        @update:value="onCatalogQueryChange"
-      >
-        <template #prefix>
-          <component :is="SearchOutline" />
-        </template>
-      </n-input>
-
-      <n-space v-if="catalogCategories.length" size="small" style="margin-bottom: 12px;">
-        <n-tag
-          v-for="c in catalogCategories"
-          :key="c.id"
-          size="small"
-          checkable
-          :checked="catalogCategory === c.id"
-          @update:checked="(v: boolean) => toggleCatalogCategory(c.id, v)"
-        >
-          {{ c.label }}
-        </n-tag>
-      </n-space>
-
-      <n-spin v-if="catalogLoading" />
-      <n-scrollbar v-else style="max-height: 52vh;">
-        <div class="mcp-catalog-list">
-          <div v-for="item in catalogItems" :key="item.id" class="mcp-catalog-item">
-            <div class="mcp-catalog-main">
-              <div class="mcp-catalog-name">{{ item.name }}</div>
-              <div class="mcp-catalog-desc">{{ item.description }}</div>
-              <n-space size="small" style="margin-top: 6px;">
-                <n-tag size="tiny" :bordered="false">{{ item.transport }}</n-tag>
-                <n-tag v-for="tag in (item.tags || []).slice(0, 3)" :key="tag" size="tiny" :bordered="false">
-                  {{ tag }}
-                </n-tag>
-              </n-space>
-            </div>
-            <n-button size="small" type="primary" secondary @click="installFromCatalog(item)">
-              {{ t('mcp.catalogInstall') }}
-            </n-button>
-          </div>
-          <n-empty v-if="!catalogItems.length" :description="t('mcp.catalogEmpty')" style="margin: 24px 0;" />
-        </div>
-      </n-scrollbar>
-    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch, h } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDrawer, NDrawerContent, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NScrollbar, NSelect, NSpace, NSpin, NSwitch, NTab, NTabs, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDrawer, NDrawerContent, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NSwitch, NTab, NTabs, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   AddOutline,
@@ -480,13 +416,12 @@ import {
   SearchOutline,
   EllipsisHorizontalOutline,
   CopyOutline,
-  GridOutline,
   LayersOutline,
 } from '@vicons/ionicons5'
 import CLIConnectorsPanel from '@/components/CLIConnectorsPanel.vue'
 import { useMCPStore } from '@/stores/mcp'
-import { getMCPCatalog, getMCPOAuthStatus, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, signOutMCPOAuth, startMCPOAuth, testMCPServer } from '@/api/mcp'
-import type { CatalogCategory, CatalogConnector, MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
+import { getMCPOAuthStatus, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, signOutMCPOAuth, startMCPOAuth, testMCPServer } from '@/api/mcp'
+import type { MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -1075,85 +1010,6 @@ async function handleDisconnect(name: string) {
   }
 }
 
-// --- 内置连接器目录 ---
-
-const showCatalogModal = ref(false)
-const catalogItems = ref<CatalogConnector[]>([])
-const catalogCategories = ref<CatalogCategory[]>([])
-const catalogQuery = ref('')
-const catalogCategory = ref('')
-const catalogLoading = ref(false)
-let catalogTimer: ReturnType<typeof setTimeout> | null = null
-
-async function loadCatalog() {
-  catalogLoading.value = true
-  try {
-    const res = await getMCPCatalog(catalogQuery.value.trim() || undefined, catalogCategory.value || undefined)
-    catalogItems.value = res.connectors || []
-    catalogCategories.value = res.categories || []
-  } catch (e: any) {
-    message.error(mcpErrorMessage(e) || t('mcp.catalogFailed'))
-    catalogItems.value = []
-  } finally {
-    catalogLoading.value = false
-  }
-}
-
-function openCatalogModal() {
-  showCatalogModal.value = true
-  if (!catalogItems.value.length) void loadCatalog()
-}
-
-/** 搜索防抖：目录是本地接口，但逐字请求仍会让列表闪烁。 */
-function onCatalogQueryChange() {
-  if (catalogTimer) clearTimeout(catalogTimer)
-  catalogTimer = setTimeout(() => { void loadCatalog() }, 250)
-}
-
-function toggleCatalogCategory(id: string, checked: boolean) {
-  catalogCategory.value = checked ? id : ''
-  void loadCatalog()
-}
-
-/**
- * 选中目录条目 → 预填表单（而不是直接安装）。
- *
- * 直接安装会跳过一个必然要做的步骤：填凭据。目录里没有凭据，也不该有。
- * 预填后把光标交给用户，填完再保存，失败原因能当场看到。
- */
-function installFromCatalog(item: CatalogConnector) {
-  showCatalogModal.value = false
-  isEditing.value = false
-  inputMode.value = 'form'
-  jsonText.value = ''
-  resetForm()
-
-  formData.name = item.default_name || item.id
-  formData.transport = item.transport || 'stdio'
-  formData.command = item.command || ''
-  formData.argsStr = (item.args || []).join(' ')
-  formData.url = item.url || ''
-
-  const envLines: string[] = []
-  const headerLines: string[] = []
-  for (const req of item.requires || []) {
-    if (req.where === 'header') headerLines.push(`${req.key}=`)
-    else if (req.where === 'arg') {
-      // arg 类凭据（如飞书的 App ID/Secret）走命令行参数：把 Args 里的
-      // {{KEY}} 占位符替换成醒目的 <label> 提示，用户在参数框里就地改。
-      const token = `{{${req.key}}}`
-      formData.argsStr = formData.argsStr.split(token).join(`<${req.label}>`)
-    } else envLines.push(`${req.key}=`)
-  }
-  formData.envStr = envLines.join('\n')
-  formData.headersStr = headerLines.join('\n')
-  showAddModal.value = true
-
-  if ((item.requires || []).length) {
-    message.info(t('mcp.catalogFillRequired', { name: item.name }), { duration: 6000 })
-  }
-}
-
 // --- 试连与工具开关 ---
 
 /**
@@ -1632,45 +1488,5 @@ onMounted(async () => {
   .expanded-row {
     padding: 12px 8px;
   }
-}
-</style>
-
-<!--
-  目录弹窗的样式必须写在全局块里：n-modal 会 teleport 到 body，
-  scoped 选择器带的 data-v-xxx 在弹窗内容上不存在，写了也不生效。
--->
-<style>
-.mcp-catalog-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-right: 4px;
-}
-
-.mcp-catalog-item {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px;
-  border: 1px solid var(--n-border-color, rgba(128, 128, 128, 0.2));
-  border-radius: 8px;
-}
-
-.mcp-catalog-main {
-  min-width: 0;
-  flex: 1;
-}
-
-.mcp-catalog-name {
-  font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 2px;
-}
-
-.mcp-catalog-desc {
-  font-size: 12px;
-  opacity: 0.75;
-  line-height: 1.5;
 }
 </style>
