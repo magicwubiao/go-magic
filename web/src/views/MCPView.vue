@@ -41,40 +41,6 @@
        2. 切页签时保留各自的搜索词/筛选态，回来不用重设。
     -->
     <div v-show="activeTab === 'mcp'">
-      <n-space justify="end" style="margin-bottom: 12px;">
-        <n-button @click="openCatalogModal">
-          <template #icon>
-            <component :is="GridOutline" />
-          </template>
-          {{ t('mcp.catalogButton') }}
-        </n-button>
-        <n-button type="primary" @click="openAddModal">
-          <template #icon>
-            <component :is="AddOutline" />
-          </template>
-          {{ t('mcp.addServer') }}
-        </n-button>
-        <n-dropdown
-          v-if="mcpStore.servers.length"
-          trigger="click"
-          :options="batchOptions"
-          @select="handleBatchAction"
-        >
-          <n-button :loading="batchBusy">
-            <template #icon>
-              <component :is="LayersOutline" />
-            </template>
-            {{ t('mcp.batchOps') }}
-          </n-button>
-        </n-dropdown>
-        <n-button @click="handleRefresh" :loading="mcpStore.loading">
-          <template #icon>
-            <component :is="RefreshOutline" />
-          </template>
-          {{ t('common.refresh') }}
-        </n-button>
-      </n-space>
-
     <n-spin v-if="mcpStore.loading && !mcpStore.servers.length" />
     <template v-else>
       <!--
