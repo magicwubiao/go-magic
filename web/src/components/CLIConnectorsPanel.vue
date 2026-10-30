@@ -429,95 +429,126 @@
           </template>
         </n-form-item>
 
-        <n-form-item :label="t('cli.commonArgs')">
-          <n-input
-            v-model:value="form.argsStr"
-            type="textarea"
-            :rows="2"
-            :placeholder="ARGS_EXAMPLE"
+        <!-- 高级设置：公共参数 / env / 行为开关默认收起。
+             主路径只留"命令 + 描述 + 工具微调"，普通用户不需要看到模板语法。 -->
+        <div class="cli-adv-toggle" @click="showAdvanced = !showAdvanced">
+          <component
+            :is="showAdvanced ? ChevronDownOutline : ChevronForwardOutline"
+            class="cli-adv-chevron"
           />
-        </n-form-item>
-
-        <n-form-item :label="t('cli.description')">
-          <n-input v-model:value="form.description" :placeholder="t('cli.descriptionPlaceholder')" />
-        </n-form-item>
-
-        <n-form-item :label="t('cli.env')">
-          <n-input
-            v-model:value="form.envStr"
-            type="textarea"
-            :rows="2"
-            placeholder="GH_TOKEN=xxxx&#10;NO_COLOR=1"
-          />
-          <template #feedback>
-            <n-text depth="3" style="font-size: 12px;">{{ t('cli.envHint') }}</n-text>
-          </template>
-        </n-form-item>
-
-        <n-space :size="12">
-          <n-form-item :label="t('cli.timeout')" style="width: 160px;">
-            <n-input-number v-model:value="form.timeoutSeconds" :min="1" :max="300" style="width: 100%;" />
+          <span>{{ t('cli.advancedSettings') }}</span>
+        </div>
+        <template v-if="showAdvanced">
+          <n-form-item :label="t('cli.commonArgs')">
+            <n-input
+              v-model:value="form.argsStr"
+              type="textarea"
+              :rows="2"
+              :placeholder="ARGS_EXAMPLE"
+            />
           </n-form-item>
-          <n-form-item :label="t('cli.workingDir')" style="flex: 1;">
-            <n-input v-model:value="form.workingDir" :placeholder="t('cli.workingDirPlaceholder')" />
-          </n-form-item>
-        </n-space>
 
-        <n-form-item :label="t('cli.behavior')">
-          <n-space vertical size="small" style="width: 100%;">
-            <n-space align="center" size="small">
-              <n-switch v-model:value="form.enabled" size="small" />
-              <n-text style="font-size: 13px;">{{ t('cli.enabled') }}</n-text>
-            </n-space>
-            <n-space align="center" size="small">
-              <n-text style="font-size: 13px; width: 76px;">{{ t('cli.approvalMode') }}</n-text>
-              <n-select
-                v-model:value="form.approvalMode"
-                size="small"
-                style="width: 260px;"
-                :options="approvalOptions"
-              />
-            </n-space>
-            <n-input v-model:value="form.profilesStr" size="small" :placeholder="t('cli.profilesPlaceholder')" />
+          <n-form-item :label="t('cli.env')">
+            <n-input
+              v-model:value="form.envStr"
+              type="textarea"
+              :rows="2"
+              placeholder="GH_TOKEN=xxxx&#10;NO_COLOR=1"
+            />
+            <template #feedback>
+              <n-text depth="3" style="font-size: 12px;">{{ t('cli.envHint') }}</n-text>
+            </template>
+          </n-form-item>
+
+          <n-space :size="12">
+            <n-form-item :label="t('cli.timeout')" style="width: 160px;">
+              <n-input-number v-model:value="form.timeoutSeconds" :min="1" :max="300" style="width: 100%;" />
+            </n-form-item>
+            <n-form-item :label="t('cli.workingDir')" style="flex: 1;">
+              <n-input v-model:value="form.workingDir" :placeholder="t('cli.workingDirPlaceholder')" />
+            </n-form-item>
           </n-space>
-        </n-form-item>
+
+          <n-form-item :label="t('cli.behavior')">
+            <n-space vertical size="small" style="width: 100%;">
+              <n-space align="center" size="small">
+                <n-switch v-model:value="form.enabled" size="small" />
+                <n-text style="font-size: 13px;">{{ t('cli.enabled') }}</n-text>
+              </n-space>
+              <n-space align="center" size="small">
+                <n-text style="font-size: 13px; width: 76px;">{{ t('cli.approvalMode') }}</n-text>
+                <n-select
+                  v-model:value="form.approvalMode"
+                  size="small"
+                  style="width: 260px;"
+                  :options="approvalOptions"
+                />
+              </n-space>
+              <n-input v-model:value="form.profilesStr" size="small" :placeholder="t('cli.profilesPlaceholder')" />
+            </n-space>
+          </n-form-item>
+        </template>
 
         <n-divider style="margin: 4px 0;">
           {{ t('cli.toolsSection') }}
         </n-divider>
 
-        <div v-for="(tool, idx) in formTools" :key="idx" class="cli-tool-editor">
-          <n-space justify="space-between" align="center" style="margin-bottom: 6px;">
-            <n-text strong style="font-size: 13px;">{{ t('cli.toolN', { n: idx + 1 }) }}</n-text>
-            <n-button text size="tiny" type="error" @click="formTools.splice(idx, 1)">
+        <!-- 工具卡：默认收起只显示摘要（名字/描述/只读/参数个数），
+             点开就地编辑。避免一屏塞下 N 个工具 × 7 个字段的编辑器。 -->
+        <div v-for="(tool, idx) in formTools" :key="idx" class="cli-tool-card">
+          <div class="cli-tool-card-head" @click="toggleTool(idx)">
+            <component
+              :is="expandedTool === idx ? ChevronDownOutline : ChevronForwardOutline"
+              class="cli-adv-chevron"
+            />
+            <span class="cli-tool-card-title">{{ tool.name || t('cli.unnamedTool') }}</span>
+            <span class="cli-tool-card-desc">{{ tool.description }}</span>
+            <n-tag v-if="tool.readOnly" size="tiny" :bordered="false" type="success">
+              {{ t('cli.readOnly') }}
+            </n-tag>
+            <n-tag v-if="paramCount(tool)" size="tiny" :bordered="false">
+              {{ t('cli.paramsCount', { n: paramCount(tool) }) }}
+            </n-tag>
+            <n-button
+              text
+              size="tiny"
+              type="error"
+              class="cli-tool-card-del"
+              @click.stop="removeTool(idx)"
+            >
               {{ t('common.delete') }}
             </n-button>
-          </n-space>
-          <n-space :size="8" style="margin-bottom: 6px;">
-            <n-input v-model:value="tool.name" size="small" :placeholder="t('cli.toolName')" style="width: 200px;" />
-            <n-input v-model:value="tool.description" size="small" :placeholder="t('cli.toolDescription')" style="flex: 1;" />
-          </n-space>
-          <n-input
-            v-model:value="tool.argsStr"
-            type="textarea"
-            :rows="3"
-            size="small"
-            :placeholder="ARGS_EXAMPLE"
-          />
-          <n-space align="center" size="small" style="margin-top: 6px;">
-            <n-switch v-model:value="tool.readOnly" size="small" />
-            <n-text style="font-size: 12px;">{{ t('cli.readOnly') }}</n-text>
-            <n-input v-model:value="tool.stdinParam" size="small" :placeholder="t('cli.stdinParam')" style="width: 200px;" />
-            <n-input-number v-model:value="tool.timeoutSeconds" size="small" :min="0" :max="300" :placeholder="t('cli.timeout')" style="width: 130px;" />
-          </n-space>
-          <n-input
-            v-model:value="tool.paramsJson"
-            type="textarea"
-            :rows="2"
-            size="small"
-            style="margin-top: 6px;"
-            :placeholder="PARAMS_EXAMPLE"
-          />
+          </div>
+          <div v-if="expandedTool === idx" class="cli-tool-card-body">
+            <n-space :size="8" style="margin-bottom: 6px;">
+              <n-input v-model:value="tool.name" size="small" :placeholder="t('cli.toolName')" style="width: 200px;" />
+              <n-input v-model:value="tool.description" size="small" :placeholder="t('cli.toolDescription')" style="flex: 1;" />
+            </n-space>
+            <n-input
+              v-model:value="tool.argsStr"
+              type="textarea"
+              :rows="3"
+              size="small"
+              :placeholder="ARGS_EXAMPLE"
+            />
+            <n-space align="center" size="small" style="margin-top: 6px;">
+              <n-switch v-model:value="tool.readOnly" size="small" />
+              <n-text style="font-size: 12px;">{{ t('cli.readOnly') }}</n-text>
+              <n-input v-model:value="tool.stdinParam" size="small" :placeholder="t('cli.stdinParam')" style="width: 200px;" />
+              <n-input-number v-model:value="tool.timeoutSeconds" size="small" :min="0" :max="300" :placeholder="t('cli.timeout')" style="width: 130px;" />
+            </n-space>
+            <n-input
+              v-model:value="tool.paramsJson"
+              type="textarea"
+              :rows="2"
+              size="small"
+              style="margin-top: 6px;"
+              :placeholder="PARAMS_EXAMPLE"
+            />
+            <n-alert type="default" :bordered="false" style="margin-top: 8px;">
+              <span style="font-size: 12px;">{{ t('cli.templateHint') }}</span>
+            </n-alert>
+          </div>
         </div>
 
         <n-space size="small">
@@ -527,10 +558,6 @@
           </n-button>
           <n-button size="small" quaternary @click="fillExample">{{ t('cli.fillExample') }}</n-button>
         </n-space>
-
-        <n-alert type="default" :bordered="false" style="margin-top: 8px;">
-          <span style="font-size: 12px;">{{ t('cli.templateHint') }}</span>
-        </n-alert>
       </n-space>
 
       <template #footer>
@@ -610,7 +637,19 @@ import {
   useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { AddOutline, CreateOutline, EllipsisHorizontalOutline, GridOutline, PlayOutline, RefreshOutline, SearchOutline, SparklesOutline, TrashOutline } from '@vicons/ionicons5'
+import {
+  AddOutline,
+  ChevronDownOutline,
+  ChevronForwardOutline,
+  CreateOutline,
+  EllipsisHorizontalOutline,
+  GridOutline,
+  PlayOutline,
+  RefreshOutline,
+  SearchOutline,
+  SparklesOutline,
+  TrashOutline,
+} from '@vicons/ionicons5'
 import {
   checkCLICatalogEntry,
   installCLICatalogEntry,
@@ -738,6 +777,31 @@ const form = reactive({
   profilesStr: '',
 })
 const formTools = ref<ToolForm[]>([])
+
+// ---- 微调器交互：高级区与工具卡默认收起，主路径只留"命令 + 工具摘要" ----
+const showAdvanced = ref(false)
+/** 当前展开编辑的工具下标（null = 全部收起，同一时间只开一个）。 */
+const expandedTool = ref<number | null>(null)
+
+function toggleTool(idx: number) {
+  expandedTool.value = expandedTool.value === idx ? null : idx
+}
+
+/** 参数声明个数：解析失败按 0 显示（编辑器里保存时才报错）。 */
+function paramCount(tool: ToolForm): number {
+  try {
+    const arr = JSON.parse(tool.paramsJson)
+    return Array.isArray(arr) ? arr.length : 0
+  } catch {
+    return 0
+  }
+}
+
+/** 删除工具卡：同时收起展开态，避免下标错位指到别的工具上。 */
+function removeTool(idx: number) {
+  formTools.value.splice(idx, 1)
+  expandedTool.value = null
+}
 
 // ---- 应用目录：点卡片 → 检测 → 填凭据 → 一键添加并启用 ----
 const showCatalog = ref(false)
@@ -923,11 +987,17 @@ async function applyQuickImport() {
       paramsJson: res.tool.params?.length ? JSON.stringify(res.tool.params) : '',
     }
     const first = formTools.value[0]
+    let draftIdx: number
     if (formTools.value.length === 1 && !first.name && !first.argsStr && !first.paramsJson) {
       formTools.value = [draft]
+      draftIdx = 0
     } else {
       formTools.value.push(draft)
+      draftIdx = formTools.value.length - 1
     }
+    // 解析结果自动展开成"预览"：用户粘完命令立刻看到生成了什么，可就地微调
+    expandedTool.value = draftIdx
+    showAdvanced.value = showAdvanced.value || (res.warnings || []).length > 0
     for (const w of res.warnings || []) {
       message.warning(w, { duration: 6000 })
     }
@@ -988,6 +1058,8 @@ function emptyTool(): ToolForm {
 
 function addTool() {
   formTools.value.push(emptyTool())
+  // 新工具直接展开：点了"添加工具"就是要编辑它
+  expandedTool.value = formTools.value.length - 1
 }
 
 function resetForm() {
@@ -1003,6 +1075,8 @@ function resetForm() {
   form.profilesStr = ''
   formTools.value = [emptyTool()]
   quickCmd.value = ''
+  showAdvanced.value = false
+  expandedTool.value = null
 }
 
 function openAdd() {
@@ -1034,6 +1108,15 @@ function openEdit(row: CLIConnectorView) {
     timeoutSeconds: tool.timeout_seconds || 0,
     paramsJson: tool.params?.length ? JSON.stringify(tool.params, null, 0) : '',
   }))
+  // 已有的高级配置非空才自动展开，避免白屏一长串
+  showAdvanced.value = !!(
+    (row.args || []).length
+    || (row.env || []).length
+    || row.working_dir
+    || (row.profiles || []).length
+    || row.require_approval !== undefined
+  )
+  expandedTool.value = null
   showForm.value = true
 }
 
@@ -1059,6 +1142,9 @@ function fillExample() {
       ]),
     },
   ]
+  // 示例填的是完整模板语法：展开高级区 + 工具卡，让用户看到可改的地方
+  showAdvanced.value = true
+  expandedTool.value = 0
 }
 
 function buildConnector(): CLIConnector {
@@ -1346,11 +1432,65 @@ onMounted(handleRefresh)
   flex: 1;
 }
 
-.cli-tool-editor {
+/* 高级设置 / 工具卡的折叠开关行 */
+.cli-adv-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #606266;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.cli-adv-toggle:hover {
+  color: #2080f0;
+}
+
+.cli-adv-chevron {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* 工具卡：默认收起显示摘要，点开就地编辑 */
+.cli-tool-card {
   border: 1px solid #ebedf0;
   border-radius: 8px;
-  padding: 10px;
   background: #fcfcfd;
+  overflow: hidden;
+}
+
+.cli-tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.cli-tool-card-head:hover {
+  background: #f5f6f8;
+}
+
+.cli-tool-card-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.cli-tool-card-desc {
+  font-size: 12px;
+  color: #909399;
+  flex: 1;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cli-tool-card-body {
+  padding: 0 10px 10px;
 }
 
 .cli-output-label {
@@ -1394,9 +1534,25 @@ onMounted(handleRefresh)
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .cli-tool-editor {
+  .cli-adv-toggle {
+    color: #b8b8b8;
+  }
+
+  .cli-adv-toggle:hover {
+    color: #78a9ff;
+  }
+
+  .cli-tool-card {
     background: #1f1f1f;
     border-color: #333;
+  }
+
+  .cli-tool-card-head:hover {
+    background: #292929;
+  }
+
+  .cli-tool-card-desc {
+    color: #7d7d7d;
   }
 
   .cli-output-label {
