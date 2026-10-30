@@ -2075,6 +2075,7 @@ export default {
     blockerAuth: '「{name}」缺少凭据：{keys}',
     blockerCli: '「{name}」需要的命令 {command} 本机未安装',
     blockerRejected: '插件清单有致命错误，无法启用',
+    blockerConnect: '「{name}」连接失败：{detail}',
     blockerAuthorize: '去授权',
     blockerInstall: '一键安装',
     blockerContinue: '仍然启用',

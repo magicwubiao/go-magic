@@ -257,7 +257,7 @@
                       {{ t('agentplugins.authorize') }}
                     </n-button>
                     <n-button
-                      v-else-if="m.error"
+                      v-else-if="m.error || !m.connected"
                       size="tiny"
                       secondary
                       :loading="!!store.pending[plugin.name]"
@@ -274,7 +274,8 @@
                     >
                       {{ t('agentplugins.needCredentials', { keys: m.required_env.join(', ') }) }}
                     </span>
-                    <span v-if="m.error" class="ap-entry-err">{{ m.error }}</span>
+                    <!-- auth 类失败缺凭据行已用中文说明，不再重复透出后端英文 error -->
+                    <span v-if="m.error && m.error_kind !== 'auth'" class="ap-entry-err">{{ m.error }}</span>
                   </div>
                 </div>
               </div>
@@ -452,6 +453,15 @@
             @click="fromBlockerInstall(b)"
           >
             {{ t('agentplugins.blockerInstall') }}
+          </n-button>
+          <n-button
+            v-else-if="b.kind === 'connect' && b.name"
+            size="tiny"
+            type="primary"
+            secondary
+            @click="fromBlockerConnect(b)"
+          >
+            {{ t('agentplugins.retry') }}
           </n-button>
         </div>
         <n-space justify="end" style="margin-top: 16px;">
@@ -665,6 +675,9 @@ function blockerText(b: AgentPluginBlocker): string {
   if (b.kind === 'auth') {
     return t('agentplugins.blockerAuth', { name: b.name || '', keys: (b.keys || []).join(', ') })
   }
+  if (b.kind === 'connect') {
+    return t('agentplugins.blockerConnect', { name: b.name || '', detail: b.detail || '' })
+  }
   if (b.kind === 'missing_binary') {
     return t('agentplugins.blockerCli', { name: b.name || '', command: b.command || '' })
   }
@@ -681,6 +694,12 @@ function fromBlockerInstall(b: AgentPluginBlocker) {
   const name = blockerModal.plugin
   blockerModal.show = false
   openInstallDialog(name, b.catalog_id || '', name)
+}
+
+function fromBlockerConnect(b: AgentPluginBlocker) {
+  const name = blockerModal.plugin
+  blockerModal.show = false
+  if (b.name) void handleConnect(name, b.name)
 }
 
 async function fromBlockerContinue() {

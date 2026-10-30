@@ -2073,6 +2073,7 @@ export default {
     blockerAuth: '"{name}" is missing credentials: {keys}',
     blockerCli: '"{name}" needs the {command} command, which is not installed',
     blockerRejected: 'The manifest has a fatal error; the plugin cannot be enabled',
+    blockerConnect: '"{name}" failed to connect: {detail}',
     blockerAuthorize: 'Authorize',
     blockerInstall: 'Install',
     blockerContinue: 'Enable anyway',

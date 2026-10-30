@@ -38,7 +38,7 @@ export interface AgentPluginCLIEntry {
  * 启用前用它拦一下,把原因摆在动作之前。
  */
 export interface AgentPluginBlocker {
-  kind: 'auth' | 'missing_binary' | 'rejected' | string
+  kind: 'auth' | 'connect' | 'missing_binary' | 'rejected' | string
   scope: 'mcp' | 'cli' | 'plugin' | string
   /** MCP 条目名或 CLI 连接器名 */
   name?: string
@@ -48,6 +48,8 @@ export interface AgentPluginBlocker {
   command?: string
   /** missing_binary: 目录条目 id(有则可一键安装) */
   catalog_id?: string
+  /** connect: 连接失败原因 */
+  detail?: string
 }
 
 export interface AgentPlugin {
