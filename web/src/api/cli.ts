@@ -77,6 +77,68 @@ export interface CLITestResult {
   }
 }
 
+/** 目录条目需要的环境变量（安装时由用户填）。 */
+export interface CLICatalogRequirement {
+  key: string
+  label: string
+  secret?: boolean
+  required?: boolean
+  placeholder?: string
+  help_url?: string
+}
+
+/** 内置目录中的一个 CLI 工具（带本机安装状态）。 */
+export interface CLICatalogEntry {
+  id: string
+  name: string
+  description: string
+  category: string
+  /** 建议的连接器名，也是工具前缀 */
+  default_name: string
+  connector: {
+    command: string
+    description?: string
+    tools: CLIToolSpec[]
+  }
+  requires?: CLICatalogRequirement[]
+  docs_url?: string
+  tags?: string[]
+  /** 命令在本机 PATH 上找得到 */
+  installed: boolean
+  install_path?: string
+  /** 当前平台的安装命令（仅展示，服务端不执行） */
+  install_commands: string[]
+  /** 同名连接器已存在 */
+  added: boolean
+}
+
+export interface CLICatalogCategory {
+  id: string
+}
+
+/** 列出内置 CLI 目录（含本机安装检测结果）。 */
+export async function listCLICatalog(): Promise<{
+  entries: CLICatalogEntry[]
+  categories: CLICatalogCategory[]
+}> {
+  return request('/cli/catalog')
+}
+
+/**
+ * 一键添加目录条目：服务端校验命令存在、写入 config.json、注册工具。
+ * env 只接受目录声明过的键。
+ */
+export async function installCLICatalogEntry(
+  id: string,
+  name: string,
+  env: Record<string, string>,
+): Promise<void> {
+  return request<void>('/cli/catalog/install', {
+    method: 'POST',
+    body: JSON.stringify({ id, name, env }),
+  })
+}
+
 /** 命令行解析结果：连接器命令 + 工具草稿。 */
 export interface CLIParseResult {
   command: string

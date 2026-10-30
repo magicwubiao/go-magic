@@ -26,6 +26,10 @@
       </div>
 
       <n-space :size="8" class="conn-toolbar-actions">
+        <n-button size="small" @click="openCatalog">
+          <template #icon><component :is="GridOutline" /></template>
+          {{ t('cli.catalogButton') }}
+        </n-button>
         <n-button size="small" @click="handleRefresh" :loading="loading">
           <template #icon><component :is="RefreshOutline" /></template>
           {{ t('common.refresh') }}
@@ -147,6 +151,172 @@
         </template>
       </n-drawer-content>
     </n-drawer>
+
+    <!-- 应用目录：点一个卡片 → 检测 → 填凭据 → 一键添加并启用。
+         列表与详情在同一个弹窗里切换（详情带返回），比叠两层弹窗稳。 -->
+    <n-modal
+      v-model:show="showCatalog"
+      preset="card"
+      :title="t('cli.catalogTitle')"
+      style="width: 900px;"
+    >
+      <!-- 列表 -->
+      <template v-if="!catalogDetail">
+        <div class="conn-toolbar">
+          <n-input
+            v-model:value="catalogSearch"
+            clearable
+            :placeholder="t('cli.catalogSearch')"
+            class="conn-search"
+          >
+            <template #prefix><component :is="SearchOutline" /></template>
+          </n-input>
+
+          <div class="conn-chips">
+            <button
+              v-for="chip in catalogChips"
+              :key="chip.key"
+              type="button"
+              class="conn-chip"
+              :class="{ 'is-active': catalogCategory === chip.key }"
+              @click="catalogCategory = chip.key"
+            >
+              {{ chip.label }}
+            </button>
+          </div>
+
+          <n-space :size="8" class="conn-toolbar-actions">
+            <n-button size="small" :loading="catalogLoading" @click="loadCatalog">
+              <template #icon><component :is="RefreshOutline" /></template>
+              {{ t('common.refresh') }}
+            </n-button>
+          </n-space>
+        </div>
+
+        <div v-if="visibleCatalog.length" class="conn-grid cli-catalog-grid">
+          <div
+            v-for="entry in visibleCatalog"
+            :key="entry.id"
+            class="conn-card"
+            :class="{ 'is-idle': !entry.installed }"
+            @click="openCatalogDetail(entry)"
+          >
+            <div class="conn-card-head">
+              <div class="conn-avatar" :class="entry.installed ? 'is-ok' : ''">
+                {{ avatarText(entry.name) }}
+              </div>
+              <div class="conn-ident">
+                <div class="conn-name">
+                  <span class="conn-name-text">{{ entry.name }}</span>
+                  <span class="conn-dot" :class="entry.installed ? 'is-ok' : ''" />
+                </div>
+                <div class="conn-sub">
+                  <span>{{ entry.connector.command }}</span>
+                  <span> · {{ t('cli.toolCountLabel', { count: entry.connector.tools?.length || 0 }) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="conn-desc">{{ entry.description }}</div>
+
+            <div class="conn-foot" @click.stop>
+              <n-tag v-if="entry.added" size="tiny" type="success" :bordered="false">
+                {{ t('cli.catalogAdded') }}
+              </n-tag>
+              <n-tag v-else-if="!entry.installed" size="tiny" :bordered="false">
+                {{ t('cli.catalogNeedsInstall') }}
+              </n-tag>
+              <span v-else class="conn-state is-on">{{ t('cli.catalogReady') }}</span>
+
+              <n-button size="tiny" type="primary" :disabled="entry.added" @click="openCatalogDetail(entry)">
+                {{ entry.added ? t('common.edit') : t('cli.catalogInstall') }}
+              </n-button>
+            </div>
+          </div>
+        </div>
+        <n-empty v-else :description="t('mcp.noSearchResult')" style="margin-top: 16px;" />
+      </template>
+
+      <!-- 详情 -->
+      <n-space v-else vertical size="small">
+        <n-button text size="small" style="align-self: flex-start;" @click="catalogDetail = null">
+          ← {{ t('cli.catalogBack') }}
+        </n-button>
+
+        <div class="cli-catalog-head">
+          <div class="conn-avatar" :class="catalogDetail.installed ? 'is-ok' : ''">
+            {{ avatarText(catalogDetail.name) }}
+          </div>
+          <div>
+            <div class="cli-catalog-title">{{ catalogDetail.name }}</div>
+            <div class="cli-catalog-sub">{{ catalogDetail.description }}</div>
+          </div>
+        </div>
+
+        <n-alert v-if="!catalogDetail.installed" type="warning" :bordered="false">
+          <div class="cli-install-hint">
+            {{ t('cli.catalogNoBinary', { command: catalogDetail.connector.command }) }}
+          </div>
+          <div v-for="cmd in catalogDetail.install_commands" :key="cmd" class="cli-install-cmd">
+            <code>{{ cmd }}</code>
+            <n-button text size="tiny" @click="copyText(cmd)">{{ t('cli.catalogCopy') }}</n-button>
+          </div>
+        </n-alert>
+
+        <div v-if="catalogDetail.requires?.length">
+          <div class="cli-catalog-label">{{ t('cli.catalogRequirements') }}</div>
+          <n-form-item
+            v-for="req in catalogDetail.requires"
+            :key="req.key"
+            :label="req.label"
+            :required="req.required"
+          >
+            <n-input
+              v-model:value="catalogEnv[req.key]"
+              :type="req.secret ? 'password' : 'text'"
+              :placeholder="req.placeholder || req.key"
+              show-password-on="click"
+            />
+            <template v-if="req.help_url" #feedback>
+              <a :href="req.help_url" target="_blank" rel="noreferrer" class="cli-catalog-link">
+                {{ t('cli.catalogGetToken') }}
+              </a>
+            </template>
+          </n-form-item>
+        </div>
+
+        <div>
+          <div class="cli-catalog-label">{{ t('cli.catalogTools') }}</div>
+          <div v-for="tool in catalogDetail.connector.tools" :key="tool.name" class="cli-catalog-tool">
+            <n-text code>{{ catalogDetail.default_name }}_{{ tool.name }}</n-text>
+            <span class="cli-catalog-tool-desc">{{ tool.description }}</span>
+          </div>
+        </div>
+
+        <n-space justify="end" align="center">
+          <a
+            v-if="catalogDetail.docs_url"
+            :href="catalogDetail.docs_url"
+            target="_blank"
+            rel="noreferrer"
+            class="cli-catalog-link"
+          >
+            {{ t('cli.catalogDocs') }}
+          </a>
+          <n-button :loading="catalogLoading" @click="loadCatalog">
+            {{ t('cli.catalogRecheck') }}
+          </n-button>
+          <n-button
+            type="primary"
+            :loading="catalogInstalling"
+            :disabled="!catalogDetail.installed || catalogDetail.added"
+            @click="installCatalogEntry"
+          >
+            {{ catalogDetail.added ? t('cli.catalogAdded') : t('cli.catalogInstallAndEnable') }}
+          </n-button>
+        </n-space>
+      </n-space>
+    </n-modal>
 
     <!-- 新建 / 编辑 -->
     <n-modal v-model:show="showForm" preset="card" :title="editingName ? t('cli.editConnector') : t('cli.addConnector')" style="width: 760px;">
@@ -365,15 +535,17 @@ import {
   useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { AddOutline, CreateOutline, EllipsisHorizontalOutline, PlayOutline, RefreshOutline, SearchOutline, SparklesOutline, TrashOutline } from '@vicons/ionicons5'
+import { AddOutline, CreateOutline, EllipsisHorizontalOutline, GridOutline, PlayOutline, RefreshOutline, SearchOutline, SparklesOutline, TrashOutline } from '@vicons/ionicons5'
 import {
+  installCLICatalogEntry,
+  listCLICatalog,
   listCLIConnectors,
   parseCLICommand,
   removeCLIConnector,
   saveCLIConnector,
   testCLIConnector,
 } from '@/api/cli'
-import type { CLIConnector, CLIConnectorView, CLITestResult } from '@/api/cli'
+import type { CLICatalogEntry, CLIConnector, CLIConnectorView, CLITestResult } from '@/api/cli'
 
 const emit = defineEmits<{ (e: 'count', n: number): void }>()
 
@@ -490,6 +662,102 @@ const form = reactive({
   profilesStr: '',
 })
 const formTools = ref<ToolForm[]>([])
+
+// ---- 应用目录：点卡片 → 检测 → 填凭据 → 一键添加并启用 ----
+const showCatalog = ref(false)
+const catalogLoading = ref(false)
+const catalogInstalling = ref(false)
+const catalogEntries = ref<CLICatalogEntry[]>([])
+const catalogSearch = ref('')
+const catalogCategory = ref('all')
+/** 当前打开详情的条目（null = 显示列表）。 */
+const catalogDetail = ref<CLICatalogEntry | null>(null)
+/** 详情里填的凭据（key 是目录声明的环境变量名）。 */
+const catalogEnv = reactive<Record<string, string>>({})
+
+const catalogChips = computed(() => [
+  { key: 'all', label: t('common.all') },
+  { key: 'dev', label: t('cli.catalogCategoryDev') },
+  { key: 'data', label: t('cli.catalogCategoryData') },
+  { key: 'cloud', label: t('cli.catalogCategoryCloud') },
+])
+
+const visibleCatalog = computed(() => {
+  let list = catalogEntries.value
+  if (catalogCategory.value !== 'all') {
+    list = list.filter((e) => e.category === catalogCategory.value)
+  }
+  const q = catalogSearch.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(
+      (e) =>
+        e.name.toLowerCase().includes(q)
+        || e.description.toLowerCase().includes(q)
+        || e.connector.command.toLowerCase().includes(q)
+        || (e.tags || []).some((tag) => tag.toLowerCase().includes(q)),
+    )
+  }
+  return list
+})
+
+function openCatalog() {
+  catalogDetail.value = null
+  showCatalog.value = true
+  if (!catalogEntries.value.length) void loadCatalog()
+}
+
+/**
+ * 拉目录并刷新安装状态。详情开着时同步更新那一份——用户去终端装完命令，
+ * 回到这里点「重新检测」，按钮要当场变可用，而不是先退回列表再进来。
+ */
+async function loadCatalog() {
+  catalogLoading.value = true
+  try {
+    const res = await listCLICatalog()
+    catalogEntries.value = res.entries
+    if (catalogDetail.value) {
+      const fresh = res.entries.find((e) => e.id === catalogDetail.value?.id)
+      if (fresh) catalogDetail.value = fresh
+    }
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+function openCatalogDetail(entry: CLICatalogEntry) {
+  catalogDetail.value = entry
+  // 凭据输入框每次重新打开都清空：不要把一个应用的 token 带进另一个
+  for (const key of Object.keys(catalogEnv)) delete catalogEnv[key]
+}
+
+async function installCatalogEntry() {
+  const entry = catalogDetail.value
+  if (!entry) return
+  catalogInstalling.value = true
+  try {
+    await installCLICatalogEntry(entry.id, entry.default_name, { ...catalogEnv })
+    message.success(t('cli.catalogInstalledOk', { name: entry.name }))
+    showCatalog.value = false
+    catalogDetail.value = null
+    await handleRefresh()
+  } catch (e: any) {
+    message.error(String(e?.message || e))
+  } finally {
+    catalogInstalling.value = false
+  }
+}
+
+/** 安装命令只做复制：执行安装是用户自己的决定（包管理器会改系统）。 */
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(t('cli.catalogCopied'))
+  } catch {
+    message.warning(text)
+  }
+}
 
 // ---- 快速导入：粘贴一条命令 → 后端解析 → 草稿填进表单 ----
 const quickCmd = ref('')
@@ -853,6 +1121,78 @@ onMounted(handleRefresh)
   align-items: center;
 }
 
+/* 应用目录：网格比连接器列表窄一点，900px 弹窗里能放三列 */
+.cli-catalog-grid {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.cli-catalog-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cli-catalog-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cli-catalog-sub {
+  font-size: 12px;
+  color: #909399;
+}
+
+.cli-catalog-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #606266;
+  margin: 4px 0 6px;
+}
+
+.cli-catalog-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  flex-wrap: wrap;
+}
+
+.cli-catalog-tool-desc {
+  font-size: 12px;
+  color: #909399;
+}
+
+.cli-catalog-link {
+  font-size: 12px;
+  color: #2080f0;
+  text-decoration: none;
+}
+
+.cli-catalog-link:hover {
+  text-decoration: underline;
+}
+
+.cli-install-hint {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.cli-install-cmd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cli-install-cmd code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
 .cli-quick .n-input {
   flex: 1;
 }
@@ -888,6 +1228,23 @@ onMounted(handleRefresh)
 }
 
 @media (prefers-color-scheme: dark) {
+  .cli-catalog-sub,
+  .cli-catalog-tool-desc {
+    color: #9a9a9a;
+  }
+
+  .cli-catalog-label {
+    color: #c4c4c4;
+  }
+
+  .cli-catalog-link {
+    color: #78a9ff;
+  }
+
+  .cli-install-cmd code {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
   .cli-tool-editor {
     background: #1f1f1f;
     border-color: #333;

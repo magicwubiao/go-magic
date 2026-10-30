@@ -60,6 +60,10 @@ func doCLIRequest(t *testing.T, s *Server, method, path, body string) *httptest.
 		s.handleCLITest(rec, req)
 	case path == "/api/cli/parse":
 		s.handleCLIParse(rec, req)
+	case path == "/api/cli/catalog":
+		s.handleCLICatalog(rec, req)
+	case path == "/api/cli/catalog/install":
+		s.handleCLICatalogInstall(rec, req)
 	case strings.HasPrefix(path, "/api/cli/connectors/"):
 		s.handleCLIConnectorByID(rec, req)
 	default:
