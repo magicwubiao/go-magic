@@ -23,6 +23,31 @@ export interface AgentPluginCLIEntry {
   tools: string[]
   /** env 中留空的键,即需要用户填写的凭据占位 */
   required_env?: string[]
+  /** 命令是否能在本机 PATH 上找到(目录装出来的插件才有) */
+  binary_found?: boolean
+  /** 目录条目 id(有值即可一键安装) */
+  catalog_id?: string
+  /** 当前平台的安装命令(仅展示,一键安装走后端任务) */
+  install_commands?: string[]
+  /** 当前平台的登录命令(仅展示) */
+  login_commands?: string[]
+}
+
+/**
+ * 一条"为什么还用不了":缺凭据 / 命令没装 / 清单被拒。
+ * 启用前用它拦一下,把原因摆在动作之前。
+ */
+export interface AgentPluginBlocker {
+  kind: 'auth' | 'missing_binary' | 'rejected' | string
+  scope: 'mcp' | 'cli' | 'plugin' | string
+  /** MCP 条目名或 CLI 连接器名 */
+  name?: string
+  /** auth: 缺的凭据 key */
+  keys?: string[]
+  /** missing_binary: 缺的命令 */
+  command?: string
+  /** missing_binary: 目录条目 id(有则可一键安装) */
+  catalog_id?: string
 }
 
 export interface AgentPlugin {
@@ -41,6 +66,13 @@ export interface AgentPlugin {
   skills: string[]
   mcp_servers: AgentPluginMCPEntry[]
   cli_connectors?: AgentPluginCLIEntry[]
+  /** 全部前置条件都满足(缺凭据 / 命令没装都会有 blocker) */
+  ready?: boolean
+  /** 非空即"启用了也用不了",前端据此拦一下并给出一键修复入口 */
+  blockers?: AgentPluginBlocker[]
+  /** 从内置目录装来的插件才有:目录种类与条目 id */
+  catalog_kind?: string
+  catalog_id?: string
   // manifest 可选字段:图标(插件内相对路径)与示例问法。
   icon?: string
   examples?: string[]
@@ -154,9 +186,14 @@ export async function uninstallAgentPlugin(name: string): Promise<{ ok: boolean;
   return request(`/agent-plugins/${encodeURIComponent(name)}/uninstall`, { method: 'POST' })
 }
 
-// 启用插件。
-export async function enableAgentPlugin(name: string): Promise<{ ok: boolean; name: string; disabled: boolean }> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/enable`, { method: 'POST' })
+// 启用插件。未就绪(缺凭据 / 命令没装)时后端返回 409 + blockers,
+// 调用方要么先补前置条件,要么显式 force=true 表示"我知道,先启用"。
+export async function enableAgentPlugin(
+  name: string,
+  force = false,
+): Promise<{ ok: boolean; name: string; disabled: boolean }> {
+  const qs = force ? '?force=1' : ''
+  return request(`/agent-plugins/${encodeURIComponent(name)}/enable${qs}`, { method: 'POST' })
 }
 
 // 禁用插件。
@@ -187,4 +224,66 @@ export async function connectPluginServer(name: string, server: string): Promise
     `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/connect`,
     { method: 'POST' },
   )
+}
+
+// ---------------------------------------------------------------------------
+// 自动授权:能直接拿到的凭据(环境变量 / 别名 / 已登录 CLI / 别的插件填过的)
+// 由服务端自己填好并重连,只把真正拿不到的 key 留给用户。
+// ---------------------------------------------------------------------------
+
+export interface AutoAuthorizeResult {
+  ok: boolean
+  plugin: string
+  /** 自动填上的 key 与来源(env:GH_TOKEN / cli:gh auth token / plugin:<name>) */
+  filled: { key: string; source: string }[]
+  /** 仍需用户填写的 key;空 = 授权已完成 */
+  missing: string[]
+  entries?: { name: string; ok: boolean; connected: boolean; error?: string; error_kind?: string }[]
+}
+
+export async function authorizePluginAuto(name: string): Promise<AutoAuthorizeResult> {
+  return request(`/agent-plugins/${encodeURIComponent(name)}/credentials/auto`, { method: 'POST' })
+}
+
+// ---------------------------------------------------------------------------
+// CLI 一键安装:只执行内置目录登记的安装命令(请求体只传 id / 插件名)。
+// 长任务走"提交 + 轮询",避免 HTTP 超时把用户晾在转圈里。
+// ---------------------------------------------------------------------------
+
+export type CLIInstallState = 'running' | 'done' | 'failed'
+
+export interface CLIInstallJob {
+  id: string
+  catalog_id: string
+  plugin?: string
+  state: CLIInstallState
+  commands: string[]
+  /** 子进程输出(可能被截断,truncated=true 时前端提示去终端手动装) */
+  output: string
+  binary: string
+  binary_found: boolean
+  error?: string
+  truncated?: boolean
+}
+
+export interface CLIInstallStartResult {
+  ok: boolean
+  /** 同一包已有在途任务时复用,不会重复拉起包管理器 */
+  reused?: boolean
+  job: CLIInstallJob
+}
+
+/** 按目录条目安装(before install);或按已安装插件反查目录条目安装。 */
+export async function startCLIInstall(body: {
+  id?: string
+  plugin?: string
+}): Promise<CLIInstallStartResult> {
+  return request('/agent-plugins/cli/install', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'cli', ...body }),
+  })
+}
+
+export async function getCLIInstallJob(id: string): Promise<{ ok: boolean; job: CLIInstallJob }> {
+  return request(`/agent-plugins/cli/install/${encodeURIComponent(id)}`)
 }

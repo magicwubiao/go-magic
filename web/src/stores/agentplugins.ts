@@ -71,15 +71,33 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     }
   }
 
-  async function setEnabled(name: string, enabled: boolean) {
+  async function setEnabled(name: string, enabled: boolean, force = false) {
     pending.value[name] = true
     try {
       if (enabled) {
-        await agentPluginsApi.enableAgentPlugin(name)
+        await agentPluginsApi.enableAgentPlugin(name, force)
       } else {
         await agentPluginsApi.disableAgentPlugin(name)
       }
       plugins.value = await agentPluginsApi.getAgentPlugins()
+    } finally {
+      pending.value[name] = false
+    }
+  }
+
+  /**
+   * 自动授权：服务端把能探测到的凭据（环境变量 / 别名 / 已登录 CLI /
+   * 别的插件填过的同名 key）直接填好并重连，只把缺的 key 回给前端。
+   */
+  async function authorizeAuto(name: string) {
+    pending.value[name] = true
+    try {
+      const res = await agentPluginsApi.authorizePluginAuto(name)
+      // 自动填过凭据时列表状态（连接/未就绪）会变，顺手刷新。
+      if (res.filled.length) {
+        plugins.value = await agentPluginsApi.getAgentPlugins()
+      }
+      return res
     } finally {
       pending.value[name] = false
     }
@@ -129,6 +147,7 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     install,
     uninstall,
     setEnabled,
+    authorizeAuto,
     loadCredentials,
     saveCredentials,
     connectServer,

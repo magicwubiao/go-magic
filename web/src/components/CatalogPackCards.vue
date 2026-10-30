@@ -136,6 +136,16 @@
               <code>{{ cmd }}</code>
               <n-button text size="tiny" @click="copyText(cmd)">{{ t('cli.catalogCopy') }}</n-button>
             </div>
+            <!-- 命令已经写在目录里了，就别只让用户复制：直接代跑（走安装任务） -->
+            <n-button
+              v-if="(detail.install_commands || []).length"
+              size="tiny"
+              type="primary"
+              style="margin-top: 8px;"
+              @click="openInstall(detail)"
+            >
+              {{ t('agentplugins.cliInstall') }}
+            </n-button>
           </n-alert>
 
           <n-alert
@@ -198,6 +208,14 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- 一键安装 CLI 命令：跑的是目录里登记的安装命令，装完刷新二进制探测 -->
+    <CLIInstallDialog
+      v-model:show="installShow"
+      :catalog-id="installId"
+      :display-name="installName"
+      @done="onInstallDone"
+    />
   </div>
 </template>
 
@@ -209,6 +227,7 @@ import { useI18n } from 'vue-i18n'
 import { RefreshOutline, SearchOutline } from '@vicons/ionicons5'
 import { getCatalogPacks, installCatalogPack } from '@/api/agentplugins'
 import type { CatalogPack } from '@/api/agentplugins'
+import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
 
 const props = defineProps<{ kind: 'mcp' | 'cli' }>()
 const emit = defineEmits<{
@@ -353,6 +372,23 @@ function avatarText(name: string): string {
   const trimmed = (name || '').trim()
   if (!trimmed) return '?'
   return trimmed.slice(0, 2).toUpperCase()
+}
+
+// === 一键安装命令（仅 CLI 条目） ===
+
+const installShow = ref(false)
+const installId = ref('')
+const installName = ref('')
+
+function openInstall(pack: CatalogPack) {
+  installId.value = pack.id
+  installName.value = pack.display_name
+  installShow.value = true
+}
+
+/** 装完（或将装完）重新拉列表：binary_found 由后端按 PATH 现算。 */
+async function onInstallDone() {
+  await load()
 }
 
 onMounted(() => {

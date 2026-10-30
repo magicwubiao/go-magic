@@ -25,14 +25,15 @@
         </button>
       </div>
 
+      <!-- 按钮顺序与 MCP 页签保持一致：主操作在左、刷新固定在最右。 -->
       <n-space :size="8" class="conn-toolbar-actions">
-        <n-button size="small" @click="handleRefresh" :loading="loading">
-          <template #icon><component :is="RefreshOutline" /></template>
-          {{ t('common.refresh') }}
-        </n-button>
         <n-button size="small" type="primary" @click="openAdd">
           <template #icon><component :is="AddOutline" /></template>
           {{ t('cli.addConnector') }}
+        </n-button>
+        <n-button size="small" @click="handleRefresh" :loading="loading">
+          <template #icon><component :is="RefreshOutline" /></template>
+          {{ t('common.refresh') }}
         </n-button>
       </n-space>
     </div>

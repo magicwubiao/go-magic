@@ -75,13 +75,63 @@ func (s *Server) initStandaloneMCP() {
 // 超时后创建的 agent 只是暂时缺 mcp_* 工具,用户在连接器页手动重连/
 // 刷新工具后,新会话即可拿到完整 schema。
 func (s *Server) waitForMCPInit(maxWait time.Duration) {
-	if s == nil || s.mcpInitDone == nil {
+	if s == nil {
+		return
+	}
+	s.waitForSignal(s.mcpInitDone, "MCP", maxWait)
+}
+
+// waitForMCPInitUntil 与 waitForMCPInit 相同，但用绝对截止时间。
+// 启动期现在有两条后台初始化（独立 MCP 与插件 MCP），它们的等待预算
+// 必须共享同一个 deadline，否则首个会话最坏要等两段超时相加。
+func (s *Server) waitForMCPInitUntil(deadline time.Time) {
+	if s == nil {
+		return
+	}
+	s.waitForSignalUntil(s.mcpInitDone, "MCP", deadline)
+}
+
+// waitForAgentPluginInit 有界等待启动期后台「插件 MCP 连接 + 工具注入」完成。
+// 超时放行，语义与 waitForMCPInit 一致：新会话先拿不到 ap_* 工具，
+// 用户在插件页点刷新/重连后，下一个新会话即可拿到完整 schema。
+func (s *Server) waitForAgentPluginInit(maxWait time.Duration) {
+	if s == nil {
+		return
+	}
+	s.waitForSignal(s.agentPluginInitDone, "AgentPlugin", maxWait)
+}
+
+func (s *Server) waitForAgentPluginInitUntil(deadline time.Time) {
+	if s == nil {
+		return
+	}
+	s.waitForSignalUntil(s.agentPluginInitDone, "AgentPlugin", deadline)
+}
+
+func (s *Server) waitForSignal(ch chan struct{}, label string, maxWait time.Duration) {
+	if ch == nil {
 		return
 	}
 	select {
-	case <-s.mcpInitDone:
+	case <-ch:
 	case <-time.After(maxWait):
-		log.Warnf("[MCP] startup MCP init still running after %v; creating agent without waiting", maxWait)
+		log.Warnf("[%s] startup init still running after %v; creating agent without waiting", label, maxWait)
+	}
+}
+
+func (s *Server) waitForSignalUntil(ch chan struct{}, label string, deadline time.Time) {
+	if ch == nil {
+		return
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		log.Warnf("[%s] startup init budget exhausted; creating agent without waiting", label)
+		return
+	}
+	select {
+	case <-ch:
+	case <-time.After(remaining):
+		log.Warnf("[%s] startup init still running after %v; creating agent without waiting", label, remaining)
 	}
 }
 

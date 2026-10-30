@@ -166,6 +166,31 @@ func cliCatalogPacks() []CatalogPack {
 	return out
 }
 
+// CatalogSource 返回插件是从哪个目录条目物化出来的（非目录插件 ok=false）。
+//
+// 目录装出来的插件在 plugin.json 的 extensions 里留了来源标记
+// （见 catalogPackExtKey），UI 据此把"命令未安装"的 CLI 连接器接回目录里的
+// 安装命令——用户不需要自己去找 winget / brew 的包名。
+func CatalogSource(p *Plugin) (kind, id string, ok bool) {
+	if p == nil || p.Extensions == nil {
+		return "", "", false
+	}
+	raw, exists := p.Extensions[catalogPackExtKey]
+	if !exists {
+		return "", "", false
+	}
+	m, isMap := raw.(map[string]any)
+	if !isMap {
+		return "", "", false
+	}
+	kind, _ = m["kind"].(string)
+	id, _ = m["id"].(string)
+	if strings.TrimSpace(kind) == "" || strings.TrimSpace(id) == "" {
+		return "", "", false
+	}
+	return kind, id, true
+}
+
 // CatalogPackName 返回目录条目物化后的插件名（kind-id）。
 // 前缀把两类目录分开，避免与手工创建的插件或连接器撞名。
 func CatalogPackName(kind, id string) string {

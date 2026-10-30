@@ -105,8 +105,14 @@ type Server struct {
 	// （每个终端会话只记一个当前 cwd）。见 terminal.go。
 	terminalMu       sync.Mutex
 	terminalSessions map[string]*terminalSession
-	skillMgr         *skills.Manager
-	magicHome        string
+
+	// cliInstallMu/cliInstallJobs 是在途 CLI 安装任务表（见 cli_install.go）。
+	// 任务在 goroutine 里跑，输出边跑边追加，轮询接口按 id 取快照。
+	cliInstallMu   sync.Mutex
+	cliInstallJobs map[string]*cliInstallJob
+
+	skillMgr  *skills.Manager
+	magicHome string
 	// runtimeProfile 是本次进程真正在用的分身（启动时定死）。
 	// 切换分身只改配置，cortex 与启发时注入的 .env 要重启才跟得上，
 	// 因此不能用 cfg.Profile 当"当前分身"。见 Server.activeProfile。
@@ -123,6 +129,12 @@ type Server struct {
 	// 服务不再同步等待 MCP 连好才监听端口，但首个会话创建 agent 前仍
 	// 有界等待该信号，避免 agent 把缺失 MCP 工具的 schema 永久缓存。
 	mcpInitDone chan struct{}
+	// agentPluginInitDone 在启动期后台「插件 MCP 连接 + 工具注入」完成时关闭。
+	// 与 mcpInitDone 同一套路：插件里的 npx/HTTP MCP 单条握手就有 30s 上限，
+	// 串行放在 NewServer 里会把端口监听拖到几十秒之后。
+	agentPluginInitDone chan struct{}
+	// startupTrace 记录启动各阶段耗时（见 startup_trace.go）。
+	startupTrace *startupTrace
 	// 加锁顺序守卫（见 lockorder.go）：持 agentsMu 时再拿 s.mu 会立即 panic。
 	// 顺序反了不会立刻崩，而是在并发下变成永久死锁，所以用显式断言把它
 	// 变成确定性失败。
@@ -272,8 +284,10 @@ func (s *Server) isAllowedOrigin(origin string) bool {
 }
 
 func NewServer(dbPath string) *Server {
+	tr := newStartupTrace()
 	magicHome := appconfig.GetMagicHome()
 	os.MkdirAll(magicHome, 0755)
+	tr.mark("magic home")
 
 	// 这里曾经每次都 MkdirAll(<magicHome>/profiles/default/{skills,memory,...})，
 	// 造出一棵从来没人读写的空骨架。它与「default 分身 = <magicHome>/cortex」
@@ -293,6 +307,7 @@ func NewServer(dbPath string) *Server {
 	if err != nil {
 		cfg = appconfig.DefaultConfig()
 	}
+	tr.mark("config load")
 
 	// Apply the persistent browser profile dir. GetBrowserProfileDir resolves
 	// "config key absent → default dir (~/.magic/browser-profile)" and expands
@@ -310,12 +325,14 @@ func NewServer(dbPath string) *Server {
 		// Session store unavailable, chat sessions will not be persisted
 		store = nil
 	}
+	tr.mark("session db")
 
 	// Create provider
 	var prov provider.Provider
 	if cfg != nil && cfg.Provider != "" {
 		prov = createProvider(cfg)
 	}
+	tr.mark("provider")
 
 	// Create tool registry
 	workDir := cfg.WorkingDir
@@ -330,6 +347,7 @@ func NewServer(dbPath string) *Server {
 	// 工具集开关（config tools.enabled/disabled）真实生效：此前 UI 开关只写
 	// 配置、没有任何消费方，模型永远拿到全量清单。
 	registry.SetToolsetFilter(cfg.Tools.Enabled, cfg.Tools.Disabled)
+	tr.mark("tool registry")
 
 	// Create skills manager with config
 	skillCfg := skills.ManagerConfig{
@@ -343,6 +361,7 @@ func NewServer(dbPath string) *Server {
 
 	// Register skill invoke tool with the tool registry
 	registry.RegisterSkillTool(skillMgr)
+	tr.mark("skills manager")
 
 	// Create cron manager
 	cronMgr, err := cron.NewManager()
@@ -357,6 +376,7 @@ func NewServer(dbPath string) *Server {
 			cronMgr.SetAgentDeps(prov, registry, workDir)
 		}
 	}
+	tr.mark("cron manager")
 
 	// Initialize Kanban Manager
 	var kanbanMgr *kanban.Manager
@@ -463,6 +483,8 @@ Your working directory is: %s
 		}
 	}
 
+	tr.mark("kanban manager")
+
 	// Initialize Subagent Manager and register the delegation tools.
 	//
 	// 没有这一步，Web / Bot 入口的 agent 就看不到 delegate_task：超长任务只能
@@ -484,10 +506,13 @@ Your working directory is: %s
 		log.Warnf("[Subagent] No provider configured; delegate_task will not be available")
 	}
 
+	tr.mark("subagent manager")
+
 	// Initialize Goal Manager
 	var goalMgr *goal.Manager
 	goalMgr, err = goal.NewManager(magicHome)
 	// Goal manager may fail, continue without it
+	tr.mark("goal manager")
 
 	// Load disabled skills from config
 	disabledSkills := make(map[string]bool)
@@ -525,6 +550,7 @@ Your working directory is: %s
 	if err := cortexMgr.Start(); err != nil {
 		log.Warnf("Cortex manager start failed, continuing without it: %v", err)
 	}
+	tr.mark("cortex manager")
 
 	// Bridge cortex's auto skill creator with the skills Manager so
 	// auto-generated skills are registered and visible via /api/skills.
@@ -575,6 +601,7 @@ Your working directory is: %s
 
 	// Initialize MCP manager
 	mcpMgr := mcp.NewManager()
+	tr.mark("approval/usage/mcp")
 
 	// Build metadata reported by /api/status and /api/system/version.
 	//
@@ -678,6 +705,8 @@ Your working directory is: %s
 		clarifications:       make(map[string]*PendingClarification),
 		chatQueues:           make(map[string]*sessionQueue),
 		mcpInitDone:          make(chan struct{}),
+		agentPluginInitDone:  make(chan struct{}),
+		startupTrace:         tr,
 		globalBus:            bus.NewEventBus(),
 		globalBusSSEHandlers: make(map[uint64]func(kind string, payload []byte)),
 	}
@@ -686,6 +715,7 @@ Your working directory is: %s
 	if info, err := os.Stat(filepath.Join(magicHome, "config.json")); err == nil {
 		s.configMtimeNs.Store(info.ModTime().UnixNano())
 	}
+	tr.mark("server struct")
 
 	// OAuth token 持久化：<magicHome>/mcp/oauth_tokens.json（0600，原子写）。
 	// 密钥不进 config.json：那个文件用户会手工编辑/备份/分享。
@@ -755,7 +785,20 @@ Your working directory is: %s
 	// Load Agent Plugins (OpenAI Agent Plugins 1.0.0 spec) and inject
 	// plugin skills / MCP tools into the skills manager and tool registry.
 	// Plugin-level failures are isolated and never block server startup.
-	_, s.agentPlugins = s.loadAgentPlugins()
+	//
+	// 只有"解析 + skills/CLI 注入"留在同步路径：读本地小文件、纯内存注册。
+	// MCP 连接与 ap_* 工具注入移进后台 goroutine（见 startAgentPluginRuntimes）：
+	// 每个条目握手上限 30s，npx 冷启动还要下载包，串行跑完再监听端口就是
+	// "服务要等几十秒才起来"的主因。首个会话创建前仍会等这个信号（有界）。
+	_, pluginSet := s.loadAgentPluginsParsed()
+	s.agentPlugins = pluginSet
+	tr.mark("agent plugins load")
+
+	safeGo(func() {
+		defer close(s.agentPluginInitDone)
+		s.startAgentPluginRuntimes(pluginSet)
+	})
+	tr.mark("agent plugins bg start")
 
 	// 桥接独立 MCP server（config.json 的 mcp.servers / magic mcp connect）：
 	// 连接并把发现的工具以 mcp_<server>_<tool> 注册进工具注册表，供模型调用。
@@ -775,6 +818,7 @@ Your working directory is: %s
 	// cli_<connector>_<tool> 工具。纯内存注册，不拉子进程，同步执行即可——
 	// 放在 MCP 后台连接之后调用，保证首个会话创建时 cli_* 工具已经就位。
 	s.initCLIConnectors()
+	tr.mark("cli connectors")
 
 	// QR 扫码平台（WeCom AI Bot / WeChat iLink）确认登录后自动重启 gateway：
 	// 让新写入 config.json 的 bot_id/secret 或 token 生效（否则新 bot 永不
@@ -1035,7 +1079,12 @@ func (s *Server) getOrCreateAgent(sessionID string) *agent.Agent {
 	// 时算一次并按会话永久缓存，若不等 MCP 连完就建 agent，这个会话将永远
 	// 看不到 mcp_* 工具。因此在拿到 agents 锁之前有界等待初始化完成：
 	// 只影响"服务刚启动就发首条消息"的会话，且上限受控，不会无限拖住聊天。
-	s.waitForMCPInit(30 * time.Second)
+	//
+	// 两条后台初始化（独立 MCP、插件 MCP）共用同一个 30s 预算：它们从
+	// NewServer 起就是并行跑的，串行等两段各自 30s 只会放大首条消息延迟。
+	initDeadline := time.Now().Add(30 * time.Second)
+	s.waitForMCPInitUntil(initDeadline)
+	s.waitForAgentPluginInitUntil(initDeadline)
 
 	s.acquireAgentsMu()
 	defer s.releaseAgentsMu()
@@ -1963,6 +2012,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 
 func (s *Server) Start(port int) error {
 	mux := s.buildRouter()
+	s.startupTrace.mark("router built")
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
@@ -1988,6 +2038,7 @@ func (s *Server) Start(port int) error {
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 	s.httpServer = srv
+	s.startupTrace.markStartupReady()
 
 	return srv.ListenAndServe()
 }

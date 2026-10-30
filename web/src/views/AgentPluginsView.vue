@@ -17,26 +17,6 @@
     <n-spin v-if="store.loading && !store.plugins.length" style="margin: 48px 0;" />
 
     <template v-else>
-      <!-- ===== MCP 连接器：目录条目即插件，装上进"已安装" ===== -->
-      <div class="ap-section">
-        <div class="ap-section-head">
-          <n-icon size="16"><component :is="ServerOutline" /></n-icon>
-          <span class="ap-section-title">{{ t('agentplugins.mcpCatalogTitle') }}</span>
-          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.mcpCatalogSubtitle') }}</n-text>
-        </div>
-        <CatalogPackCards kind="mcp" @installed="onCatalogInstalled" />
-      </div>
-
-      <!-- ===== CLI 应用：同上，一张卡一个工具包 ===== -->
-      <div class="ap-section">
-        <div class="ap-section-head">
-          <n-icon size="16"><component :is="TerminalOutline" /></n-icon>
-          <span class="ap-section-title">{{ t('agentplugins.cliCatalogTitle') }}</span>
-          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.cliCatalogSubtitle') }}</n-text>
-        </div>
-        <CatalogPackCards kind="cli" @installed="onCatalogInstalled" />
-      </div>
-
       <!-- ===== 已安装插件 ===== -->
       <div class="ap-section">
         <div class="ap-section-head">
@@ -51,6 +31,10 @@
             }) }}
           </n-text>
           <span class="ap-section-spacer" />
+          <n-button size="tiny" quaternary :loading="refreshing" @click="handleRefreshInstalled">
+            <template #icon><component :is="RefreshOutline" /></template>
+            {{ t('common.refresh') }}
+          </n-button>
           <n-button size="tiny" quaternary @click="triggerFileInput">
             <template #icon><component :is="CloudUploadOutline" /></template>
             {{ t('agentplugins.installZip') }}
@@ -123,6 +107,18 @@
             <n-tag v-if="plugin.mcp_disabled" size="tiny" :bordered="false" type="warning">
               {{ t('agentplugins.mcpDisabled') }}
             </n-tag>
+            <!-- 未就绪：缺凭据 / 命令没装。原因放在 tooltip 里，点开关时会弹引导 -->
+            <n-tooltip v-if="!plugin.ready && !plugin.rejected" placement="bottom">
+              <template #trigger>
+                <n-tag size="tiny" :bordered="false" type="warning" style="cursor: help;">
+                  {{ t('agentplugins.notReady') }}
+                  <template v-if="(plugin.blockers || []).length">
+                    · {{ t('agentplugins.notReadyCount', { count: (plugin.blockers || []).length }) }}
+                  </template>
+                </n-tag>
+              </template>
+              <div v-for="(b, i) in plugin.blockers || []" :key="i">{{ blockerText(b) }}</div>
+            </n-tooltip>
 
             <span class="ap-plugin-stats">{{ pluginStats(plugin) }}</span>
 
@@ -134,7 +130,7 @@
                     :value="plugin.enabled"
                     :disabled="plugin.rejected || !!store.pending[plugin.name]"
                     :loading="!!store.pending[plugin.name]"
-                    @update:value="(v: boolean) => handleToggle(plugin.name, v)"
+                    @update:value="(v: boolean) => handleToggle(plugin, v)"
                   />
                 </template>
                 {{ plugin.enabled ? t('agentplugins.clickToDisable') : t('agentplugins.clickToEnable') }}
@@ -255,8 +251,8 @@
                       size="tiny"
                       type="primary"
                       secondary
-                      :loading="!!store.pending[plugin.name]"
-                      @click="openCredentials(plugin.name)"
+                      :loading="!!store.pending[plugin.name] || autoBusy === plugin.name"
+                      @click="handleAuthorize(plugin.name)"
                     >
                       {{ t('agentplugins.authorize') }}
                     </n-button>
@@ -293,14 +289,27 @@
                     <n-tag size="tiny" :bordered="false" :type="c.error ? 'error' : 'success'">
                       {{ c.error ? t('agentplugins.entryError') : t('agentplugins.cliRegistered', { count: c.tools?.length || 0 }) }}
                     </n-tag>
+                    <!-- 命令没装：CLI 唯一的前置阻塞，给一键安装（命令来自内置目录） -->
+                    <n-tag v-if="c.binary_found === false" size="tiny" :bordered="false" type="warning">
+                      {{ t('agentplugins.cliBinaryMissing') }}
+                    </n-tag>
                     <span class="ap-entry-spacer" />
+                    <n-button
+                      v-if="c.binary_found === false && c.catalog_id"
+                      size="tiny"
+                      type="primary"
+                      secondary
+                      @click="openInstallDialog(plugin.name, c.catalog_id, plugin.name)"
+                    >
+                      {{ t('agentplugins.cliInstall') }}
+                    </n-button>
                     <n-button
                       v-if="c.required_env && c.required_env.length"
                       size="tiny"
                       type="primary"
                       secondary
-                      :loading="!!store.pending[plugin.name]"
-                      @click="openCredentials(plugin.name)"
+                      :loading="!!store.pending[plugin.name] || autoBusy === plugin.name"
+                      @click="handleAuthorize(plugin.name)"
                     >
                       {{ t('agentplugins.authorize') }}
                     </n-button>
@@ -336,6 +345,25 @@
         </div>
       </div>
 
+      <!-- ===== MCP 连接器：目录条目即插件，装到上方"已安装" ===== -->
+      <div class="ap-section">
+        <div class="ap-section-head">
+          <n-icon size="16"><component :is="ServerOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.mcpCatalogTitle') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.mcpCatalogSubtitle') }}</n-text>
+        </div>
+        <CatalogPackCards kind="mcp" @installed="onCatalogInstalled" />
+      </div>
+
+      <!-- ===== CLI 应用：同上，一张卡一个工具包 ===== -->
+      <div class="ap-section">
+        <div class="ap-section-head">
+          <n-icon size="16"><component :is="TerminalOutline" /></n-icon>
+          <span class="ap-section-title">{{ t('agentplugins.cliCatalogTitle') }}</span>
+          <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.cliCatalogSubtitle') }}</n-text>
+        </div>
+        <CatalogPackCards kind="cli" @installed="onCatalogInstalled" />
+      </div>
       <!-- 凭据授权弹窗 -->
       <n-modal
         v-model:show="credModal.show"
@@ -348,6 +376,21 @@
           <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 12px;">
             {{ t('agentplugins.credentialsHint') }}
           </n-text>
+          <!-- 自动探测已经填好的部分：告诉用户"剩下的才是真的要你动手"，避免以为全都要手打 -->
+          <n-alert
+            v-if="credModal.autoFilled.length"
+            type="success"
+            :bordered="false"
+            :show-icon="false"
+            style="margin-bottom: 12px;"
+          >
+            <span style="font-size: 12px;">
+              {{ t('agentplugins.credentialsAutoHint', {
+                keys: credModal.autoFilled.join(', '),
+                count: credModal.keys.length,
+              }) }}
+            </span>
+          </n-alert>
           <n-form label-placement="top" size="small">
             <n-form-item
               v-for="key in credModal.keys"
@@ -379,6 +422,54 @@
           </n-space>
         </template>
       </n-modal>
+
+      <!-- 未就绪引导：把"启用也调不通"的原因摆出来，并给一键修复入口 -->
+      <n-modal
+        v-model:show="blockerModal.show"
+        preset="card"
+        :title="t('agentplugins.blockersTitle', { name: blockerModal.plugin })"
+        style="max-width: 560px;"
+      >
+        <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 12px;">
+          {{ t('agentplugins.blockersHint') }}
+        </n-text>
+        <div v-for="(b, i) in blockerModal.items" :key="i" class="ap-blocker">
+          <span class="ap-blocker-text">{{ blockerText(b) }}</span>
+          <n-button
+            v-if="b.kind === 'auth'"
+            size="tiny"
+            type="primary"
+            secondary
+            @click="fromBlockerAuthorize"
+          >
+            {{ t('agentplugins.blockerAuthorize') }}
+          </n-button>
+          <n-button
+            v-else-if="b.kind === 'missing_binary' && b.catalog_id"
+            size="tiny"
+            type="primary"
+            secondary
+            @click="fromBlockerInstall(b)"
+          >
+            {{ t('agentplugins.blockerInstall') }}
+          </n-button>
+        </div>
+        <n-space justify="end" style="margin-top: 16px;">
+          <n-button size="small" @click="blockerModal.show = false">{{ t('common.cancel') }}</n-button>
+          <n-button size="small" type="primary" ghost @click="fromBlockerContinue">
+            {{ t('agentplugins.blockerContinue') }}
+          </n-button>
+        </n-space>
+      </n-modal>
+
+      <!-- CLI 一键安装：插件详情与目录卡共用同一个弹窗 -->
+      <CLIInstallDialog
+        v-model:show="installModal.show"
+        :plugin="installModal.plugin"
+        :catalog-id="installModal.catalogId"
+        :display-name="installModal.name"
+        @done="onCLIInstallDone"
+      />
     </template>
   </div>
 </template>
@@ -399,8 +490,9 @@ import {
   TerminalOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
-import type { AgentPlugin } from '@/api/agentplugins'
+import type { AgentPlugin, AgentPluginBlocker } from '@/api/agentplugins'
 import CatalogPackCards from '@/components/CatalogPackCards.vue'
+import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -432,6 +524,18 @@ function pluginStats(plugin: AgentPlugin): string {
   const cliTools = (plugin.cli_connectors || []).reduce((n, c) => n + (c.tools?.length || 0), 0)
   if (cliTools) parts.push('CLI ' + cliTools)
   return parts.join(' · ')
+}
+
+const refreshing = ref(false)
+
+/** 轻量刷新：只重读已安装列表，不触发全量重扫（重扫在页头按钮）。 */
+async function handleRefreshInstalled() {
+  refreshing.value = true
+  try {
+    await store.loadPlugins()
+  } finally {
+    refreshing.value = false
+  }
 }
 
 async function handleReload() {
@@ -507,25 +611,82 @@ async function handleInstall(file: File) {
 
 /**
  * 安装成功后：刷新插件列表（卡片状态由后端 installed 决定），
- * 需要凭据的直接弹授权表单——"装上 → 授权 → 能用"一步接一步。
+ * 需要凭据的走"自动授权"——环境变量 / 已登录 CLI / 别的插件填过的同名凭据
+ * 都直接拿来用，只有真的拿不到的才弹表单。
  */
 async function onCatalogInstalled(payload: { name: string; requiredEnv: string[] }) {
   await store.loadPlugins()
   expanded[payload.name] = true
   if (payload.requiredEnv.length) {
-    await openCredentials(payload.name)
+    await handleAuthorize(payload.name)
   }
 }
 
 // === 启用/禁用 ===
 
-async function handleToggle(name: string, enabled: boolean) {
+/**
+ * 开关入口：启用前先看就绪度。
+ *
+ * 缺凭据 / 命令没装时后端会拒绝启用（409 + blockers），与其让用户撞一次墙，
+ * 不如在这里就弹引导：去授权 → 一键安装 → 仍然启用。
+ */
+async function handleToggle(plugin: AgentPlugin, enabled: boolean) {
+  if (!enabled) {
+    await setEnabled(plugin.name, false)
+    return
+  }
+  if ((plugin.blockers || []).length) {
+    blockerModal.plugin = plugin.name
+    blockerModal.items = plugin.blockers || []
+    blockerModal.show = true
+    return
+  }
+  await setEnabled(plugin.name, true)
+}
+
+async function setEnabled(name: string, enabled: boolean, force = false) {
   try {
-    await store.setEnabled(name, enabled)
+    await store.setEnabled(name, enabled, force)
     message.success(enabled ? t('agentplugins.enabled', { name }) : t('agentplugins.disabledMsg', { name }))
   } catch (e: any) {
     message.error(e.message || t('agentplugins.toggleFailed'))
   }
+}
+
+// 未就绪引导弹窗：只承载"为什么还不能用 + 下一步点什么"。
+const blockerModal = reactive({
+  show: false,
+  plugin: '',
+  items: [] as AgentPluginBlocker[],
+})
+
+/** 把一条 blocker 翻译成一句人话（tooltip 与弹窗共用）。 */
+function blockerText(b: AgentPluginBlocker): string {
+  if (b.kind === 'auth') {
+    return t('agentplugins.blockerAuth', { name: b.name || '', keys: (b.keys || []).join(', ') })
+  }
+  if (b.kind === 'missing_binary') {
+    return t('agentplugins.blockerCli', { name: b.name || '', command: b.command || '' })
+  }
+  return t('agentplugins.blockerRejected')
+}
+
+function fromBlockerAuthorize() {
+  const name = blockerModal.plugin
+  blockerModal.show = false
+  void handleAuthorize(name)
+}
+
+function fromBlockerInstall(b: AgentPluginBlocker) {
+  const name = blockerModal.plugin
+  blockerModal.show = false
+  openInstallDialog(name, b.catalog_id || '', name)
+}
+
+async function fromBlockerContinue() {
+  const name = blockerModal.plugin
+  blockerModal.show = false
+  await setEnabled(name, true, true)
 }
 
 // === 卸载 ===
@@ -548,6 +709,8 @@ const credModal = reactive<{
   keys: string[]
   values: Record<string, string>
   masked: Record<string, string>
+  /** 已经被自动填好的 key（只用于提示，表单里不再重复出现） */
+  autoFilled: string[]
 }>({
   show: false,
   loading: false,
@@ -555,19 +718,63 @@ const credModal = reactive<{
   keys: [],
   values: {},
   masked: {},
+  autoFilled: [],
 })
 
-/** 打开授权表单:拉掩码视图,值为空 = 待填,*** = 已设置(留空即保持)。 */
-async function openCredentials(name: string) {
+/** 自动授权进行中的插件名（按钮 loading 用）。 */
+const autoBusy = ref('')
+
+/**
+ * 授权入口：先自动，再手填。
+ *
+ * 绝大多数情况（token 已在环境变量里、gh 已登录、别的插件填过同名 key）
+ * 到这里就结束了，用户一个字符都不用敲；剩下的才弹表单。
+ */
+async function handleAuthorize(name: string) {
+  if (autoBusy.value) return
+  autoBusy.value = name
+  try {
+    const res = await store.authorizeAuto(name)
+    if (res.filled.length) {
+      message.success(
+        t('agentplugins.autoFilled', {
+          count: res.filled.length,
+          keys: res.filled.map((f) => f.key).join(', '),
+        }),
+      )
+      // store.authorizeAuto 已经在填入后刷新过列表，这里不再多打一次请求。
+    }
+    if (res.missing.length) {
+      await openCredentials(name, res.missing, res.filled.map((f) => f.key))
+    } else {
+      if (!res.filled.length) message.success(t('agentplugins.autoDone'))
+    }
+  } catch (e: any) {
+    // 探测接口失败不该把用户挡在门外：退回手填。
+    message.error(e.message || t('agentplugins.autoFailed'))
+    await openCredentials(name)
+  } finally {
+    autoBusy.value = ''
+  }
+}
+
+/**
+ * 打开授权表单:拉掩码视图,值为空 = 待填,*** = 已设置(留空即保持)。
+ *
+ * only 非空时只渲染这几项（自动探测剩下的），其余已就绪的 key 不再打扰用户。
+ */
+async function openCredentials(name: string, only?: string[], autoFilled: string[] = []) {
   credModal.plugin = name
   credModal.show = true
   credModal.loading = true
   credModal.keys = []
   credModal.values = {}
   credModal.masked = {}
+  credModal.autoFilled = [...autoFilled]
   try {
     const cred = await store.loadCredentials(name)
-    const keys = Object.keys(cred.env || {}).sort()
+    const all = Object.keys(cred.env || {}).sort()
+    const keys = only && only.length ? only : all
     credModal.keys = keys
     credModal.masked = { ...(cred.env || {}) }
     const values: Record<string, string> = {}
@@ -622,6 +829,31 @@ async function handleConnect(name: string, server: string) {
   } catch (e: any) {
     message.error(e.message || t('agentplugins.connectFailed', { name: server }))
   }
+}
+
+// === CLI 一键安装 ===
+
+/**
+ * 安装弹窗状态。plugin 与 catalogId 二选一：
+ * 已安装插件传 name（后端反查目录条目），插件详情里的连接器也走这条路径。
+ */
+const installModal = reactive({
+  show: false,
+  plugin: '',
+  catalogId: '',
+  name: '',
+})
+
+function openInstallDialog(plugin: string, catalogId: string, name: string) {
+  installModal.plugin = plugin
+  installModal.catalogId = catalogId
+  installModal.name = name
+  installModal.show = true
+}
+
+/** 安装任务结束：命令可用后刷新列表，"未就绪"标记会随之消失。 */
+async function onCLIInstallDone() {
+  await store.loadPlugins()
 }
 
 onMounted(async () => {
@@ -851,6 +1083,24 @@ onMounted(async () => {
 }
 .ap-entry-err {
   color: #d03050;
+  word-break: break-all;
+}
+
+/* ===== 未就绪引导 ===== */
+.ap-blocker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px dashed #ebedf0;
+}
+.ap-blocker:last-of-type {
+  border-bottom: none;
+}
+.ap-blocker-text {
+  flex: 1;
+  font-size: 13px;
+  color: #606266;
   word-break: break-all;
 }
 

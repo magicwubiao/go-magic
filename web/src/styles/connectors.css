@@ -20,6 +20,8 @@
 .conn-search {
   width: 280px;
   max-width: 100%;
+  /* 搜索框固定宽度，不被芯片挤压 */
+  flex: 0 0 auto;
 }
 
 .conn-chips {
@@ -27,6 +29,10 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  /* 吃掉中间剩余空间：芯片多时在自身范围内换行，
+     而不是把右侧动作区挤到下一行（那样刷新按钮的位置会随芯片数量漂移）。 */
+  flex: 1 1 0;
+  min-width: 180px;
 }
 
 /* 筛选芯片：比 n-tag checkable 更轻，不抢卡片的视觉重量 */
@@ -65,6 +71,8 @@
 
 .conn-toolbar-actions {
   margin-left: auto;
+  /* 动作区不参与压缩：刷新/主按钮始终贴在同一行的最右侧 */
+  flex: 0 0 auto;
 }
 
 .conn-count {

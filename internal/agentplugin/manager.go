@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/skills"
+	"github.com/magicwubiao/go-magic/pkg/clicatalog"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -96,13 +99,29 @@ func loadManaged(pluginDir string) *ManagedPlugin {
 }
 
 // StartAll 启动所有受管插件的 MCP 运行时(跳过被禁用的插件)。
+//
+// 插件之间并行（上限 4）：每个插件的 Start 内部已经把条目并行化了，但
+// "一个插件一台 npx server"是最常见的形态，插件再串行就等于没并行。
+// 启动阶段这里直接决定端口多久能通，reload 阶段决定用户点完"重新扫描"
+// 要转多久，两处都受益。
 func StartAll(plugins map[string]*ManagedPlugin) {
+	const maxConcurrent = 4
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
 	for _, mp := range plugins {
 		if mp.Disabled || mp.Runtime == nil {
 			continue
 		}
-		_ = mp.Runtime.Start()
+		wg.Add(1)
+		go func(rt *Runtime) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			_ = rt.Start()
+		}(mp.Runtime)
 	}
+	wg.Wait()
 }
 
 // StopAll 停止所有受管插件的 MCP 运行时。
@@ -194,8 +213,23 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 			}
 		}
 		entry["skills"] = skillNames
-		mcpEntries := make([]map[string]any, 0, len(p.MCPServers))
-		for _, ms := range p.MCPServers {
+
+		// 目录来源标记：从内置目录装出来的插件带着 kind/id，UI 据此把
+		// "命令没装"的 CLI 连接器直接接到目录里的安装命令上。
+		catKind, catID, fromCatalog := CatalogSource(p)
+		if fromCatalog {
+			entry["catalog_kind"] = catKind
+			entry["catalog_id"] = catID
+		}
+
+		// 条目状态在后台连接期间持续变化，走 Runtime 的锁内快照；
+		// 直接遍历 p.MCPServers 会与连接 goroutine 并发写。
+		mcpStatuses := p.MCPServers
+		if mp.Runtime != nil {
+			mcpStatuses = mp.Runtime.EntryStatuses()
+		}
+		mcpEntries := make([]map[string]any, 0, len(mcpStatuses))
+		for _, ms := range mcpStatuses {
 			mcpEntries = append(mcpEntries, map[string]any{
 				"name":       ms.Name,
 				"type":       ms.Spec.Type,
@@ -211,6 +245,22 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 
 		// CLI 组件：只回显声明与校验结果，工具清单由工具名推导，
 		// 不依赖运行时状态（CLI 没有连接这一层）。
+		// 目录装出来的连接器额外带上本机安装状态与安装/登录命令：
+		// "命令不存在"是 CLI 唯一的前置阻塞，UI 要能一键装（见 CLI 安装任务）。
+		var catalogInstall, catalogLogin []string
+		if fromCatalog && catKind == CatalogKindCLI {
+			if e, ok := clicatalog.Get(catID); ok {
+				catalogInstall = e.Install.CommandsFor(runtime.GOOS)
+				catalogLogin = e.Login.CommandsFor(runtime.GOOS)
+			}
+		}
+		// 先并行预热，避免逐条 LookPath 串行把响应拖到秒级。
+		cliCommands := make([]string, 0, len(p.CLIConnectors))
+		for _, cs := range p.CLIConnectors {
+			cliCommands = append(cliCommands, cs.Connector.Command)
+		}
+		PrimeCommands(cliCommands)
+
 		cliEntries := make([]map[string]any, 0, len(p.CLIConnectors))
 		for _, cs := range p.CLIConnectors {
 			names := make([]string, 0, len(cs.Connector.Tools))
@@ -218,13 +268,20 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				names = append(names, fmt.Sprintf("ap_%s_%s", name, cliconn.ToolName(cs.Name, spec.Name)))
 			}
 			sort.Strings(names)
-			cliEntries = append(cliEntries, map[string]any{
+			cliEntry := map[string]any{
 				"name":         cs.Name,
 				"command":      cs.Connector.Command,
 				"error":        cs.Error,
 				"tools":        names,
 				"required_env": envPlaceholderKeys(cs.Connector.Env),
-			})
+				"binary_found": CommandAvailable(cs.Connector.Command),
+			}
+			if fromCatalog && catKind == CatalogKindCLI {
+				cliEntry["catalog_id"] = catID
+				cliEntry["install_commands"] = catalogInstall
+				cliEntry["login_commands"] = catalogLogin
+			}
+			cliEntries = append(cliEntries, cliEntry)
 		}
 		entry["cli_connectors"] = cliEntries
 		out = append(out, entry)

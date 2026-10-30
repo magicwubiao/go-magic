@@ -17,6 +17,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // Runtime 管理单个 Agent Plugin 的 MCP 连接生命周期。
@@ -45,6 +46,11 @@ type Runtime struct {
 	// 必须显式带 id:无 id 的报文是通知,transport 不等响应;
 	// 自增保证并发调用在同一 stdio 流上不撞 id。
 	reqID atomic.Uint64
+
+	// stopped 由 Stop 置位。连接在后台 goroutine 里跑，reload/uninstall
+	// 可能在其完成前就调 Stop：此时握手成功的连接不能再塞回 conns，
+	// 否则立刻变成没人认领的孤儿子进程（Windows 上还锁着 npx 的句柄）。
+	stopped bool
 }
 
 type connection struct {
@@ -79,18 +85,51 @@ func (r *Runtime) Start() error {
 		_ = os.MkdirAll(r.plugin.DataDir, 0o755)
 	}
 
+	r.startParallel()
+	return nil
+}
+
+// startParallel 并行连接所有静态校验通过的条目（并发上限 4）。
+//
+// 串行连接时多台 server 的握手时间会相加（每台上限 30s）：一个插件里
+// 声明 3 台 npx server，冷启动就要等 3 次 npx 解析/下载。并行后总耗时
+// 约等于最慢的一台。条目之间不共享状态（连接结果各自写回自己的
+// MCPEntryStatus，连接表在 r.mu 内），并发安全。
+// 上限 4 是防止一次拉起十几个子进程打爆内存/句柄。
+func (r *Runtime) startParallel() {
+	const maxConcurrent = 4
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
+	pluginName := ""
+	if r.plugin != nil && r.plugin.Manifest != nil {
+		pluginName = r.plugin.Manifest.Name
+	}
+
 	for i := range r.plugin.MCPServers {
 		entry := &r.plugin.MCPServers[i]
 		if entry.Error != "" {
 			continue // 静态校验已失败,跳过
 		}
-		if err := r.connectEntry(entry); err != nil {
-			entry.Connected = false
-			entry.Error = err.Error()
-			entry.ErrorKind = mcp.KindOf(err).String()
-		}
+		wg.Add(1)
+		go func(e *MCPEntryStatus) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			began := time.Now()
+			toolCount, err := r.connectEntry(e)
+			if err != nil {
+				toolCount = 0
+				r.setEntryStatus(e, false, 0, err.Error(), mcp.KindOf(err).String())
+			}
+			// 只给慢条目留日志：这是"服务起得慢"最直接的可观测信号。
+			if took := time.Since(began); took > time.Second {
+				log.Infof("[AgentPlugin] %s/%s mcp init %v (connected=%v tools=%d err=%v)",
+					pluginName, e.Name, took.Round(time.Millisecond), err == nil, toolCount, err)
+			}
+		}(entry)
 	}
-	return nil
+	wg.Wait()
 }
 
 // SetCredentials 注入/更新用户凭据(env key → value)。幂等;nil 表示清空。
@@ -115,16 +154,16 @@ func (r *Runtime) credentialsSnapshot() map[string]string {
 }
 
 // connectEntry 连接单个 MCP server 并发现工具。
-func (r *Runtime) connectEntry(entry *MCPEntryStatus) error {
+func (r *Runtime) connectEntry(entry *MCPEntryStatus) (int, error) {
 	// 用户凭据最后合并(覆盖 mcp.json 同名 env / 替换 ${CRED:NAME}),凭据改了无需重新 Load。
 	spec, missing := applyCredentials(entry.Spec, r.credentialsSnapshot())
 	if len(missing) > 0 {
 		// 缺凭据属于 auth 类失败:UI 据此亮"去授权",而不是让用户去查网络。
-		return missingCredsError(missing)
+		return 0, missingCredsError(missing)
 	}
 	tr, err := buildTransport(spec)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// MCP 握手:initialize → notifications/initialized → tools/list。
@@ -139,7 +178,7 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) error {
 	}
 	if _, err := tr.Send(ctx, initReq); err != nil {
 		tr.Close()
-		return fmt.Errorf("initialize: %w", err)
+		return 0, fmt.Errorf("initialize: %w", err)
 	}
 	// initialized 通知(无响应,Send 不等待)。
 	_, _ = tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "notifications/initialized"})
@@ -148,28 +187,74 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) error {
 	resp, err := tr.Send(ctx, toolsReq)
 	if err != nil {
 		tr.Close()
-		return fmt.Errorf("tools/list: %w", err)
+		return 0, fmt.Errorf("tools/list: %w", err)
 	}
 	if resp.Error != nil {
 		tr.Close()
-		return fmt.Errorf("tools/list error: %s", resp.Error.Message)
+		return 0, fmt.Errorf("tools/list error: %s", resp.Error.Message)
 	}
 	var res struct {
 		Tools []mcp.Tool `json:"tools"`
 	}
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		tr.Close()
-		return fmt.Errorf("parse tools: %w", err)
+		return 0, fmt.Errorf("parse tools: %w", err)
 	}
 
+	// 连接表与条目状态在同一把锁内更新：状态会被 HTTP handler（插件列表、
+	// 就绪检查）并发读取，而连接现在跑在后台 goroutine 里。
 	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		tr.Close()
+		return 0, fmt.Errorf("runtime stopped")
+	}
 	r.conns[entry.Name] = &connection{spec: entry.Spec, transport: tr, tools: res.Tools}
-	r.mu.Unlock()
 	entry.Connected = true
 	entry.ToolCount = len(res.Tools)
 	entry.Error = ""
 	entry.ErrorKind = ""
-	return nil
+	r.mu.Unlock()
+	return len(res.Tools), nil
+}
+
+// setEntryStatus 在锁内写条目状态（后台连接与 HTTP 读取并发）。
+func (r *Runtime) setEntryStatus(entry *MCPEntryStatus, connected bool, toolCount int, errMsg, errKind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry.Connected = connected
+	entry.ToolCount = toolCount
+	entry.Error = errMsg
+	entry.ErrorKind = errKind
+}
+
+// EntryStatuses 返回 MCP 条目状态的快照（含 Spec 的浅拷贝）。
+// 供 API / 摘要层读取：条目状态在后台连接期间持续变化，直接遍历
+// plugin.MCPServers 会跟写侧并发（-race 报 data race，UI 也可能读到半更新）。
+func (r *Runtime) EntryStatuses() []MCPEntryStatus {
+	if r == nil || r.plugin == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]MCPEntryStatus, len(r.plugin.MCPServers))
+	copy(out, r.plugin.MCPServers)
+	return out
+}
+
+// EntryStatus 返回单个条目的状态快照（锁内读）。
+func (r *Runtime) EntryStatus(name string) (MCPEntryStatus, bool) {
+	if r == nil || r.plugin == nil {
+		return MCPEntryStatus{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.plugin.MCPServers {
+		if r.plugin.MCPServers[i].Name == name {
+			return r.plugin.MCPServers[i], true
+		}
+	}
+	return MCPEntryStatus{}, false
 }
 
 // ReconnectEntry 断开并重连单个 MCP server 条目,成功后用新工具列表重注册。
@@ -203,8 +288,12 @@ func (r *Runtime) ReconnectEntry(serverName string) error {
 	}
 	// 静态校验失败的条目(mcp.json 配置本身不合法):没有可运行的 spec,
 	// 重连没有意义。区分依据:连接失败会带 ErrorKind 分类,静态错误不会。
-	if entry.Error != "" && entry.ErrorKind == "" && !entry.Connected {
-		return fmt.Errorf("entry %q failed static validation: %s", serverName, entry.Error)
+	// 状态字段在后台连接 goroutine 里也会写，读要走锁。
+	r.mu.RLock()
+	staticErr, staticKind, connected := entry.Error, entry.ErrorKind, entry.Connected
+	r.mu.RUnlock()
+	if staticErr != "" && staticKind == "" && !connected {
+		return fmt.Errorf("entry %q failed static validation: %s", serverName, staticErr)
 	}
 
 	// 重连前先注销旧工具:重连后 tools/list 可能返回不同集合,
@@ -213,10 +302,8 @@ func (r *Runtime) ReconnectEntry(serverName string) error {
 		r.UnregisterTools(reg)
 	}
 
-	if err := r.connectEntry(entry); err != nil {
-		entry.Connected = false
-		entry.Error = err.Error()
-		entry.ErrorKind = mcp.KindOf(err).String()
+	if _, err := r.connectEntry(entry); err != nil {
+		r.setEntryStatus(entry, false, 0, err.Error(), mcp.KindOf(err).String())
 		return err
 	}
 
@@ -231,6 +318,7 @@ func (r *Runtime) ReconnectEntry(serverName string) error {
 func (r *Runtime) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.stopped = true
 	for name, c := range r.conns {
 		_ = c.transport.Close()
 		delete(r.conns, name)

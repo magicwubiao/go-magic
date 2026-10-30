@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // loadAgentPlugins 加载默认扫描目录下的所有 Agent Plugins,启动 MCP 运行时,
@@ -19,7 +21,23 @@ import (
 // 返回 (manager, plugins):manager 用于后续 reload,plugins 用于 API 摘要。
 // 任何插件失败都不阻断整体加载(插件级失败隔离)。
 // 被禁用的插件(配置 AgentPlugins.Disabled)不启动 MCP、不注入 skills/tools。
+//
+// 这是"完整加载"版本,reload / install / enable 等生命周期接口用它——调用方
+// 需要在返回时插件工具已经可用。启动路径不走这里，见 loadAgentPluginsParsed
+// 与 startAgentPluginRuntimes 的拆分说明。
 func (s *Server) loadAgentPlugins() (*agentplugin.Manager, map[string]*agentplugin.ManagedPlugin) {
+	mgr, plugins := s.loadAgentPluginsParsed()
+	s.startAgentPluginRuntimes(plugins)
+	return mgr, plugins
+}
+
+// loadAgentPluginsParsed 只做磁盘解析与纯内存注入：扫描插件目录、读取
+// plugin.json / mcp.json / cli.json、注入 skills 与 CLI 工具。
+//
+// 不启动 MCP：连接要拉起子进程（npx 冷启动还要下载包）或做 HTTP 握手，
+// 单条上限 30s，多台串行累加会直接把端口监听推到几十秒之后。
+// 启动路径把这一步放后台，首个会话创建前再有界等待。
+func (s *Server) loadAgentPluginsParsed() (*agentplugin.Manager, map[string]*agentplugin.ManagedPlugin) {
 	_ = agentplugin.EnsureDefaultScanDir()
 
 	disabled := s.disabledAgentPlugins()
@@ -36,9 +54,6 @@ func (s *Server) loadAgentPlugins() (*agentplugin.Manager, map[string]*agentplug
 		}
 	}
 
-	// 启动 MCP 连接(单 server 失败仅记录,不阻塞;禁用插件跳过)。
-	agentplugin.StartAll(plugins)
-
 	// 注入 skills 到 skills 管理器(禁用插件跳过)。
 	if s.skillMgr != nil {
 		for _, g := range agentplugin.AllSkills(plugins) {
@@ -51,14 +66,32 @@ func (s *Server) loadAgentPlugins() (*agentplugin.Manager, map[string]*agentplug
 		}
 	}
 
-	// 注入 MCP tools 到工具注册表(*tool.Registry 满足 agentplugin.ToolRegistrar)。
+	// 插件自带的 CLI 连接器(cli.json 组件):CLI 无连接阶段,注册即生效。
 	if s.toolReg != nil {
-		agentplugin.RegisterAllTools(plugins, s.toolReg)
-		// 插件自带的 CLI 连接器(cli.json 组件):CLI 无连接阶段,注册即生效。
 		agentplugin.RegisterCLITools(plugins, s.toolReg, s.agentPluginCredentials)
 	}
 
 	return mgr, plugins
+}
+
+// startAgentPluginRuntimes 连接插件声明的 MCP server，并把发现的工具注册进
+// 工具注册表。连接失败只记在条目状态上，不影响其它条目与启动。
+//
+// 幂等性：Start 对已连接的条目会再连一次，因此本方法只在"刚解析完"或
+// "刚 reload 完"时调用，不要当成刷新接口用（刷新走 ReconnectEntry）。
+func (s *Server) startAgentPluginRuntimes(plugins map[string]*agentplugin.ManagedPlugin) {
+	if len(plugins) == 0 {
+		return
+	}
+	began := time.Now()
+	agentplugin.StartAll(plugins)
+	if s.toolReg != nil {
+		// 必须在 StartAll 之后：未连接的条目没有工具清单可注册。
+		agentplugin.RegisterAllTools(plugins, s.toolReg)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		log.Infof("[AgentPlugin] MCP runtimes ready in %v (plugins=%d)", elapsed.Round(time.Millisecond), len(plugins))
+	}
 }
 
 // disabledAgentPlugins 从配置读取被禁用的插件名集合。
@@ -207,7 +240,11 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 			jsonResponse(w, []map[string]any{})
 			return
 		}
-		jsonResponse(w, agentplugin.Summary(plugins))
+		list := agentplugin.Summary(plugins)
+		// 补 ready / blockers：缺凭据、命令没装这两类"启用也用不了"的状态
+		// 要在列表里就说清楚，而不是等用户点开详情看报错。
+		s.decoratePluginSummaries(list, plugins)
+		jsonResponse(w, list)
 		return
 	case rest == "reload" && r.Method == http.MethodPost:
 		s.reloadAgentPlugins(w, r)
@@ -217,6 +254,12 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 		return
 	case rest == "catalog/install" && r.Method == http.MethodPost:
 		s.installAgentPluginFromCatalog(w, r)
+		return
+	case rest == "cli/install" && r.Method == http.MethodPost:
+		s.handleCLIInstallStart(w, r)
+		return
+	case strings.HasPrefix(rest, "cli/install/"):
+		s.handleCLIInstallStatus(w, r, strings.TrimPrefix(rest, "cli/install/"))
 		return
 	case rest == "install" && r.Method == http.MethodPost:
 		s.installAgentPlugin(w, r)
@@ -236,6 +279,9 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 			return
 		case "credentials":
 			s.handlePluginCredentials(w, r, name)
+			return
+		case "credentials/auto":
+			s.handlePluginCredentialsAuto(w, r, name)
 			return
 		case "mcp":
 			// 形如 {name}/mcp/{server}/connect:重连插件的单个 MCP 条目。
@@ -417,6 +463,25 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 
+	// 启用前先看就绪度：缺凭据 / 命令没装时启用也一定调不通工具。
+	// 回 409 + blockers，前端据此弹"去授权 / 去安装 / 仍然启用"；
+	// 用户确认过就走 ?force=1 直接启用（比如命令会在下次终端会话里出现）。
+	if !disabled {
+		force := r.URL.Query().Get("force")
+		if force != "1" && force != "true" {
+			if blockers := s.pluginBlockers(name, plugins[name]); len(blockers) > 0 {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":    "plugin not ready",
+					"plugin":   name,
+					"blockers": blockers,
+				})
+				return
+			}
+		}
+	}
+
 	s.setPluginDisabled(name, disabled)
 
 	// 串行化停旧运行时并重载(禁用/启用需重建运行时、清理注入)。
@@ -544,6 +609,119 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+// handlePluginCredentialsAuto 自动授权：能探测到的凭据直接填好并立即生效。
+//
+//	POST /api/agent-plugins/{name}/credentials/auto
+//
+// 探测顺序：本机环境变量 → 常见别名（GITHUB_TOKEN ↔ GH_TOKEN …）→
+// 已登录的官方 CLI（gh auth token）→ 其他插件里填过的同名凭据。
+// 探测不到的 key 原样放在 missing 里，前端只为这几项弹表单——很多插件
+// 在这一步就是 0 项，用户一次都不用填。
+//
+// 安全：探测到的值只在服务端流转，响应里只有 key 与来源，没有值。
+func (s *Server) handlePluginCredentialsAuto(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.acquireServerMu("")
+	plugins := s.agentPlugins
+	s.releaseServerMu()
+	mp, ok := plugins[name]
+	if !ok || mp == nil || mp.Plugin == nil {
+		http.Error(w, "plugin not found", http.StatusNotFound)
+		return
+	}
+
+	stored := s.agentPluginCredentials(name)
+	keys := agentplugin.RequiredCredentialKeys(mp.Plugin)
+	missing := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if strings.TrimSpace(stored[k]) == "" {
+			missing = append(missing, k)
+		}
+	}
+
+	detected := agentplugin.DetectCredentials(missing)
+	reuse := s.credentialReuse(name)
+
+	merged := make(map[string]string, len(stored)+len(missing))
+	for k, v := range stored {
+		merged[k] = v
+	}
+	filled := make([]map[string]string, 0, len(missing))
+	for _, k := range missing {
+		if d, hit := detected[k]; hit && strings.TrimSpace(d.Value) != "" {
+			merged[k] = d.Value
+			filled = append(filled, map[string]string{"key": k, "source": d.Source})
+			continue
+		}
+		if v, src, hit := reuse(k); hit {
+			merged[k] = v
+			filled = append(filled, map[string]string{"key": k, "source": src})
+		}
+	}
+
+	entries := []map[string]any{}
+	if len(filled) > 0 {
+		if err := s.setPluginCredentials(name, merged); err != nil {
+			http.Error(w, "persist credentials: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if mp.Runtime != nil {
+			mp.Runtime.SetCredentials(merged)
+		}
+		entries = s.reconnectPluginEntries(mp)
+		// CLI 工具在注册时把凭据烘进连接器，改完必须重注册（与手动授权同路径）。
+		s.refreshPluginCLITools(name, mp)
+	}
+
+	rest := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if strings.TrimSpace(merged[k]) == "" {
+			rest = append(rest, k)
+		}
+	}
+	jsonResponse(w, map[string]any{
+		"ok":      true,
+		"plugin":  name,
+		"filled":  filled,
+		"missing": rest,
+		"entries": entries,
+	})
+}
+
+// credentialReuse 返回"其他插件填过的同名凭据"的查找函数。
+//
+// 同一个 token 经常被多个插件共用（GitHub 的 MCP 插件与 gh CLI 插件都要
+// GITHUB_TOKEN），填过一次就不该再填第二次。按 key 全名匹配，不做模糊映射。
+func (s *Server) credentialReuse(self string) func(key string) (string, string, bool) {
+	type hit struct{ plugin, value string }
+	pool := map[string]hit{}
+	if cfg := s.cfgSnapshot(); cfg != nil {
+		for pname, creds := range cfg.AgentPlugins.Credentials {
+			if pname == self {
+				continue
+			}
+			for k, v := range creds {
+				if strings.TrimSpace(v) == "" {
+					continue
+				}
+				if _, exists := pool[k]; !exists {
+					pool[k] = hit{plugin: pname, value: v}
+				}
+			}
+		}
+	}
+	return func(key string) (string, string, bool) {
+		h, ok := pool[key]
+		if !ok {
+			return "", "", false
+		}
+		return h.value, "plugin:" + h.plugin, true
+	}
+}
+
 // handlePluginServerConnect 重连插件的单个 MCP 条目(凭据之外的"重试"入口)。
 func (s *Server) handlePluginServerConnect(w http.ResponseWriter, r *http.Request, name, server string) {
 	s.acquireServerMu("")
@@ -591,12 +769,19 @@ func (s *Server) reconnectPluginEntries(mp *agentplugin.ManagedPlugin) []map[str
 		return nil
 	}
 	out := make([]map[string]any, 0, len(mp.Plugin.MCPServers))
-	for _, ms := range mp.Plugin.MCPServers {
+	statuses := mp.Runtime.EntryStatuses()
+	for _, ms := range statuses {
 		err := mp.Runtime.ReconnectEntry(ms.Name)
-		item := map[string]any{"name": ms.Name, "ok": err == nil, "connected": ms.Connected}
+		item := map[string]any{"name": ms.Name, "ok": err == nil}
+		// 重连后状态从锁内快照取：连接在别的 goroutine 里也可能改这些字段。
+		if st, ok := mp.Runtime.EntryStatus(ms.Name); ok {
+			item["connected"] = st.Connected
+			if err != nil {
+				item["error_kind"] = st.ErrorKind
+			}
+		}
 		if err != nil {
 			item["error"] = err.Error()
-			item["error_kind"] = ms.ErrorKind
 		}
 		out = append(out, item)
 	}
