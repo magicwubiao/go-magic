@@ -1,11 +1,13 @@
 package agentplugin
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
@@ -175,6 +177,7 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 			"rejected":     p.IsRejected(),
 			"fatal_error":  p.FatalError,
 			"mcp_disabled": p.MCPDisabled,
+			"cli_disabled": p.CLIDisabled,
 			"enabled":      !mp.Disabled,
 			"warnings":     p.Warnings,
 		}
@@ -205,6 +208,25 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 			})
 		}
 		entry["mcp_servers"] = mcpEntries
+
+		// CLI 组件：只回显声明与校验结果，工具清单由工具名推导，
+		// 不依赖运行时状态（CLI 没有连接这一层）。
+		cliEntries := make([]map[string]any, 0, len(p.CLIConnectors))
+		for _, cs := range p.CLIConnectors {
+			names := make([]string, 0, len(cs.Connector.Tools))
+			for _, spec := range cs.Connector.Tools {
+				names = append(names, fmt.Sprintf("ap_%s_%s", name, cliconn.ToolName(cs.Name, spec.Name)))
+			}
+			sort.Strings(names)
+			cliEntries = append(cliEntries, map[string]any{
+				"name":         cs.Name,
+				"command":      cs.Connector.Command,
+				"error":        cs.Error,
+				"tools":        names,
+				"required_env": envPlaceholderKeys(cs.Connector.Env),
+			})
+		}
+		entry["cli_connectors"] = cliEntries
 		out = append(out, entry)
 	}
 	sort.Slice(out, func(i, j int) bool {

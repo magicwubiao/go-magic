@@ -13,6 +13,18 @@ export interface AgentPluginMCPEntry {
   required_env?: string[]
 }
 
+// 插件内 cli.json 声明的 CLI 连接器(本实现的扩展组件,无连接阶段)。
+export interface AgentPluginCLIEntry {
+  name: string
+  command: string
+  /** 静态校验失败原因;非空表示该连接器不生效 */
+  error?: string
+  /** 已注册的工具名(ap_<plugin>_cli_<connector>_<tool>) */
+  tools: string[]
+  /** env 中留空的键,即需要用户填写的凭据占位 */
+  required_env?: string[]
+}
+
 export interface AgentPlugin {
   name: string
   root: string
@@ -22,10 +34,13 @@ export interface AgentPlugin {
   rejected: boolean
   fatal_error?: string
   mcp_disabled: boolean
+  /** cli.json 整个组件被禁用(文件损坏/版本不匹配) */
+  cli_disabled?: boolean
   enabled: boolean
   warnings: string[]
   skills: string[]
   mcp_servers: AgentPluginMCPEntry[]
+  cli_connectors?: AgentPluginCLIEntry[]
   // manifest 可选字段:图标(插件内相对路径)与示例问法。
   icon?: string
   examples?: string[]

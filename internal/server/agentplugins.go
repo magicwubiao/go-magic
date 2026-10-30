@@ -55,6 +55,8 @@ func (s *Server) loadAgentPlugins() (*agentplugin.Manager, map[string]*agentplug
 	// 注入 MCP tools 到工具注册表(*tool.Registry 满足 agentplugin.ToolRegistrar)。
 	if s.toolReg != nil {
 		agentplugin.RegisterAllTools(plugins, s.toolReg)
+		// 插件自带的 CLI 连接器(cli.json 组件):CLI 无连接阶段,注册即生效。
+		agentplugin.RegisterCLITools(plugins, s.toolReg, s.agentPluginCredentials)
 	}
 
 	return mgr, plugins
@@ -165,6 +167,8 @@ func (s *Server) loadAndSwapLocked() map[string]*agentplugin.ManagedPlugin {
 func (s *Server) unregisterAgentPluginArtifacts(plugins map[string]*agentplugin.ManagedPlugin) {
 	if s.toolReg != nil {
 		agentplugin.UnregisterAllTools(plugins, s.toolReg)
+		// CLI 工具名可由插件定义直接推导,不需要运行时状态,单独清理一次。
+		agentplugin.UnregisterCLITools(plugins, s.toolReg)
 	}
 	if s.skillMgr != nil {
 		for _, mp := range plugins {
@@ -457,6 +461,19 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 			sort.Strings(keys)
 			required[ms.Name] = keys
 		}
+		// CLI 组件的凭据占位用 "cli:<connector>" 作分组键:
+		// 与 MCP 条目同名时会覆盖后者的表单分组,前缀把两类分开。
+		for _, cs := range mp.Plugin.CLIConnectors {
+			keys := agentplugin.RequiredCLIEnv(cs.Connector)
+			for _, k := range keys {
+				if _, seen := env[k]; !seen {
+					env[k] = ""
+				}
+			}
+			if len(keys) > 0 {
+				required["cli:"+cs.Name] = keys
+			}
+		}
 		jsonResponse(w, map[string]any{
 			"plugin":       name,
 			"env":          env,
@@ -506,6 +523,9 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 			mp.Runtime.SetCredentials(merged)
 		}
 		results := s.reconnectPluginEntries(mp)
+		// CLI 工具在注册时就把凭据烘进连接器配置了(不像 MCP 每次连接才合并),
+		// 所以改完凭据必须重注册一遍,否则新 token 要等重启才生效。
+		s.refreshPluginCLITools(name, mp)
 
 		jsonResponse(w, map[string]any{
 			"ok":      true,
@@ -576,6 +596,25 @@ func (s *Server) reconnectPluginEntries(mp *agentplugin.ManagedPlugin) []map[str
 		out = append(out, item)
 	}
 	return out
+}
+
+// refreshPluginCLITools 用最新凭据重注册某个插件的 CLI 工具。
+//
+// 凭据在注册时被填进连接器配置(cliconn.Tool 构造时值拷贝),
+// 与 MCP 的"每次连接才合并"不同,所以凭据变更必须重注册。
+// 凭据快照在持 s.mu 之前取:cfgSnapshot 走 cfgMu,持 s.mu 再进它是反序。
+func (s *Server) refreshPluginCLITools(pluginName string, mp *agentplugin.ManagedPlugin) {
+	if s.toolReg == nil || mp == nil || mp.Plugin == nil {
+		return
+	}
+	creds := s.agentPluginCredentials(pluginName)
+	one := map[string]*agentplugin.ManagedPlugin{pluginName: mp}
+
+	s.acquireServerMu("refreshPluginCLITools")
+	defer s.releaseServerMu()
+
+	agentplugin.UnregisterCLITools(one, s.toolReg)
+	agentplugin.RegisterCLITools(one, s.toolReg, func(string) map[string]string { return creds })
 }
 
 // allowedIconExts 是可作插件图标的扩展名白名单:严格限定,防止借 icon 路径

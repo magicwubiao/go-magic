@@ -1305,6 +1305,24 @@ After installing, the entry is **self-checked on the spot**: besides the version
 
 On the command line, `magic cli list` shows the configured connectors and the expanded tool names (`cli_<connector>_<tool>`) — the fastest way to answer "why can't the model see this tool".
 
+**The fastest way to add one is to paste the command** (same parser as the web quick-import):
+
+```bash
+# one command line -> one tool; parameter types inferred from the sample values
+magic cli add "gh pr list --state open --limit 20 --json" --read-only
+
+# a second subcommand of the same program merges into the same connector
+magic cli add "gh pr view <NUMBER> --json title,state" --name gh
+
+# print the result without saving; or replace an existing tool
+magic cli add "docker ps -a --format {{format}}" --dry-run
+magic cli add "docker ps -a" --force
+
+magic cli remove gh      # delete the whole connector (and its tools)
+```
+
+`--read-only` marks the command as read-only (skips approval), `--timeout` overrides the timeout, `--tool` / `--name` / `--desc` override the derived names.
+
 Two template forms:
 
 | Template | Meaning |
@@ -1328,57 +1346,133 @@ DELETE /api/cli/connectors/{name}   delete
 POST   /api/cli/test                dry run (not saved)
 ```
 
-### 15.4 Plugins (plugin.json)
+### 15.4 Plugins (Agent Plugins)
 
-A plugin is not a new runtime concept — it is **a manifest** that bundles skills, CLI connectors and MCP servers so one install writes all of them into `config.json`. Afterwards they go through the exact same registration and connection paths as anything else.
+A plugin is not a new runtime concept: a plugin is a **directory** holding skills, MCP servers and CLI connectors, all of which go through the existing registration paths once loaded. This implementation follows the [Agent Plugins 1.0.0](https://agent-plugins.org) spec.
 
-Drop it at `<magicHome>/plugins/<name>/plugin.json` (single-level scan, no recursion):
+```
+<magicHome>/agent-plugins/<dir>/
+  plugin.json          # required ($schema + name)
+  skills/<name>/SKILL.md
+  mcp.json             # optional
+  cli.json             # optional (extension of this implementation; other clients ignore it)
+```
 
-```jsonc
+`plugin.json` carries metadata only; components are discovered at fixed locations:
+
+```json
 {
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "github-workflow",
   "version": "1.0.0",
   "description": "PR review helpers",
+  "examples": ["Show me the PRs waiting for review"]
+}
+```
+
+`cli.json` uses exactly the same shape as `cli.connectors` in `config.json`, so you can copy a block across:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "connectors": {
     "gh": {
       "command": "gh",
-      "env": ["GH_TOKEN=${GH_TOKEN}"],
+      "env": ["GH_TOKEN="],
       "tools": [
-        {"name": "pr_list", "description": "List PRs", "args": ["pr", "list", "--limit", "{{limit}}"],
-         "read_only": true, "params": [{"name": "limit", "type": "integer", "default": 20}]}
+        {"name": "pr_list", "description": "List PRs", "read_only": true,
+         "args": ["pr", "list", "--limit", "{{limit}}"],
+         "params": [{"name": "limit", "type": "integer", "default": 20}]}
       ]
     }
-  },
-  "mcp_servers": {
-    "docs": {"url": "https://example.com/mcp", "transport": "http", "lazy": true}
-  },
-  "skills": ["pr-review"],
-  "requires_env": ["GH_TOKEN"]
+  }
 }
 ```
 
 ```bash
-magic plugin list                  # installed + discoverable
-magic plugin install <path|name>    # install (--force overwrites existing connectors)
-magic plugin remove <name>          # uninstall
+magic plugin list                      # name/version/status/skills/mcp/cli
+magic plugin install ./my-plugin       # a directory (dev) or a .zip (distribution)
+magic plugin install ./my-plugin.zip --name my-plugin
+magic plugin disable github-workflow   # keep the directory, inject nothing
+magic plugin enable  github-workflow
+magic plugin remove  github-workflow   # directory + data dir
 ```
 
+The Plugins page does the same thing in the browser: upload a zip, enable/disable, uninstall, fill in credentials, reconnect a single MCP entry.
+
 ```
-GET    /api/plugins                list (with conflicts / missing_env / missing_skills)
-POST   /api/plugins/install        install {"name"|"path", "overwrite"}
-DELETE /api/plugins/{name}         uninstall
+GET    /api/agent-plugins                        summary (incl. cli_connectors / warnings)
+POST   /api/agent-plugins/install                upload a zip
+POST   /api/agent-plugins/reload                 rescan
+POST   /api/agent-plugins/{name}/uninstall|enable|disable
+GET    /api/agent-plugins/{name}/credentials     credentials (*** masked)
+POST   /api/agent-plugins/{name}/credentials     save + reconnect
+POST   /api/agent-plugins/{name}/mcp/{server}/connect
 ```
 
-Rules:
+Conventions:
 
-- **No silent overwrite**: a connector whose name already exists returns 409 unless `overwrite` is set.
-- **No secrets on disk**: `requires_env` declares what the user must provide; configs may only hold `${ENV}` references.
-- **Uninstall only removes what the plugin wrote**: connectors you have edited since are kept, and listed as `kept` in the output.
-- **Unknown manifest fields are a hard error**: `connector` instead of `connectors` fails immediately instead of "installed but nothing happened".
-- No remote marketplace, version resolution or signature checks — without distribution infrastructure those would only be half-built.
+- **Tool names carry two prefixes**: MCP is `ap_<plugin>_<server>_<tool>`, CLI is `ap_<plugin>_cli_<connector>_<tool>`. A global `gh` connector and a plugin that also ships a `gh` tool can coexist.
+- **Failure isolation**: a bad skill is skipped; an unreachable MCP entry is marked and the rest keeps working; a broken `cli.json` only disables the CLI component; only a fatal `plugin.json` violation rejects the whole plugin.
+- **Credentials never hit disk in plaintext**: an empty env value in `mcp.json` / `cli.json` marks "ask the user"; the value is stored in `agent_plugins.credentials` in `config.json` and echoed as `***` by every API. Saving credentials re-registers CLI tools immediately (credentials are baked in at registration time).
+- **Disabled means not injected**: a disabled plugin is still listed, but neither its skills nor its tools are registered.
+- No remote marketplace / version resolution / signatures: without distribution infrastructure that would only be half a feature.
+
+### 15.5 Reverse MCP: use magic as a tool
+
+Everything above is magic connecting out. It also works the other way — expose the local agent as a stdio MCP server, so another client (Claude Desktop, an IDE, another go-magic) treats the whole machine as one tool:
+
+```bash
+magic mcp-server --cwd /path/to/project --approval deny --timeout 1800
+```
+
+Client config:
+
+```json
+{"mcpServers": {"magic": {"command": "magic", "args": ["mcp-server", "--cwd", "/path/to/project"]}}}
+```
+
+It exposes **two tools**, instead of mapping `read_file` / `execute_command` one by one:
+
+| Tool | Arguments | What it does |
+| --- | --- | --- |
+| `magic` | `prompt`, `approval` | Start a thread; returns the final answer plus `_meta.thread_id` |
+| `magic_reply` | `thread_id`, `prompt` | Continue an existing thread |
+
+Design notes:
+
+- **Deliberately tiny tool surface**: the caller's model only decides "should I hand this to magic", not which of forty tools to pick; turn semantics (multi-round, tool loop, approvals) stay inside this process.
+- **Approval denies by default**: nobody is on the other end of a stdio pipe, so tools that need confirmation are refused with a message telling the caller to retry with `approval: "allow"`. Fail-closed, same rule as the unattended gateway.
+- **stdout is protocol only**: all logging goes to stderr; a single stray line breaks the client's parser.
+- **One working directory per instance**: the tool registry (including connectors) is a process-wide singleton, so run another instance for another directory rather than sharing file tools between sessions.
+
+### 15.6 Connector allowlist (policy)
+
+Every configuration above assumes whoever edits `config.json` is trusted. As soon as configs can come from elsewhere (imports, plugins, scripts), you want one lock that is independent of connector type:
+
+```jsonc
+"policy": {
+  "enforce": true,
+  "mcp_allowed_hosts": ["*.example.com", "api.internal:8443"],
+  "mcp_allowed_commands": ["npx", "/usr/local/bin/my-server"],
+  "cli_allowed_commands": ["gh", "git", "jq"]
+}
+```
+
+- `enforce: false` (default) allows everything — a single-user machine should not be in the way.
+- `enforce: true` with an empty list for a category means **that category is entirely denied**. An empty list is too easy to read as "nothing configured"; the safe default can only be deny.
+- `*` in a list explicitly opens that category.
+- `*.example.com` matches subdomains only, **not** the bare `example.com` (add a separate entry if you want it).
+- Commands match by basename, so `/opt/homebrew/bin/npx` is the same as `npx`; on Windows the `.exe/.cmd/.bat` suffix is ignored.
+
+Two enforcement points, both single choke points that no new path can bypass:
+
+| Type | Choke point | Observable effect |
+| --- | --- | --- |
+| MCP | `Manager.connect()` (including lazy retries) | connection fails; the error shows on that server's state |
+| CLI | tool enumeration in `ToolsForProfile` | blocked connectors register no tools; `magic cli list` prints a separate "Blocked by policy" section |
 
 ---
-
 ## 16. Scheduled Tasks (Cron)
 
 ```bash

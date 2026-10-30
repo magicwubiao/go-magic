@@ -98,6 +98,19 @@ func Load(pluginRoot, dataDir string) *Plugin {
 		}
 	}
 
+	// 4. 加载 cli.json(可选扩展组件,顶层级边界)。
+	cliCfg, cliErr := loadCLIConfig(resolvedRoot, manifest.Schema)
+	switch {
+	case cliErr != nil:
+		// 顶层 cli.json 无效 → 整个 CLI 组件禁用,skills/MCP 不受影响。
+		plugin.CLIDisabled = true
+		plugin.Warnings = append(plugin.Warnings, fmt.Sprintf("CLI disabled: %v", cliErr))
+	case cliCfg == nil:
+		// 缺失:无 CLI 组件。
+	default:
+		plugin.CLIConnectors = buildCLIEntries(cliCfg)
+	}
+
 	return plugin
 }
 

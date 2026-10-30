@@ -114,8 +114,13 @@ type Plugin struct {
 	MCPServers []MCPEntryStatus // MCP 连接状态
 	Extensions map[string]any   // 已识别的扩展命名空间数据(未实现的命名空间已忽略)
 
+	// CLIConnectors 是 cli.json 声明的 CLI 连接器(本实现的可选扩展组件)。
+	// CLI 是无状态的:没有"连接"这一步,工具在注册时即生效。
+	CLIConnectors []CLIConnectorStatus
+
 	// 加载报告
 	MCPDisabled   bool     // 顶层 mcp.json 无效时整个 MCP 被禁用
+	CLIDisabled   bool     // 顶层 cli.json 无效时整个 CLI 组件被禁用
 	ManifestValid bool     // 清单是否通过校验
 	FatalError    string   // 致命错误(非空时插件被拒绝,仅 Root/Manifest 可用)
 	Warnings      []string // 非致命报告(unknown 字段、非 object extensions、跳过的 skill 等)

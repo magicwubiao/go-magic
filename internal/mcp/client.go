@@ -279,6 +279,9 @@ type Manager struct {
 	healthStop chan struct{}
 	healthOnce sync.Once
 
+	// securityCheck 是准入白名单钩子（nil = 全部放行），见 SetSecurityCheck。
+	securityCheck SecurityCheck
+
 	// deferred 是"懒连接"的 server 配置：启动时不连，只登记，首次调用时补连。
 	deferred map[string]ServerConfig
 	// cached 是磁盘缓存下来的工具清单，供给懒连接的影子工具。
@@ -466,6 +469,13 @@ func (m *Manager) connect(name string, config ServerConfig) error {
 		return fmt.Errorf("MCP server '%s' already connected", name)
 	}
 
+	// 准入校验放在 connect 这个唯一收口：ConnectStdio / ConnectSSE / 懒连接重试
+	// 都从这里进，任何一条新路径都不会绕过它。
+	if err := m.checkSecurity(name, config); err != nil {
+		m.recordFailure(name, err)
+		return err
+	}
+
 	client, err := m.buildClient(name, config)
 	if err != nil {
 		m.recordFailure(name, err)
@@ -650,6 +660,30 @@ func (m *Manager) ConnectSSE(name string, config ServerConfig) error {
 		config.Transport = TransportSSE
 	}
 	return m.connect(name, config)
+}
+
+// SecurityCheck 在真正建立连接前做准入判定，返回 error 表示拒绝。
+//
+// 用回调而不是直接依赖 pkg/policy：internal/mcp 只依赖 pkg/log，
+// 引入配置层的类型会把它和 pkg/config 绑成环（config 已经 import 本包）。
+type SecurityCheck func(name string, cfg ServerConfig) error
+
+// SetSecurityCheck 注入准入校验（nil = 不校验）。
+func (m *Manager) SetSecurityCheck(fn SecurityCheck) {
+	m.mu.Lock()
+	m.securityCheck = fn
+	m.mu.Unlock()
+}
+
+// checkSecurity 读取并执行准入校验。
+func (m *Manager) checkSecurity(name string, cfg ServerConfig) error {
+	m.mu.RLock()
+	fn := m.securityCheck
+	m.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(name, cfg)
 }
 
 // Disconnect disconnects an MCP server.

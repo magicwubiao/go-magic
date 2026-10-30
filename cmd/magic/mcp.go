@@ -15,6 +15,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/mcpbridge"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/policy"
 )
 
 // newMCPManager 构造 CLI 用的 Manager，并注入与网关同一份 OAuth token 存储。
@@ -33,7 +34,25 @@ func newMCPManager() *mcp.Manager {
 	if err := mgr.SetToolCachePath(filepath.Join(config.GetMagicHome(), "mcp", "tool_cache.json")); err != nil {
 		fmt.Fprintf(os.Stderr, "[MCP] tool cache init failed (lazy servers will connect eagerly): %v\n", err)
 	}
+	// 准入白名单与网页端同源（config.json 的 policy 段）：CLI 侧不能成为
+	// "绕开企业策略连任意 server"的后门。CLI 是一次性进程，装载时读一次即可。
+	pol := mcpPolicySnapshot()
+	mgr.SetSecurityCheck(func(name string, cfg mcp.ServerConfig) error {
+		return pol.CheckMCP(name, cfg.Command, cfg.URL)
+	})
 	return mgr
+}
+
+// mcpPolicySnapshot 读一次配置里的准入白名单；读不到时返回零值（= 不限制）。
+func mcpPolicySnapshot() *policy.Policy {
+	loaded, err := config.Load()
+	if err != nil && err != config.ErrNoConfig {
+		return nil
+	}
+	if loaded == nil {
+		return nil
+	}
+	return &loaded.Policy
 }
 
 var mcpCmd = &cobra.Command{

@@ -1283,6 +1283,24 @@ magic acp disconnect helper
 
 命令行侧可以用 `magic cli list` 查看已配置的连接器与展开后的工具名（`cli_<connector>_<tool>`），排查"模型为什么看不到某个工具"时最直接。
 
+**最快的添加方式是把命令直接贴进去**——解析器和网页「快速导入」是同一个：
+
+```bash
+# 一条命令 → 一个工具，参数按示例值推断类型
+magic cli add "gh pr list --state open --limit 20 --json" --read-only
+
+# 同一个程序的第二条子命令会合并进同一个连接器
+magic cli add "gh pr view <NUMBER> --json title,state" --name gh
+
+# 只看结果不落盘；或者替换同名工具
+magic cli add "docker ps -a --format {{format}}" --dry-run
+magic cli add "docker ps -a" --force
+
+magic cli remove gh      # 删整个连接器（连同它下面的工具）
+```
+
+`--read-only` 表示这条命令只读（免审批），`--timeout` 覆盖超时，`--tool` / `--name` / `--desc` 覆盖自动推导的名字与描述。
+
 参数模板的两种写法：
 
 | 模板 | 含义 |
@@ -1306,57 +1324,133 @@ DELETE /api/cli/connectors/{name}   删除
 POST   /api/cli/test                试跑一次（不保存）
 ```
 
-### 15.4 插件（plugin.json）
+### 15.4 插件（Agent Plugins）
 
-插件不是新的运行时概念，只是**一份清单**：把技能、CLI 连接器、MCP server 打包，一次安装写进 `config.json`。安装完它们仍然走各自既有的注册/连接路径。
+插件不是新的运行时概念：一个插件就是一个**目录**，里面装技能、MCP server、CLI 连接器，加载后走各自既有的注册路径。本实现遵循 [Agent Plugins 1.0.0](https://agent-plugins.org) 规范。
 
-放进 `<magicHome>/plugins/<name>/plugin.json` 即可被发现（单层扫描，不递归）：
+```
+<magicHome>/agent-plugins/<dir>/
+  plugin.json          # 必须（$schema + name）
+  skills/<name>/SKILL.md
+  mcp.json             # 可选
+  cli.json             # 可选（本实现的扩展组件，其他客户端会忽略）
+```
 
-```jsonc
+`plugin.json` 只放元数据，组件按固定位置发现：
+
+```json
 {
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "github-workflow",
   "version": "1.0.0",
   "description": "PR review helpers",
+  "examples": ["帮我看看有哪些待审的 PR"]
+}
+```
+
+`cli.json` 的结构与 `config.json` 的 `cli.connectors` 完全一致，因此可以直接从现有配置里复制一段过来：
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "connectors": {
     "gh": {
       "command": "gh",
-      "env": ["GH_TOKEN=${GH_TOKEN}"],
+      "env": ["GH_TOKEN="],
       "tools": [
-        {"name": "pr_list", "description": "List PRs", "args": ["pr", "list", "--limit", "{{limit}}"],
-         "read_only": true, "params": [{"name": "limit", "type": "integer", "default": 20}]}
+        {"name": "pr_list", "description": "List PRs", "read_only": true,
+         "args": ["pr", "list", "--limit", "{{limit}}"],
+         "params": [{"name": "limit", "type": "integer", "default": 20}]}
       ]
     }
-  },
-  "mcp_servers": {
-    "docs": {"url": "https://example.com/mcp", "transport": "http", "lazy": true}
-  },
-  "skills": ["pr-review"],
-  "requires_env": ["GH_TOKEN"]
+  }
 }
 ```
 
 ```bash
-magic plugin list                 # 已安装 + 目录里可安装的
-magic plugin install <path|name>   # 安装（--force 覆盖同名连接器）
-magic plugin remove <name>         # 卸载
+magic plugin list                      # 名称/版本/状态/技能数/MCP/CLI
+magic plugin install ./my-plugin       # 目录（开发用）或 .zip（分发用）
+magic plugin install ./my-plugin.zip --name my-plugin
+magic plugin disable github-workflow   # 保留目录，不注入技能与工具
+magic plugin enable  github-workflow
+magic plugin remove  github-workflow   # 删目录 + 数据目录
 ```
 
+网页「插件」页做同样的事：上传 zip、启用/禁用、卸载、填凭据、单独重连某个 MCP 条目。
+
 ```
-GET    /api/plugins                列表（含 conflicts / missing_env / missing_skills）
-POST   /api/plugins/install        安装 {"name"|"path", "overwrite"}
-DELETE /api/plugins/{name}         卸载
+GET    /api/agent-plugins                        摘要（含 cli_connectors / warnings）
+POST   /api/agent-plugins/install                上传 zip
+POST   /api/agent-plugins/reload                 重新扫描
+POST   /api/agent-plugins/{name}/uninstall|enable|disable
+GET    /api/agent-plugins/{name}/credentials     凭据（*** 掩码）
+POST   /api/agent-plugins/{name}/credentials     保存并重连
+POST   /api/agent-plugins/{name}/mcp/{server}/connect
 ```
 
 约定：
 
-- **不覆盖**：清单里的连接器与现有配置重名时默认 409，要显式 `overwrite`。
-- **凭据不落盘**：`requires_env` 声明需要哪些变量，安装前检查；配置里只允许写 `${ENV}` 引用。
-- **卸载只删"还是插件当初写进去的那一份"**：用户改过的连接器会保留，并在响应/输出里列出 `kept`。
-- **清单未知字段直接报错**：作者把 `connectors` 写成 `connector` 时会立刻失败，而不是"装上了但什么都没生效"。
+- **工具名带两段前缀**：MCP 是 `ap_<plugin>_<server>_<tool>`，CLI 是 `ap_<plugin>_cli_<connector>_<tool>`。同一台机器上既装全局 `gh` 连接器、又装带 `gh` 工具的插件时不会撞名。
+- **失败隔离**：单个 skill 不合规只跳过它；单个 MCP 条目连不上只标该条；`cli.json` 损坏只关 CLI 组件；只有 `plugin.json` 致命违反才拒绝整个插件。
+- **凭据不落盘**：`mcp.json` / `cli.json` 里值为空的 env key 就是"需要用户填"的占位，填完存进 `config.json` 的 `agent_plugins.credentials`，接口一律 `***` 回显。改完凭据 CLI 工具会立刻重注册（凭据在注册时被烘进工具）。
+- **禁用即不注入**：禁用的插件仍会在列表里显示，但它的技能与工具既不会注册也不会出现。
 - 不做远端 marketplace / 版本解析 / 签名校验：没有分发基建时做这些只会是半成品。
 
----
+### 15.5 反向 MCP：把 magic 当工具用
 
+前面几节都是"magic 连别人"。反过来也可以——把本机 agent 暴露成一个 stdio MCP server，让别的客户端（Claude Desktop、IDE、另一个 go-magic）把整台机器的能力当成一个工具调用：
+
+```bash
+magic mcp-server --cwd /path/to/project --approval deny --timeout 1800
+```
+
+客户端配置：
+
+```json
+{"mcpServers": {"magic": {"command": "magic", "args": ["mcp-server", "--cwd", "/path/to/project"]}}}
+```
+
+它只暴露**两个工具**，而不是把 `read_file` / `execute_command` 逐个映射出去：
+
+| 工具 | 参数 | 说明 |
+| --- | --- | --- |
+| `magic` | `prompt`、`approval` | 开一个新会话，返回最终回答 + `_meta.thread_id` |
+| `magic_reply` | `thread_id`、`prompt` | 在既有会话里继续追问 |
+
+设计要点：
+
+- **工具面极窄**：调用方的模型只需判断"要不要把这件事交给 magic"，不用在几十个工具里挑；会话语义（多轮、工具循环、审批）全留在本进程内。
+- **审批默认拒绝**：stdio 管道上没有人可以问，需要人工确认的工具默认被拒，错误信息会提示"重试时传 `approval: "allow"`"。这是 fail-closed，与无人值守网关同一条原则。
+- **stdout 只走协议**：日志全部切到 stderr，一行杂讯就会让客户端解析失败。
+- **一个实例一个工作目录**：工具注册表（含各类连接器）是进程级单例，需要别的目录就再起一个实例，而不是让同一进程里两个会话共用一份文件工具。
+
+### 15.6 连接器准入白名单（policy）
+
+前面所有配置都假设"能改 `config.json` 的人是自己人"。一旦配置可能来自别人（导入、插件、脚本），就需要一道与连接器类型无关的锁：
+
+```jsonc
+"policy": {
+  "enforce": true,
+  "mcp_allowed_hosts": ["*.example.com", "api.internal:8443"],
+  "mcp_allowed_commands": ["npx", "/usr/local/bin/my-server"],
+  "cli_allowed_commands": ["gh", "git", "jq"]
+}
+```
+
+- `enforce: false`（默认）时全部放行——单机自用不该被这层挡路。
+- `enforce: true` 且某类名单为空 = **该类全部禁止**。空表最容易被误读成"没配置"，而安全默认只能是拒绝。
+- 名单里写 `*` = 显式放开该类全部。
+- `*.example.com` 只匹配子域，**不**匹配裸域 `example.com`（要裸域就再写一行）。
+- 命令按 basename 匹配，`/opt/homebrew/bin/npx` 与 `npx` 等价；Windows 上 `.exe/.cmd/.bat` 后缀会被忽略。
+
+生效位置有两个，都是"唯一收口"，任何新路径都绕不过去：
+
+| 类型 | 收口 | 表现 |
+| --- | --- | --- |
+| MCP | `Manager.connect()`（含懒连接重试） | 连接直接失败，错误进该 server 的状态 |
+| CLI | 工具枚举 `ToolsForProfile` | 被拒的连接器不注册工具；`magic cli list` 单独列出 "Blocked by policy" |
+
+---
 ## 16. 定时任务（Cron）
 
 ```bash

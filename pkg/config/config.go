@@ -14,6 +14,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/privacy"
 	"github.com/magicwubiao/go-magic/internal/voice"
 	"github.com/magicwubiao/go-magic/pkg/catalog"
+	"github.com/magicwubiao/go-magic/pkg/policy"
 )
 
 const (
@@ -111,9 +112,13 @@ type Config struct {
 	Tools        ToolsConfig               `json:"tools"`
 	Skills       SkillsConfig              `json:"skills"`
 	AgentPlugins AgentPluginsConfig        `json:"agent_plugins"`
-	Memory       MemoryConfig              `json:"memory"`
-	Gateway      GatewayConfig             `json:"gateway"`
-	Cortex       CortexConfig              `json:"cortex"`
+	// Policy 是连接器准入白名单（enforce=true 才生效）。
+	// 放在顶层而不是 mcp/cli 段里：它约束的是"能不能在这台机器上执行/连出去"，
+	// 与具体是哪种连接器无关，分两处配置必然会被改漏。
+	Policy  policy.Policy `json:"policy,omitempty"`
+	Memory  MemoryConfig  `json:"memory"`
+	Gateway GatewayConfig `json:"gateway"`
+	Cortex  CortexConfig  `json:"cortex"`
 	// Context：静态规则文件（AGENTS.md/CLAUDE.md/CONTEXT.md）自动加载。
 	// 指针类型：nil（未配置）= 默认开启；显式 "enabled": false 才关闭。
 	// 不用普通 bool 是因为 config.Load 对已存在的 config.json 直接反序列化

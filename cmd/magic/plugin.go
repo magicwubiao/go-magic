@@ -5,311 +5,261 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
-	"github.com/magicwubiao/go-magic/internal/cliconn"
-	"github.com/magicwubiao/go-magic/internal/mcp"
+	"github.com/magicwubiao/go-magic/internal/agentplugin"
 	"github.com/magicwubiao/go-magic/pkg/config"
-	"github.com/magicwubiao/go-magic/pkg/plugins"
 )
 
-// 插件（plugin.json）的命令行入口。
+// Agent Plugins 的命令行入口。
 //
-// 与 Web 的 /api/plugins 等价，只是不经 HTTP：CLI 直接读 config.json 写回，
-// 和 `magic mcp add` 同一条路径。两边都靠"配置是唯一真值"来保持一致。
+// 与 Web 的 /api/agent-plugins 面向同一份扫描目录与同一份配置：
+// 插件以目录形式落在 <magicHome>/agent-plugins/<dir>，启停状态记在
+// config.json 的 agent_plugins.disabled。这里不做另一套存储。
+//
+// 装插件=把目录放进扫描目录，卸插件=把目录删掉；不像"把连接器写进 config"
+// 那样需要回滚记录——插件是自包含的目录，删了就干净了。
 
 var pluginCmd = &cobra.Command{
 	Use:   "plugin",
-	Short: "Manage plugin manifests (skills + CLI connectors + MCP servers)",
+	Short: "Manage Agent Plugins (skills + mcp servers + cli connectors)",
 }
 
 var (
-	pluginInstallForce bool
+	pluginInstallName string
 
 	pluginListCmd = &cobra.Command{
 		Use:   "list",
-		Short: "List installed and discoverable plugins",
-		Run:   runPluginList,
+		Short: "List installed Agent Plugins",
+		RunE:  func(*cobra.Command, []string) error { return runPluginList() },
 	}
 
 	pluginInstallCmd = &cobra.Command{
-		Use:   "install <path-to-plugin.json|plugin-name>",
-		Short: "Install a plugin into config.json",
+		Use:   "install <dir|zip>",
+		Short: "Install a plugin from a local directory or zip archive",
 		Args:  cobra.ExactArgs(1),
-		Run:   runPluginInstall,
+		RunE:  func(_ *cobra.Command, args []string) error { return runPluginInstall(args[0]) },
 	}
 
 	pluginRemoveCmd = &cobra.Command{
 		Use:   "remove <name>",
-		Short: "Uninstall a plugin (keeps connectors you have edited)",
+		Short: "Uninstall a plugin (removes its directory and data dir)",
 		Args:  cobra.ExactArgs(1),
-		Run:   runPluginRemove,
+		RunE:  func(_ *cobra.Command, args []string) error { return runPluginRemove(args[0]) },
+	}
+
+	pluginEnableCmd = &cobra.Command{
+		Use:   "enable <name>",
+		Short: "Enable a plugin (clear it from agent_plugins.disabled)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(_ *cobra.Command, args []string) error { return setPluginEnabled(args[0], true) },
+	}
+
+	pluginDisableCmd = &cobra.Command{
+		Use:   "disable <name>",
+		Short: "Disable a plugin without removing it",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(_ *cobra.Command, args []string) error { return setPluginEnabled(args[0], false) },
 	}
 )
 
 func init() {
 	rootCmd.AddCommand(pluginCmd)
-	pluginCmd.AddCommand(pluginListCmd, pluginInstallCmd, pluginRemoveCmd)
-	pluginInstallCmd.Flags().BoolVarP(&pluginInstallForce, "force", "f", false, "overwrite connectors that already exist")
+	pluginCmd.AddCommand(pluginListCmd, pluginInstallCmd, pluginRemoveCmd, pluginEnableCmd, pluginDisableCmd)
+	pluginInstallCmd.Flags().StringVar(&pluginInstallName, "name", "", "directory name under the plugin scan dir (default: manifest name)")
 }
 
-func pluginDir() string { return filepath.Join(config.GetMagicHome(), "plugins") }
-
-func pluginStore() *plugins.Store {
-	return plugins.NewStore(filepath.Join(pluginDir(), "installed.json"))
+// loadAgentPluginsFromDisk 扫描默认目录，返回按名单索引的已加载插件。
+func loadAgentPluginsFromDisk() map[string]*agentplugin.ManagedPlugin {
+	_ = agentplugin.EnsureDefaultScanDir()
+	cfg, err := config.Load()
+	if err != nil && !errors.Is(err, config.ErrNoConfig) {
+		fmt.Fprintf(os.Stderr, "warning: failed to load config (disabled list ignored): %v\n", err)
+	}
+	disabled := map[string]bool{}
+	if cfg != nil {
+		for _, name := range cfg.AgentPlugins.Disabled {
+			disabled[name] = true
+		}
+	}
+	return agentplugin.NewManager([]string{agentplugin.DefaultScanDir()}, disabled).LoadAll()
 }
 
-func runPluginList(cmd *cobra.Command, args []string) {
-	store := pluginStore()
-	records, err := store.List()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read installed plugins: %v\n", err)
-		os.Exit(1)
-	}
-	discovered, errs := plugins.Discover(pluginDir())
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+func runPluginList() error {
+	plugins := loadAgentPluginsFromDisk()
+	if len(plugins) == 0 {
+		fmt.Printf("No plugins installed under %s\n", agentplugin.DefaultScanDir())
+		fmt.Println("Install one with: magic plugin install ./my-plugin")
+		return nil
 	}
 
-	installed := make(map[string]bool, len(records))
-	for _, r := range records {
-		installed[r.Name] = true
+	names := make([]string, 0, len(plugins))
+	for name := range plugins {
+		names = append(names, name)
 	}
-
-	if len(discovered) == 0 && len(records) == 0 {
-		fmt.Printf("No plugins found under %s\n", pluginDir())
-		fmt.Println("Drop a <name>/plugin.json there, or install one from a path:")
-		fmt.Println("  magic plugin install ./my-plugin/plugin.json")
-		return
-	}
+	sort.Strings(names)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tVERSION\tINSTALLED\tCONNECTORS\tSKILLS")
-	for _, m := range discovered {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\n", m.Name, dash(m.Version), yesNo(installed[m.Name]),
-			len(m.Connectors)+len(m.MCPServers), len(m.Skills))
-	}
-	for _, r := range records {
-		if hasManifest(discovered, r.Name) {
-			continue
+	fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tSKILLS\tMCP\tCLI")
+	for _, name := range names {
+		mp := plugins[name]
+		p := mp.Plugin
+		status := "ok"
+		switch {
+		case p.IsRejected():
+			status = "rejected"
+		case mp.Disabled:
+			status = "disabled"
 		}
-		fmt.Fprintf(w, "%s\t%s\tinstalled (manifest missing)\t%d\t%d\n",
-			r.Name, dash(r.Version), len(r.Connectors)+len(r.MCPServers), len(r.Skills))
+		version := "-"
+		if p.Manifest != nil && strings.TrimSpace(p.Manifest.Version) != "" {
+			version = p.Manifest.Version
+		}
+		skills := 0
+		for _, ref := range p.Skills {
+			if ref.Skill != nil {
+				skills++
+			}
+		}
+		cliTools := 0
+		for _, cs := range p.CLIConnectors {
+			if cs.Error == "" {
+				cliTools += len(cs.Connector.Tools)
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\n", name, version, status, skills, len(p.MCPServers), cliTools)
 	}
 	w.Flush()
-}
 
-func runPluginInstall(cmd *cobra.Command, args []string) {
-	target := strings.TrimSpace(args[0])
-
-	manifest, err := resolvePluginCLI(target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
-	}
-	if missing := manifest.MissingEnv(); len(missing) > 0 {
-		fmt.Fprintf(os.Stderr, "environment variable(s) not set: %s\n", strings.Join(missing, ", "))
-		fmt.Fprintf(os.Stderr, "export them first, then reference them as ${%s} in the config\n", missing[0])
-		os.Exit(1)
-	}
-
-	// ErrNoConfig 表示配置文件还不存在（首次使用）：继续用默认配置写出一份，
-	// 而不是让"装第一个插件"卡在一条与插件无关的报错上。
-	cfg, err := config.Load()
-	if err != nil && !errors.Is(err, config.ErrNoConfig) {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	if conflicts := manifest.Conflicts(connectorMap(cfg), mcpMap(cfg)); len(conflicts) > 0 {
-		if !pluginInstallForce {
-			fmt.Fprintf(os.Stderr, "connector(s) already exist: %s (use --force to replace)\n", strings.Join(conflicts, ", "))
-			os.Exit(1)
+	// 失败原因不塞进表格：一个坏插件的报错往往很长，会把表格挤变形。
+	for _, name := range names {
+		p := plugins[name].Plugin
+		if p.FatalError != "" {
+			fmt.Printf("\n%s: rejected: %s\n", name, p.FatalError)
 		}
-	}
-
-	if len(manifest.Connectors) > 0 {
-		if cfg.Cli == nil {
-			cfg.Cli = &cliconn.Config{}
+		for _, warning := range p.Warnings {
+			fmt.Printf("\n%s: warning: %s\n", name, warning)
 		}
-		if cfg.Cli.Connectors == nil {
-			cfg.Cli.Connectors = map[string]cliconn.Connector{}
-		}
-		for name, c := range manifest.Connectors {
-			cfg.Cli.Connectors[name] = c
-		}
-	}
-	if len(manifest.MCPServers) > 0 {
-		if cfg.MCP == nil {
-			cfg.MCP = &config.MCPConfig{}
-		}
-		if cfg.MCP.Servers == nil {
-			cfg.MCP.Servers = map[string]mcp.ServerConfig{}
-		}
-		for name, s := range manifest.MCPServers {
-			cfg.MCP.Servers[name] = s
-		}
-	}
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := pluginStore().Put(plugins.Record{Manifest: manifest, Source: target}); err != nil {
-		fmt.Fprintf(os.Stderr, "plugin applied but could not be recorded: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Installed plugin %s\n", manifest.Name)
-	if len(manifest.Connectors) > 0 || len(manifest.MCPServers) > 0 {
-		fmt.Println("Run 'magic cli list' / 'magic mcp list' to confirm the tools.")
-	}
-	if len(manifest.Skills) > 0 {
-		fmt.Printf("Skills declared: %s\n", strings.Join(manifest.Skills, ", "))
-		for _, name := range manifest.Skills {
-			if !skillExists(name) {
-				fmt.Printf("  warning: skill %q not found under %s/skills\n", name, config.GetMagicHome())
+		for _, cs := range p.CLIConnectors {
+			if cs.Error != "" {
+				fmt.Printf("\n%s: cli %q: %s\n", name, cs.Name, cs.Error)
 			}
 		}
 	}
+	return nil
 }
 
-// skillExists 用文件存在性判断技能是否可用（与 Web 侧 missingSkills 同一判据）。
-func skillExists(name string) bool {
-	base := filepath.Join(config.GetMagicHome(), "skills")
-	if _, err := os.Stat(filepath.Join(base, name)); err == nil {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(base, name+".md")); err == nil {
-		return true
-	}
-	return false
-}
-
-func runPluginRemove(cmd *cobra.Command, args []string) {
-	name := strings.TrimSpace(args[0])
-	store := pluginStore()
-	rec, ok, err := store.Get(name)
+func runPluginInstall(target string) error {
+	target = strings.TrimSpace(target)
+	info, err := os.Stat(target)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to read installed plugins: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("install source not found: %w", err)
 	}
+
+	// 目录名先按清单名推断，装完再把真实目录名报出来：
+	// 规范允许目录名与 manifest.name 不同，但默认保持一致最不容易搞混。
+	name := pluginInstallName
+	if name == "" {
+		manifest, err := agentplugin.InspectManifest(target)
+		if err != nil {
+			return fmt.Errorf("invalid plugin: %w", err)
+		}
+		name = manifest.Name
+	}
+
+	var dest string
+	var skipped []string
+	if info.IsDir() {
+		dest, skipped, err = agentplugin.InstallFromDir(target, name)
+	} else {
+		dest, err = agentplugin.InstallFromZip(target, name)
+	}
+	if err != nil {
+		return err
+	}
+
+	// 装完立刻自检：解压成功不等于插件可用（manifest 可能被拒、条目可能校验失败）。
+	plugin := agentplugin.Load(dest, filepath.Join(config.GetMagicHome(), "agent-plugins-data", name))
+	fmt.Printf("Installed into %s\n", dest)
+	if plugin.IsRejected() {
+		fmt.Fprintf(os.Stderr, "warning: plugin is rejected and will not load: %s\n", plugin.FatalError)
+		return nil
+	}
+	skills := 0
+	for _, ref := range plugin.Skills {
+		if ref.Skill != nil {
+			skills++
+		}
+	}
+	cliTools := 0
+	for _, cs := range plugin.CLIConnectors {
+		if cs.Error != "" {
+			fmt.Fprintf(os.Stderr, "warning: cli connector %q: %s\n", cs.Name, cs.Error)
+			continue
+		}
+		cliTools += len(cs.Connector.Tools)
+	}
+	fmt.Printf("  skills: %d, mcp servers: %d, cli tools: %d\n", skills, len(plugin.MCPServers), cliTools)
+	for _, warning := range plugin.Warnings {
+		fmt.Printf("  warning: %s\n", warning)
+	}
+	if len(skipped) > 0 {
+		fmt.Printf("  skipped (symlink/special): %s\n", strings.Join(skipped, ", "))
+	}
+	if plugin.CLIDisabled || plugin.MCPDisabled {
+		fmt.Println("  note: a component was disabled; run 'magic plugin list' for details")
+	}
+	fmt.Println("Restart any running session to pick up the new plugin.")
+	return nil
+}
+
+func runPluginRemove(name string) error {
+	plugins := loadAgentPluginsFromDisk()
+	mp, ok := plugins[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "plugin %q is not installed\n", name)
-		os.Exit(1)
+		return fmt.Errorf("plugin %q is not installed", name)
 	}
+	// Uninstall 按目录名删；目录名与 manifest.name 可能不同，从 Root 反推。
+	dirName := filepath.Base(mp.Plugin.Root)
+	removed, err := agentplugin.Uninstall(dirName)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Removed %s\n", removed)
+	fmt.Printf("  data dir removed: %s\n", mp.Plugin.DataDir)
+	return nil
+}
 
+func setPluginEnabled(name string, enabled bool) error {
+	plugins := loadAgentPluginsFromDisk()
+	if _, ok := plugins[name]; !ok {
+		return fmt.Errorf("plugin %q is not installed", name)
+	}
 	cfg, err := config.Load()
 	if err != nil && !errors.Is(err, config.ErrNoConfig) {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
-
-	var removed, kept []string
-	if cfg.Cli != nil {
-		for cname, wanted := range rec.Connectors {
-			if current, exists := cfg.Cli.Connectors[cname]; exists {
-				if reflect.DeepEqual(current, wanted) {
-					delete(cfg.Cli.Connectors, cname)
-					removed = append(removed, "cli:"+cname)
-				} else {
-					kept = append(kept, "cli:"+cname)
-				}
-			}
+	disabled := make([]string, 0, len(cfg.AgentPlugins.Disabled)+1)
+	for _, n := range cfg.AgentPlugins.Disabled {
+		if n != name {
+			disabled = append(disabled, n)
 		}
 	}
-	if cfg.MCP != nil {
-		for sname, wanted := range rec.MCPServers {
-			if current, exists := cfg.MCP.Servers[sname]; exists {
-				if reflect.DeepEqual(current, wanted) {
-					delete(cfg.MCP.Servers, sname)
-					removed = append(removed, "mcp:"+sname)
-				} else {
-					kept = append(kept, "mcp:"+sname)
-				}
-			}
-		}
+	if !enabled {
+		disabled = append(disabled, name)
 	}
+	cfg.AgentPlugins.Disabled = disabled
 	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to save config: %w", err)
 	}
-	if _, _, err := store.Delete(name); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to update install records: %v\n", err)
-		os.Exit(1)
+	state := "enabled"
+	if !enabled {
+		state = "disabled"
 	}
-
-	sort.Strings(removed)
-	sort.Strings(kept)
-	fmt.Printf("Removed plugin %s\n", name)
-	if len(removed) > 0 {
-		fmt.Printf("  removed: %s\n", strings.Join(removed, ", "))
-	}
-	if len(kept) > 0 {
-		// 用户改过的配置保留：盲目按名字删会把他的修改一起带走。
-		fmt.Printf("  kept (modified since install): %s\n", strings.Join(kept, ", "))
-	}
-}
-
-func resolvePluginCLI(target string) (plugins.Manifest, error) {
-	if fi, err := os.Stat(target); err == nil {
-		if fi.IsDir() {
-			return plugins.LoadFile(filepath.Join(target, plugins.ManifestFile))
-		}
-		return plugins.LoadFile(target)
-	}
-	if err := plugins.ValidateName(target); err != nil {
-		return plugins.Manifest{}, err
-	}
-	return plugins.LoadFile(filepath.Join(pluginDir(), target, plugins.ManifestFile))
-}
-
-// connectorMap / mcpMap 复制一份当前配置，供冲突检测使用（插件包的
-// Conflicts 只读入参，不持有配置对象）。
-func connectorMap(cfg *config.Config) map[string]cliconn.Connector {
-	out := make(map[string]cliconn.Connector)
-	if cfg != nil && cfg.Cli != nil {
-		for k, v := range cfg.Cli.Connectors {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-func mcpMap(cfg *config.Config) map[string]mcp.ServerConfig {
-	out := make(map[string]mcp.ServerConfig)
-	if cfg != nil && cfg.MCP != nil {
-		for k, v := range cfg.MCP.Servers {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-func hasManifest(list []plugins.Manifest, name string) bool {
-	for _, m := range list {
-		if m.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func dash(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "-"
-	}
-	return s
-}
-
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
+	fmt.Printf("%s is now %s\n", name, state)
+	return nil
 }

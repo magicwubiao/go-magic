@@ -211,6 +211,11 @@
                 :label="t('agentplugins.mcpConnected')"
                 :value="plugin.mcp_servers?.filter(m => m.connected).length || 0"
               />
+              <n-statistic
+                v-if="plugin.cli_connectors && plugin.cli_connectors.length"
+                :label="t('agentplugins.cliConnectors')"
+                :value="plugin.cli_connectors.reduce((n, c) => n + (c.tools?.length || 0), 0)"
+              />
             </n-space>
 
             <!-- Expanded Details -->
@@ -308,6 +313,59 @@
                             </n-text>
                             <n-text v-if="m.error" type="error" style="font-size: 12px;">
                               {{ m.error }}
+                            </n-text>
+                          </n-space>
+                        </template>
+                      </n-thing>
+                    </n-list-item>
+                  </n-list>
+                </n-card>
+
+                <!-- CLI Connectors (cli.json, 本实现的扩展组件) -->
+                <n-card
+                  v-if="plugin.cli_connectors && plugin.cli_connectors.length"
+                  size="small"
+                  :title="t('agentplugins.cliList')"
+                  style="margin-top: 12px;"
+                >
+                  <n-list bordered>
+                    <n-list-item v-for="c in plugin.cli_connectors" :key="c.name">
+                      <n-thing>
+                        <template #header>
+                          <n-space align="center" :size="6">
+                            <span>{{ c.name }}</span>
+                            <n-tag size="tiny" type="info">{{ c.command }}</n-tag>
+                            <n-tag size="tiny" :type="c.error ? 'error' : 'success'">
+                              {{ c.error ? t('agentplugins.entryError') : t('agentplugins.cliRegistered', { count: c.tools?.length || 0 }) }}
+                            </n-tag>
+                          </n-space>
+                        </template>
+                        <template #header-extra>
+                          <n-button
+                            v-if="c.required_env && c.required_env.length"
+                            size="tiny"
+                            type="primary"
+                            secondary
+                            :loading="!!store.pending[plugin.name]"
+                            @click="openCredentials(plugin.name)"
+                          >
+                            {{ t('agentplugins.authorize') }}
+                          </n-button>
+                        </template>
+                        <template #description>
+                          <n-space vertical :size="4">
+                            <n-text v-if="c.tools && c.tools.length" depth="3" style="font-size: 12px;">
+                              {{ c.tools.join(' · ') }}
+                            </n-text>
+                            <n-text
+                              v-if="c.required_env && c.required_env.length"
+                              type="warning"
+                              style="font-size: 12px;"
+                            >
+                              {{ t('agentplugins.needCredentials', { keys: c.required_env.join(', ') }) }}
+                            </n-text>
+                            <n-text v-if="c.error" type="error" style="font-size: 12px;">
+                              {{ c.error }}
                             </n-text>
                           </n-space>
                         </template>

@@ -266,8 +266,10 @@ func (s *Server) applyCLIConnectors() {
 	// 两个页签同时保存、或保存与启动并发时，cliMgr 的赋值与注册表同步必须整体
 	// 串行：否则 A 先把新工具注册进去、B 再用旧定义覆盖 cliMgr，注册表与
 	// 内存定义就会长期不一致（要等下一次保存才自愈）。
+	// 策略在持锁前取：cfgSnapshot 走 cfgMu，持 s.mu 再进它是反序。
+	pol := s.policySnapshot()
 	s.acquireServerMu("applyCLIConnectors")
-	mgr, count := cliconnbridge.BuildAndSync(defs, s.toolReg, s.activeProfile())
+	mgr, count := cliconnbridge.BuildAndSync(defs, s.toolReg, s.activeProfile(), pol)
 	s.cliMgr = mgr
 	s.releaseServerMu()
 

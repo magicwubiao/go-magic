@@ -38,6 +38,7 @@ import (
 	"github.com/magicwubiao/go-magic/internal/usage"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
+	"github.com/magicwubiao/go-magic/pkg/policy"
 	"github.com/magicwubiao/go-magic/pkg/types"
 )
 
@@ -696,6 +697,10 @@ Your working directory is: %s
 		if err := s.mcpMgr.SetToolCachePath(filepath.Join(magicHome, "mcp", "tool_cache.json")); err != nil {
 			log.Warnf("[MCP] failed to init tool cache: %v", err)
 		}
+		// 准入白名单：每次连接都读当前配置，改完 policy 不用重启。
+		s.mcpMgr.SetSecurityCheck(func(name string, cfg mcp.ServerConfig) error {
+			return s.policySnapshot().CheckMCP(name, cfg.Command, cfg.URL)
+		})
 		// 自动授权：连接时缺 token 会自动发起 OAuth 流程，这里弹浏览器。
 		// 用户在授权页完成登录后走下面的 OnOAuthAuthorized 自动重连，
 		// 全程不需要在 UI 里手动点任何按钮。
@@ -1692,9 +1697,6 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/cli/catalog/install", withCORS(requireAuth(s.handleCLICatalogInstall)))
 	mux.HandleFunc("/api/cli/parse", withCORS(requireAuth(s.handleCLIParse)))
 	mux.HandleFunc("/api/cli/test", withCORS(requireAuth(s.handleCLITest)))
-	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handlePlugins)))
-	mux.HandleFunc("/api/plugins/install", withCORS(requireAuth(s.handlePluginInstall)))
-	mux.HandleFunc("/api/plugins/", withCORS(requireAuth(s.handlePluginByName)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))
@@ -2466,4 +2468,15 @@ func copyDir(src, dst string) error {
 
 		return copyFile(path, dstPath)
 	})
+}
+
+// policySnapshot 返回当前准入白名单（nil 表示不限制）。
+//
+// 每次判定都重新取：配置热加载后白名单立刻生效，不需要重启服务。
+func (s *Server) policySnapshot() *policy.Policy {
+	cfg := s.cfgSnapshot()
+	if cfg == nil {
+		return nil
+	}
+	return &cfg.Policy
 }

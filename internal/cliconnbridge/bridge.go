@@ -11,6 +11,7 @@ import (
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/tool"
+	"github.com/magicwubiao/go-magic/pkg/policy"
 )
 
 // BuildAndSync 用一份定义重建 Manager 并把工具同步进注册表。
@@ -20,9 +21,13 @@ import (
 // 曾经只接在 web server 里，`magic` 启动的会话看不到任何 cli_* 工具。
 //
 // profile 用于过滤 profiles 限定的连接器（空串 = 不过滤）。
+// pol 是准入白名单（nil = 不限制）；策略在这里就生效，被拒的连接器不会注册出工具。
 // 返回新 Manager（没有子进程需要清理，仅用于查询与试跑）与注册的工具数。
-func BuildAndSync(defs map[string]cliconn.Connector, reg *tool.Registry, profile string) (*cliconn.Manager, int) {
+func BuildAndSync(defs map[string]cliconn.Connector, reg *tool.Registry, profile string, pol *policy.Policy) (*cliconn.Manager, int) {
 	mgr := cliconn.New(defs)
+	mgr.SetSecurityCheck(func(name string, c cliconn.Connector) error {
+		return pol.CheckCLI(name, c.Command)
+	})
 	return mgr, SyncToRegistry(mgr, reg, profile)
 }
 

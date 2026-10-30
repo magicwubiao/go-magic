@@ -179,6 +179,10 @@ func (t *Tool) Spec() ToolSpec { return t.spec }
 type Manager struct {
 	mu         sync.RWMutex
 	connectors map[string]Connector
+	// check 是准入白名单（nil = 全放行）。由外部注入，见 SetSecurityCheck。
+	check func(name string, c Connector) error
+	// blocked 记录因准入策略被挡下的连接器（name → 原因），供 UI/CLI 展示。
+	blocked map[string]string
 }
 
 // New 用给定定义构造 Manager（nil/空都可以）。
@@ -230,24 +234,62 @@ func (m *Manager) Delete(name string) bool {
 	return ok
 }
 
-// ToolsForProfile 枚举在给定分身下应当注册的全部工具（已按 enabled / profiles 过滤）。
-func (m *Manager) ToolsForProfile(profile string) []*Tool {
+// SetSecurityCheck 注入准入校验（nil = 不校验）。
+//
+// 校验发生在"枚举工具"这一步，而不是每次执行：被策略拒绝的连接器根本不会
+// 出现在模型可见的工具面里。让模型看见一个必然报错的工具，只会浪费回合。
+func (m *Manager) SetSecurityCheck(fn func(name string, c Connector) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.check = fn
+	m.mu.Unlock()
+}
+
+// Blocked 返回被准入策略挡下的连接器（name → 原因）。
+func (m *Manager) Blocked() map[string]string {
 	if m == nil {
 		return nil
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if len(m.blocked) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m.blocked))
+	for k, v := range m.blocked {
+		out[k] = v
+	}
+	return out
+}
+
+// ToolsForProfile 枚举在给定分身下应当注册的全部工具（已按 enabled / profiles 过滤）。
+func (m *Manager) ToolsForProfile(profile string) []*Tool {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	out := make([]*Tool, 0, len(m.connectors))
+	blocked := make(map[string]string)
 	for _, name := range sortedKeys(m.connectors) {
 		c := m.connectors[name]
 		if !c.AutoConnect() || !c.AppliesToProfile(profile) {
 			continue
 		}
+		if m.check != nil {
+			if err := m.check(name, c); err != nil {
+				blocked[name] = err.Error()
+				continue
+			}
+		}
 		for _, spec := range c.Tools {
 			out = append(out, NewTool(name, c, spec))
 		}
 	}
+	m.blocked = blocked
 	return out
 }
 

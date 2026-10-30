@@ -160,6 +160,100 @@ func extractZipEntry(f *zip.File, cleanDest string, total *int64) error {
 	return nil
 }
 
+// InstallFromDir 把一个本地插件目录复制到扫描目录下（供 `magic plugin install <dir>`）。
+//
+// zip 是分发格式，目录是开发格式：插件作者需要"改一行、重装一次"的快速回路，
+// 让他每次先打包 zip 是纯粹的摩擦。
+//
+// 复制规则：
+//   - 只复制常规文件与目录；符号链接一律跳过并计入 skipped（不跟链，
+//     否则一个指向 ~/.ssh 的链接会借"装插件"把私钥搬进插件目录）。
+//   - 目标已存在时报错，调用方需先 remove（与 zip 安装同一语义，避免半覆盖）。
+func InstallFromDir(srcDir, name string) (dest string, skipped []string, err error) {
+	if name == "" {
+		return "", nil, errors.New("plugin name is empty")
+	}
+	if err := validatePluginName(name); err != nil {
+		return "", nil, fmt.Errorf("invalid plugin name: %w", err)
+	}
+	info, err := os.Stat(srcDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("source dir: %w", err)
+	}
+	if !info.IsDir() {
+		return "", nil, fmt.Errorf("source %q is not a directory", srcDir)
+	}
+	if !hasManifest(srcDir) {
+		return "", nil, fmt.Errorf("%s not found in %s", manifestName, srcDir)
+	}
+
+	scanDir := DefaultScanDir()
+	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+		return "", nil, fmt.Errorf("ensure scan dir: %w", err)
+	}
+	dest = filepath.Join(scanDir, name)
+	if _, statErr := os.Stat(dest); statErr == nil {
+		return "", nil, fmt.Errorf("plugin %q already exists, uninstall first", name)
+	}
+
+	walkErr := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		if !within(target, dest) {
+			return fmt.Errorf("path %q escapes destination", rel)
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			skipped = append(skipped, rel)
+			return nil
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			skipped = append(skipped, rel) // 设备/管道/套接字:不是插件内容
+			return nil
+		}
+		return copyFile(path, target)
+	})
+	if walkErr != nil {
+		_ = os.RemoveAll(dest) // 半成品目录必须清掉,否则下次安装会撞 "already exists"
+		return "", nil, walkErr
+	}
+	return dest, skipped, nil
+}
+
+// copyFile 复制单个文件（0600/0644 取源文件的可执行位，其余按 0644）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if info.Mode()&0o111 != 0 {
+		mode = 0o755
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, io.LimitReader(in, maxInstallSize+1)); err != nil {
+		out.Close()
+		return fmt.Errorf("copy %q: %w", src, err)
+	}
+	return out.Close()
+}
+
 // InstalledDir 返回扫描目录下指定目录名的插件目录;不存在或名字不安全时 ok=false。
 // 与 Uninstall 共用同一套单级目录名校验。
 func InstalledDir(name string) (string, bool) {

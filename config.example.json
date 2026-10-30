@@ -10,52 +10,98 @@
     "openai": {
       "api_key": "your-openai-api-key-here",
       "base_url": "https://api.openai.com/v1",
-      "models": ["gpt-5.6", "gpt-5.6-terra", "gpt-5.6-luna"]
+      "models": [
+        "gpt-5.6",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna"
+      ]
     },
     "anthropic": {
       "api_key": "your-anthropic-api-key-here",
-      "models": ["claude-sonnet-5", "claude-fable-5", "claude-opus-5", "claude-haiku-4-5"]
+      "models": [
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-haiku-4-5"
+      ]
     },
     "openrouter": {
       "api_key": "your-openrouter-api-key-here",
-      "models": ["openai/gpt-5.6", "anthropic/claude-sonnet-5"]
+      "models": [
+        "openai/gpt-5.6",
+        "anthropic/claude-sonnet-5"
+      ]
     },
     "deepseek": {
       "api_key": "your-deepseek-api-key-here",
-      "models": ["deepseek-chat", "deepseek-reasoner"]
+      "models": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ]
     },
     "huoshan": {
       "api_key": "your-huoshan-api-key-here",
-      "models": ["doubao-seed-1.6", "doubao-1.5-pro-32k"]
+      "models": [
+        "doubao-seed-1.6",
+        "doubao-1.5-pro-32k"
+      ]
     },
     "qwen": {
       "api_key": "your-qwen-api-key-here",
-      "models": ["qwen-plus", "qwen-turbo", "qwen-max"]
+      "models": [
+        "qwen-plus",
+        "qwen-turbo",
+        "qwen-max"
+      ]
     },
     "minimax": {
       "api_key": "your-minimax-api-key-here",
-      "models": ["MiniMax-M2.5"]
+      "models": [
+        "MiniMax-M2.5"
+      ]
     },
     "moonshot": {
       "api_key": "your-moonshot-api-key-here",
-      "models": ["kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-128k"]
+      "models": [
+        "kimi-k2-0905-preview",
+        "kimi-k2-turbo-preview",
+        "moonshot-v1-128k"
+      ]
     },
     "zhipu": {
       "api_key": "your-zhipu-api-key-here",
-      "models": ["glm-4.7", "glm-4.6", "glm-4-flash"]
+      "models": [
+        "glm-4.7",
+        "glm-4.6",
+        "glm-4-flash"
+      ]
     },
     "dashscope": {
       "api_key": "your-dashscope-api-key-here",
-      "models": ["qwen-plus", "qwen-turbo", "qwen-max"]
+      "models": [
+        "qwen-plus",
+        "qwen-turbo",
+        "qwen-max"
+      ]
     },
     "gemini": {
       "api_key": "your-google-api-key-here",
-      "models": ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"]
+      "models": [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-2.5-pro"
+      ]
     },
     "ollama": {
       "api_key": "not-required",
       "base_url": "http://localhost:11434",
-      "models": ["llama3.3", "qwen3", "codellama"]
+      "models": [
+        "llama3.3",
+        "qwen3",
+        "codellama"
+      ]
     }
   },
   "image_gen": {
@@ -152,24 +198,73 @@
       "gh": {
         "command": "gh",
         "description": "GitHub CLI",
-        "env": ["GH_TOKEN=${GH_TOKEN}"],
+        "env": [
+          "GH_TOKEN=${GH_TOKEN}"
+        ],
         "timeout_seconds": 60,
         "require_approval": true,
         "tools": [
           {
             "name": "pr_list",
             "description": "List pull requests of a repository",
-            "args": ["pr", "list", "--repo", "{{repo}}", "--limit", "{{limit}}", "--state", "{{state}}", "{{?json}}--json=number,title,state,url"],
+            "args": [
+              "pr",
+              "list",
+              "--repo",
+              "{{repo}}",
+              "--limit",
+              "{{limit}}",
+              "--state",
+              "{{state}}",
+              "{{?json}}--json=number,title,state,url"
+            ],
             "read_only": true,
             "params": [
-              {"name": "repo", "description": "owner/name", "required": true},
-              {"name": "limit", "type": "integer", "default": 20},
-              {"name": "state", "enum": ["open", "closed", "merged", "all"], "default": "open"},
-              {"name": "json", "type": "boolean", "description": "output JSON fields"}
+              {
+                "name": "repo",
+                "description": "owner/name",
+                "required": true
+              },
+              {
+                "name": "limit",
+                "type": "integer",
+                "default": 20
+              },
+              {
+                "name": "state",
+                "enum": [
+                  "open",
+                  "closed",
+                  "merged",
+                  "all"
+                ],
+                "default": "open"
+              },
+              {
+                "name": "json",
+                "type": "boolean",
+                "description": "output JSON fields"
+              }
             ]
           }
         ]
       }
     }
+  },
+  "policy": {
+    "comment": "Connector allowlist. enforce=true means config alone is not enough: an MCP server must match mcp_allowed_hosts (remote) or mcp_allowed_commands (stdio), and a CLI connector must match cli_allowed_commands. An empty list with enforce=true denies that whole category; '*' opens it. Host wildcards like *.example.com match subdomains only.",
+    "enforce": false,
+    "mcp_allowed_hosts": [
+      "*.example.com"
+    ],
+    "mcp_allowed_commands": [
+      "npx",
+      "uvx"
+    ],
+    "cli_allowed_commands": [
+      "gh",
+      "git",
+      "jq"
+    ]
   }
 }
