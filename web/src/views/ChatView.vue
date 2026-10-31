@@ -631,92 +631,132 @@
           />
         </div>
 
-        <!-- 连接器面板：未连接的服务器也能在这里连接（这是旧版 /mcp 候选面板最大的缺口：
-             未连接的服务根本不出现，用户无从得知"为什么调不到"）。 -->
-        <div v-else-if="activePanel === 'mcp'" class="cap-panel cap-panel-mcp">
+        <!-- 插件面板：一个插件是"连接器 + CLI 工具 + 技能"的打包单位，所以面板以插件
+             为行、以"它带来了什么"为展开内容——比逐个 MCP 服务器更接近用户的心智
+             （用户装的是插件，不是 server）。安装与凭据仍在插件页：这里只放高频动作
+             （启用/停用、看状态、点示例问法），不把整套授权表单搬进输入框上方。 -->
+        <div v-else-if="activePanel === 'plugins'" class="cap-panel cap-panel-plugins">
           <div class="cap-panel-head">
-            <span class="cap-panel-title">{{ t('chat.mcp') }}</span>
-            <span class="cap-panel-hint">{{ t('chat.mcpHint') }}</span>
+            <span class="cap-panel-title">{{ t('chat.plugins') }}</span>
+            <span class="cap-panel-hint">{{ t('chat.pluginsHint') }}</span>
           </div>
           <n-input
-            v-model:value="mcpPanelSearch"
+            v-model:value="pluginPanelSearch"
             size="small"
             clearable
             class="cap-panel-search"
-            :placeholder="t('chat.mcpSearchPlaceholder')"
+            :placeholder="t('chat.pluginSearchPlaceholder')"
           >
             <template #prefix><n-icon :component="SearchOutline" :size="14" /></template>
           </n-input>
           <div class="cap-panel-body">
-            <div v-if="mcpPanelItems.length === 0" class="cap-panel-empty">
-              <div class="cap-panel-empty-title">{{ t('chat.mcpNoServers') }}</div>
-              <div class="cap-panel-empty-hint">{{ t('chat.mcpNoServersHint') }}</div>
+            <div v-if="agentPluginsStore.loading && !pluginPanelItems.length" class="cap-panel-empty">
+              <n-spin size="small" />
             </div>
-            <div v-for="server in mcpPanelItems" :key="server.name" class="cap-mcp-group">
-              <div class="cap-item cap-item-static" :class="{ 'is-off': !server.connected }">
-                <span class="cap-item-avatar" :class="{ 'is-off': !server.connected }">
-                  <n-icon size="14">
-                    <n-icon :component="server.connected ? LinkOutline : UnlinkOutline" />
-                  </n-icon>
+            <div v-else-if="pluginPanelItems.length === 0" class="cap-panel-empty">
+              <div class="cap-panel-empty-title">{{ t('chat.pluginNoPlugins') }}</div>
+              <div class="cap-panel-empty-hint">{{ t('chat.pluginNoPluginsHint') }}</div>
+            </div>
+            <div v-for="p in pluginPanelItems" :key="p.name" class="cap-plugin-group">
+              <div class="cap-item cap-item-static" :class="{ 'is-off': !p.enabled }">
+                <span class="cap-item-avatar av-plugin" :class="{ 'is-off': !p.enabled }">
+                  {{ skillInitial(p.name) }}
                 </span>
+                <!-- 每行固定两行文字：第一行 名字+版本（右侧摘要），第二行 描述/未就绪
+                     原因。之前名字/描述/摘要/原因各占一行，一条插件四行，列表一屏看不
+                     几个；细节本来展开就有，没必要在折叠态全铺开。 -->
                 <span class="cap-item-main">
-                  <span class="cap-item-name">{{ server.name }}</span>
-                  <span class="cap-item-desc">
-                    <span v-if="server.connected" class="cap-status-on">{{ t('chat.mcpConnected') }}</span>
-                    <span v-else class="cap-status-off">{{ t('chat.mcpDisconnected') }}</span>
-                    <span class="cap-dot">·</span>
-                    <span>{{ t('chat.mcpToolsCount', { n: server.tools.length }) }}</span>
+                  <span class="cap-plugin-line">
+                    <span class="cap-plugin-name" :title="p.name">{{ p.name }}</span>
+                    <span v-if="p.version" class="cap-plugin-version">v{{ p.version }}</span>
+                    <span v-if="pluginMetaText(p)" class="cap-plugin-meta">{{ pluginMetaText(p) }}</span>
                   </span>
-                  <!-- 未连接时直接把失败原因带出来：否则用户只看到"未连接"，
-                       不知道是配置错、网络不通还是服务端拒绝，只能去管理页来回找。 -->
-                  <span v-if="!server.connected && server.lastError" class="cap-item-error" :title="server.lastError">
-                    {{ server.lastError }}
+                  <!-- 未就绪时第二行让位给原因（缺凭据 / 命令没装 / 连不上 / 清单被拒）：
+                       不写原因用户只会觉得"拨开关没反应"。描述退到 title 里悬停看。 -->
+                  <span
+                    class="cap-plugin-sub"
+                    :class="{ 'is-blocked': !!pluginFirstBlockerText(p) }"
+                    :title="p.description || t('chat.pluginNoDescription')"
+                  >
+                    {{ pluginFirstBlockerText(p) || p.description || t('chat.pluginNoDescription') }}
                   </span>
                 </span>
-                <!-- 已连接的服务器展开可调用工具：点工具即挂 `/mcp <server> <tool>` 胶囊 -->
                 <button
-                  v-if="server.connected && server.toolList.length"
+                  v-if="pluginDetailCount(p) > 0"
                   type="button"
                   class="cap-expand-btn"
-                  :title="t('chat.mcpTools')"
-                  @click="toggleMCPTools(server.name)"
+                  :title="t('chat.pluginDetails')"
+                  @click="togglePluginDetail(p.name)"
                 >
                   <n-icon size="14">
-                    <n-icon :component="expandedMCP === server.name ? ChevronDownOutline : ChevronForwardOutline" />
+                    <n-icon :component="expandedPlugin === p.name ? ChevronDownOutline : ChevronForwardOutline" />
                   </n-icon>
                 </button>
-                <n-button
-                  size="tiny"
-                  :type="server.connected ? 'default' : 'primary'"
-                  :quaternary="server.connected"
-                  :loading="mcpBusyServer === server.name"
-                  @click="onToggleMCPServer(server)"
-                >
-                  {{ server.connected ? t('chat.mcpDisconnect') : t('chat.mcpConnect') }}
-                </n-button>
+                <n-switch
+                  class="cap-item-switch"
+                  size="small"
+                  :value="p.enabled"
+                  :loading="pluginBusyName === p.name"
+                  :disabled="!!p.rejected"
+                  @update:value="(v: boolean) => onTogglePlugin(p, v)"
+                />
               </div>
-              <div v-if="expandedMCP === server.name && server.toolList.length" class="cap-tool-list">
-                <button
-                  v-for="tool in server.toolList"
-                  :key="tool.name"
-                  type="button"
-                  class="cap-item cap-tool-item"
-                  :title="tool.description || tool.name"
-                  @click="useMCPTool(server.name, tool.name)"
-                >
-                  <span class="cap-item-avatar av-mcp">/</span>
-                  <span class="cap-item-main">
-                    <span class="cap-item-name">{{ tool.name }}</span>
-                    <span class="cap-item-desc">{{ tool.description || '—' }}</span>
+              <!-- 展开 = 这个插件到底给了什么。MCP 条目的工具名要连上才知道（后端只
+                   给数量），所以这里只报"连了几个 / 共几个"，点工具挂胶囊那套留给
+                   /mcp 指令——插件工具注册的是 ap_* 名字，不走 /mcp 的 server/tool 路由。 -->
+              <div v-if="expandedPlugin === p.name" class="cap-tool-list">
+                <div v-for="srv in p.mcp_servers" :key="'mcp-' + srv.name" class="cap-plugin-entry">
+                  <n-icon
+                    size="12"
+                    :component="srv.connected ? LinkOutline : UnlinkOutline"
+                    :class="srv.connected ? 'cap-status-on' : 'cap-status-off'"
+                  />
+                  <span class="cap-plugin-entry-name" :title="srv.name">{{ srv.name }}</span>
+                  <span class="cap-plugin-entry-meta">
+                    {{ srv.connected ? t('chat.mcpConnected') : t('chat.mcpDisconnected') }}
+                    <span class="cap-dot">·</span>{{ t('chat.mcpToolsCount', { n: srv.tools || 0 }) }}
                   </span>
-                </button>
+                  <span v-if="!srv.connected && srv.error" class="cap-item-error" :title="srv.error">
+                    {{ srv.error }}
+                  </span>
+                </div>
+                <div v-for="cli in p.cli_connectors || []" :key="'cli-' + cli.name" class="cap-plugin-entry">
+                  <n-icon size="12" :component="TerminalOutline" class="cap-status-off" />
+                  <span class="cap-plugin-entry-name" :title="cli.command">{{ cli.name }}</span>
+                  <span class="cap-plugin-entry-meta">
+                    {{ cli.error ? cli.error : t('chat.mcpToolsCount', { n: cli.tools.length }) }}
+                    <template v-if="cli.binary_found === false">
+                      <span class="cap-dot">·</span>{{ t('chat.pluginBinaryMissing', { command: cli.command }) }}
+                    </template>
+                  </span>
+                </div>
+                <div v-if="(p.skills || []).length" class="cap-plugin-entry">
+                  <n-icon size="12" :component="ExtensionPuzzleOutline" class="cap-status-off" />
+                  <span class="cap-plugin-entry-name">{{ t('chat.skills') }}</span>
+                  <span class="cap-plugin-entry-meta">{{ p.skills.join(', ') }}</span>
+                </div>
+                <!-- 示例问法：插件给模型的是工具/技能，没有可挂的斜杠指令，把一句真
+                     实问法填进输入框就是最直接的试用入口。 -->
+                <div v-if="(p.examples || []).length" class="cap-plugin-examples">
+                  <span class="cap-plugin-examples-title">{{ t('chat.pluginExamples') }}</span>
+                  <button
+                    v-for="ex in p.examples"
+                    :key="ex"
+                    type="button"
+                    class="cap-plugin-example"
+                    :title="ex"
+                    @click="usePluginExample(ex)"
+                  >
+                    {{ ex }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
           <div class="cap-panel-foot">
-            <button type="button" class="cap-foot-btn" @click="gotoMCPManage">
+            <button type="button" class="cap-foot-btn" @click="gotoPluginsManage">
               <n-icon size="14"><SettingsOutline /></n-icon>
-              <span>{{ t('chat.mcpManage') }}</span>
+              <span>{{ t('chat.pluginManage') }}</span>
             </button>
           </div>
         </div>
@@ -740,9 +780,9 @@
           />
           <!-- Toolbar inside input box -->
           <div class="input-toolbar">
-            <!-- 工具栏单行滚动条：小屏下 + / 技能 / 连接器 不再挤成两行 -->
+            <!-- 工具栏单行滚动条：小屏下 + / 技能 / 插件 不再挤成两行 -->
               <div class="toolbar-scroll">
-              <!-- 工具按钮：上传文件 / 技能 / 连接器 合并到加号下拉菜单中 -->
+              <!-- 工具按钮：上传文件 / 技能 / 插件 合并到加号下拉菜单中 -->
               <n-dropdown
                 trigger="click"
                 placement="bottom-start"
@@ -762,7 +802,7 @@
                   </template>
                 </n-button>
               </n-dropdown>
-              <!-- 技能 / 连接器的入口统一收在加号菜单里（工具栏不再放常驻胶囊按钮，
+              <!-- 技能 / 插件的入口统一收在加号菜单里（工具栏不再放常驻胶囊按钮，
                    避免与模型下拉抢宽度、小屏挤压）。 -->
               <!-- 隐藏的上传入口：由下拉菜单"上传文件"触发 -->
               <n-upload
@@ -1213,14 +1253,14 @@ import ComposerEditor from '@/components/ComposerEditor.vue'
 import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline } from '@vicons/ionicons5'
+import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline } from '@vicons/ionicons5'
 import type { DropdownOption, UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
 import * as skillsApi from '@/api/skills'
 import { useSkillsStore } from '@/stores/skills'
-import { useMCPStore } from '@/stores/mcp'
-import { mcpErrorMessage } from '@/api/mcp'
+import { useAgentPluginsStore } from '@/stores/agentplugins'
+import type { AgentPlugin, AgentPluginBlocker } from '@/api/agentplugins'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 
 const { t } = useI18n()
@@ -1229,7 +1269,7 @@ const goalsStore = useGoalsStore()
 const modelsStore = useModelsStore()
 const configStore = useConfigStore()
 const skillsStore = useSkillsStore()
-const mcpStore = useMCPStore()
+const agentPluginsStore = useAgentPluginsStore()
 const router = useRouter()
 const message = useMessage()
 const dialogStore = useDialog()
@@ -2679,23 +2719,28 @@ async function uploadNativeFile(nativeFile: File): Promise<boolean> {
 // 工具下拉菜单：上传文件（规划模式已直接显示在工具栏上，不再放这里）。
 const toolbarMenuOpen = ref(false)
 
-// ===== 技能 / 连接器面板（输入框内的二级面板）=====
+// ===== 技能 / 插件面板（输入框内的二级面板）=====
 //
 // 旧交互：想在对话里用技能或 MCP，必须先手打 "/skill" / "/mcp" 才能看到候选，
 // 而且候选列表只能"选"，不能"启用/连接"，也没有描述和搜索——用户看到的是一个
 // 无从下手的裸列表（这就是本次要修的用户不友好）。
 // 新交互：+ 菜单或工具栏胶囊按钮展开面板 → 每项带名称/描述/开关 → 点击即填入
 // 输入框或直接连接，随发随用，不需要背指令。
+//
+// 2026-10-31：第二个面板从"连接器（MCP 服务器列表）"换成"插件"。理由是用户
+// 装的是插件、用的是插件带来的工具，逐个 server 的视角既不知道插件装没装、也
+// 管不了它带来的 CLI 与技能；而插件行天然能承载"启用/停用"这个高频动作。
 
-type CapPanel = '' | 'skills' | 'mcp'
+type CapPanel = '' | 'skills' | 'plugins'
 const activePanel = ref<CapPanel>('')
 const panelSkillUploadRef = ref<{ openOpenFileDialog: () => void } | null>(null)
 const skillPanelSearch = ref('')
-const mcpPanelSearch = ref('')
+const pluginPanelSearch = ref('')
 const togglingSkill = ref('')
-const mcpBusyServer = ref('')
-// 连接器面板里展开工具明细的服务器名（一次只展开一个）。
-const expandedMCP = ref('')
+// 正在切换启用态的插件名（开关 loading 用；插件启停要重连它的连接器，几十秒都可能）。
+const pluginBusyName = ref('')
+// 插件面板里展开明细的插件名（一次只展开一个，避免面板被撑爆）。
+const expandedPlugin = ref('')
 
 // 待执行指令胶囊（pending directive chips）。
 //
@@ -2773,8 +2818,8 @@ function onComposerChipRemove(id: string) {
   removePendingDirective(id)
 }
 
-function toggleMCPTools(name: string) {
-  expandedMCP.value = expandedMCP.value === name ? '' : name
+function togglePluginDetail(name: string) {
+  expandedPlugin.value = expandedPlugin.value === name ? '' : name
 }
 
 // skillsStore.skills 是"启用态"的权威来源（含 disabled 项），capabilities 只含
@@ -2808,36 +2853,63 @@ const filteredSkillPanelItems = computed(() => {
   )
 })
 
-// MCP 面板以 mcpStore.servers 为准（含未连接的），工具明细从 capabilities 里取
-// （后端只对**已连接**的服务器返回工具，未连接的拿不到，符合实际可调用范围）。
-// 排序：已连接的排前面——面板的 primary 动作是"选一个能用的"，失败的沉底但
-// 仍然可见（带失败原因），用户不用滚来滚去找。
-const mcpPanelItems = computed(() => {
-  const capMap = new Map(chatStore.capabilities.mcp_servers.map(s => [s.name, s.tools]))
-  const p = mcpPanelSearch.value.trim().toLowerCase()
-  return mcpStore.servers
-    .filter(s => !p || s.name.toLowerCase().includes(p))
-    .map(s => {
-      const tools = capMap.get(s.name) || []
-      return {
-        name: s.name,
-        connected: s.connected,
-        lastError: mcpStore.getLastError(s.name),
-        tools: new Array<number>(tools.length || s.tool_count || 0),
-        toolList: tools
-          .filter((t: any) =>
-            // 展开工具明细后，同一个搜索词继续过滤工具：一次输入两处生效，
-            // 省掉"再打一遍工具名"的动作。
-            !p ||
-            s.name.toLowerCase().includes(p) ||
-            t.name.toLowerCase().includes(p) ||
-            (t.description || '').toLowerCase().includes(p),
-          )
-          .map((t: any) => ({ name: t.name, description: t.description || '' })),
-      }
+// 插件面板以 agentPluginsStore.plugins 为准（含未启用项——启用态就是这一栏的
+// 主操作）。排序：已启用的在前（用户来这里多半是想用某个已开的东西），被拒的
+// 沉到末尾但仍然可见（带原因，不能悄悄消失成"插件不见了"）。
+const pluginPanelItems = computed(() => {
+  const p = pluginPanelSearch.value.trim().toLowerCase()
+  return agentPluginsStore.plugins
+    .filter(x => !p || x.name.toLowerCase().includes(p) || (x.description || '').toLowerCase().includes(p))
+    .slice()
+    .sort((a, b) => {
+      if (a.rejected !== b.rejected) return a.rejected ? 1 : -1
+      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1
+      return a.name.localeCompare(b.name)
     })
-    .sort((a, b) => (a.connected === b.connected ? a.name.localeCompare(b.name) : a.connected ? -1 : 1))
 })
+
+// 一行能说清的两件事：这插件给了什么（连接器/CLI/技能各多少），以及能不能用。
+function pluginMetaText(p: AgentPlugin): string {
+  const parts: string[] = []
+  const servers = p.mcp_servers || []
+  if (servers.length) {
+    const on = servers.filter(s => s.connected).length
+    parts.push(t('chat.pluginMCPCount', { on, total: servers.length }))
+  }
+  const clis = p.cli_connectors || []
+  if (clis.length) parts.push(t('chat.pluginCLICount', { n: clis.length }))
+  if ((p.skills || []).length) parts.push(t('chat.pluginSkillCount', { n: p.skills.length }))
+  return parts.join(' · ')
+}
+
+// 有明细才给展开箭头：没有内容的箭头点了只会让用户怀疑自己点错了。
+function pluginDetailCount(p: AgentPlugin): number {
+  return (p.mcp_servers?.length || 0) + (p.cli_connectors?.length || 0)
+    + (p.skills?.length || 0) + (p.examples?.length || 0)
+}
+
+/** 把一条 blocker 翻译成人话。文案与插件页共用（agentplugins.blocker*）。 */
+function pluginBlockerText(b: AgentPluginBlocker): string {
+  if (b.kind === 'oauth') return t('agentplugins.blockerOAuthText', { name: b.name || '' })
+  if (b.kind === 'auth') {
+    const names = b.fields?.length ? b.fields.map(f => f.label || f.key) : (b.keys || [])
+    return t('agentplugins.blockerAuth', { name: b.name || '', keys: names.join(', ') })
+  }
+  if (b.kind === 'connect') {
+    return t('agentplugins.blockerConnect', { name: b.name || '', detail: b.detail || '' })
+  }
+  if (b.kind === 'missing_binary') {
+    return t('agentplugins.blockerCli', { name: b.name || '', command: b.command || '' })
+  }
+  return t('agentplugins.blockerRejected')
+}
+
+// 行内只显示第一条原因：多条会把行撑成一段话，剩下的留给插件页。
+function pluginFirstBlockerText(p: AgentPlugin): string {
+  if (p.rejected) return t('agentplugins.blockerRejected')
+  const first = (p.blockers || [])[0]
+  return first ? pluginBlockerText(first) : ''
+}
 
 function skillInitial(name: string): string {
   return (name || '?').trim().charAt(0).toUpperCase()
@@ -2850,7 +2922,8 @@ function openPanel(panel: Exclude<CapPanel, ''>) {
   if (panel === 'skills') {
     if (!skillsStore.skills.length) skillsStore.loadSkills().catch(() => {})
   } else {
-    if (!mcpStore.servers.length) mcpStore.loadServers().catch(() => {})
+    // 插件列表带连接状态与 blocker，可能刚在别的页面改过，每次打开都刷一遍。
+    agentPluginsStore.loadPlugins().catch(() => {})
     chatStore.refreshCapabilities().catch(() => {})
   }
 }
@@ -2912,9 +2985,16 @@ function useSkill(name: string) {
   addDirectiveChip({ value: `/skill ${name}`, group: 'skills', name })
 }
 
-// 点击连接器面板里某个服务器的工具 = 挂 `/mcp <server> <tool>` 胶囊。
-function useMCPTool(server: string, tool: string) {
-  addDirectiveChip({ value: `/mcp ${server} ${tool}`, group: 'mcp', name: `${server} · ${tool}` })
+// 点击插件示例问法 = 直接填进输入框（插件工具是模型自己调的，没有可挂的
+// 斜杠指令；一句真实问法就是最好的"试一下"）。已有草稿时追加，不覆盖。
+function usePluginExample(text: string) {
+  const draft = inputValue.value.trimEnd()
+  inputValue.value = draft ? `${draft} ${text}` : text
+  // 走一遍 handleInput：把斜杠候选按新正文重算（否则残留的候选会让下一次
+  // 回车被当成"选中候选"而不是发送）。
+  handleInput()
+  activePanel.value = ''
+  focusComposer()
 }
 
 async function onToggleSkill(skill: { name: string; enabled: boolean }, value: boolean) {
@@ -2930,25 +3010,29 @@ async function onToggleSkill(skill: { name: string; enabled: boolean }, value: b
   }
 }
 
-async function onToggleMCPServer(server: { name: string; connected: boolean }) {
-  mcpBusyServer.value = server.name
+/**
+ * 插件启用/停用。
+ *
+ * 未就绪（缺凭据 / 命令没装 / 连不上 / 清单被拒）时不硬拨开关：后端会 409 拒绝，
+ * 用户看到的只是"拨了又弹回来"。这里提前把第一条原因说出来——面板里不做授权与
+ * 安装（那需要凭据表单和一键装包），交给插件页，所以提示里指个方向。
+ */
+async function onTogglePlugin(p: AgentPlugin, value: boolean) {
+  const reason = pluginFirstBlockerText(p)
+  if (value && reason) {
+    message.warning(t('chat.pluginNotReady', { name: p.name, reason }), { duration: 6000 })
+    return
+  }
+  pluginBusyName.value = p.name
   try {
-    if (server.connected) {
-      await mcpStore.disconnectServer(server.name)
-      message.success(t('chat.mcpDisconnectedToast', { name: server.name }))
-    } else {
-      // connectServer 需要完整配置；面板里只做"连接/重连"这个高频动作，
-      // 配置由配置里的 mcp.servers 提供（reconnect 走同一份）。
-      await mcpStore.reconnectServer(server.name)
-      message.success(t('chat.mcpConnectedToast', { name: server.name }))
-    }
+    await agentPluginsStore.setEnabled(p.name, value)
+    // 插件带来的技能/工具会进出能力清单，刷新后斜杠候选才是真的可用集合。
     await chatStore.refreshCapabilities()
+    message.success(t(value ? 'chat.pluginEnabledToast' : 'chat.pluginDisabledToast', { name: p.name }))
   } catch (e: any) {
-    // 把后端给的失败原因带进 toast：否则用户只知道"失败了"，还得去管理页找原因。
-    const detail = mcpStore.getLastError(server.name)
-    message.error(detail || mcpErrorMessage(e) || t('chat.mcpConnectFailed'), { duration: 6000 })
+    message.error(e?.message || t('chat.pluginToggleFailed'), { duration: 6000 })
   } finally {
-    mcpBusyServer.value = ''
+    pluginBusyName.value = ''
   }
 }
 
@@ -2975,9 +3059,9 @@ function gotoSkillsManage() {
   router.push('/skills')
 }
 
-function gotoMCPManage() {
+function gotoPluginsManage() {
   activePanel.value = ''
-  router.push('/mcp')
+  router.push('/plugins')
 }
 
 // 面板打开期间点/按到别处就收起（Esc 由输入框与全局监听各兜一半：面板展开时
@@ -3010,8 +3094,8 @@ const toolbarMenuOptions = computed<DropdownOption[]>(() => [
     disabled: !chatStore.activeSessionId,
   },
   {
-    label: t('chat.mcp'),
-    key: 'mcp',
+    label: t('chat.plugins'),
+    key: 'plugins',
     icon: () => h(NIcon, null, { default: () => h(LinkOutline) }),
     disabled: !chatStore.activeSessionId,
   },
@@ -3023,14 +3107,16 @@ const toolbarMenuOptions = computed<DropdownOption[]>(() => [
   // 会话表的 plan_mode 列仍在（免迁移），但已无任何读写代码。
 ])
 
-// 下拉行右侧的计数徽标（技能数 / 已连接连接器数）——让用户不展开也能知道有什么。
+// 下拉行右侧的计数徽标（已启用技能数 / 已启用插件数）——让用户不展开也能知道
+// 有多少东西真的可用（不是"装了多少"，那是插件页关心的事）。
 function renderToolbarMenuLabel(option: DropdownOption) {
   const label = String((option as { label?: string }).label ?? '')
   let badge = ''
   if ((option as { key?: string }).key === 'skills') {
     badge = t('chat.hasSkillsShort', { n: skillPanelItems.value.filter(s => s.enabled).length })
-  } else if ((option as { key?: string }).key === 'mcp') {
-    badge = `${mcpStore.connectedServers.length}/${mcpStore.servers.length}`
+  } else if ((option as { key?: string }).key === 'plugins') {
+    const n = agentPluginsStore.plugins.filter(p => p.enabled && !p.rejected).length
+    badge = t('chat.hasPluginsShort', { n })
   }
   if (!badge) return label
   return h('div', { class: 'toolbar-menu-row' }, [
@@ -3046,7 +3132,7 @@ async function handleToolbarMenuSelect(key: string) {
     toolbarUploadRef.value?.openOpenFileDialog()
     return
   }
-  if (key === 'skills' || key === 'mcp') {
+  if (key === 'skills' || key === 'plugins') {
     if (!chatStore.activeSessionId) return
     openPanel(key)
   }
@@ -5725,14 +5811,149 @@ onActivated(() => {
   border-left: 1px solid #eef0f2;
 }
 
-.cap-tool-item {
-  padding: 6px 10px;
+/* 插件首字母头像：与技能（靛蓝）、连接器（青）区分开，一眼能认出这是插件 */
+.cap-item-avatar.av-plugin {
+  background: #f5f3ff;
+  color: #6d28d9;
 }
 
-.cap-item-avatar.av-mcp {
-  background: #ecfeff;
-  color: #0e7490;
+/* 插件面板的行比技能行更紧凑：同样两行文字，靠 padding 与行距再省一点高度，
+   一屏能多看到两三个插件（这一栏的用途就是"扫一眼有哪些"）。 */
+.cap-panel-plugins .cap-item {
+  padding: 5px 8px;
+  gap: 8px;
+}
+
+.cap-panel-plugins .cap-item-main {
+  gap: 1px;
+}
+
+.cap-panel-plugins .cap-item-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+/* 相邻插件之间一条极浅的分隔线：行高本来就矮，只靠间距分不清"这是另一个插件" */
+.cap-plugin-group + .cap-plugin-group {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid #f4f5f7;
+}
+
+.cap-plugin-version {
+  margin-left: 5px;
+  font-size: 10px;
+  color: #b0b6bf;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* "连接器 1/2 · CLI 2 项 · 技能 3 个"：跟在名字后面靠右，单行省略（细节在展开区） */
+.cap-plugin-meta {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-left: 6px;
+  font-size: 11px;
+  color: #b0b6bf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 插件行的第一行：名字 + 版本 + 摘要同行，名字优先（摘要先被截） */
+.cap-plugin-line {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.cap-plugin-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 插件行的第二行：描述或未就绪原因，恒为单行 */
+.cap-plugin-sub {
+  font-size: 11px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cap-plugin-sub.is-blocked {
+  color: #d03050;
+}
+
+/* 展开区一行一条：图标 + 名字 + 状态，失败原因另起可悬停看全文 */
+.cap-plugin-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  min-width: 0;
+}
+
+.cap-plugin-entry-name {
+  flex: 0 1 auto;
+  max-width: 45%;
+  font-size: 12px;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cap-plugin-entry-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cap-plugin-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 2px;
+}
+
+.cap-plugin-examples-title {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.cap-plugin-example {
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 11px;
+  color: #4b5563;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.cap-plugin-example:hover {
+  border-color: #c7d2fe;
+  background: #f8faff;
+  color: #4338ca;
 }
 
 .cap-status-on {
