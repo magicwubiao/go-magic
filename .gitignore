@@ -15,6 +15,10 @@ web/.dist-check/
 *.test
 /coverage.txt
 /vendor/
+# 本机把 GOCACHE/GOPATH 指进项目内时产生（受限 shell 里 LOCALAPPDATA 缺失
+# 会让 go env GOCACHE 变成 off，只能用显式路径绕过），体积可达 GB 级
+/.gocache/
+/.gopath/
 
 # IDE
 .idea/
