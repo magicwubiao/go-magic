@@ -19,7 +19,8 @@ import (
 
 // pluginBlocker 描述一条"为什么还不能用"。
 type pluginBlocker struct {
-	// Kind: auth（缺凭据）/ connect（连接失败）/ missing_binary（命令没装）/ rejected（清单致命）。
+	// Kind: auth（缺凭据）/ oauth（需要网页授权）/ connect（连接失败）/
+	// missing_binary（命令没装）/ rejected（清单致命）。
 	Kind string `json:"kind"`
 	// Scope: mcp / cli / plugin。
 	Scope string `json:"scope"`
@@ -31,7 +32,7 @@ type pluginBlocker struct {
 	Command string `json:"command,omitempty"`
 	// CatalogID 是目录条目 id：有值时前端可以一键安装。
 	CatalogID string `json:"catalog_id,omitempty"`
-	// Detail 是 connect 类失败的原因（透传条目 error）。
+	// Detail 是 connect/oauth 类失败的原因（透传条目 error）。
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -67,6 +68,11 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 		}
 		if len(missing) > 0 {
 			out = append(out, pluginBlocker{Kind: "auth", Scope: "mcp", Name: ms.Name, Keys: missing})
+			continue
+		}
+		// 支持 OAuth 但还没授权：这才是"去点一下登录就好"，不要报成连接失败。
+		if ms.OAuthAvailable && ms.OAuthState != "authorized" {
+			out = append(out, pluginBlocker{Kind: "oauth", Scope: "mcp", Name: ms.Name, Detail: ms.OAuthError})
 			continue
 		}
 		// 没缺凭据但也没连上（远端超时/网络/静态校验失败）：同样是"装了

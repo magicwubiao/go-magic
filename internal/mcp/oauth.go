@@ -956,6 +956,20 @@ func truncateForLog(s string) string {
 // 连接期 token 获取（EnsureToken）+ 传输层 provider
 // ---------------------------------------------------------------------------
 
+// SuppressAutoStart 在 d 时间内禁止该条目自动发起授权。
+//
+// 用户主动登出后必须调它：登出会重连，重连必然 401，而 401 的自动路径会
+// 立刻再弹一个浏览器标签页——用户刚点完"登出"就被要求重新登录，像是操作
+// 没生效。手动入口（StartOAuthManual）不受影响。
+func (m *OAuthManager) SuppressAutoStart(serverName string, d time.Duration) {
+	if m == nil || d <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.lastAutoStart[serverName] = time.Now().Add(d - oauthAutoStartCooldown)
+	m.mu.Unlock()
+}
+
 // EnsureToken 返回当前可用的 access token：有效直接用；过期走刷新；
 // 什么都没有就报 auth 类错误（UI 据此亮"去授权"按钮）。
 func (m *OAuthManager) EnsureToken(serverName string) (string, error) {
@@ -987,7 +1001,7 @@ func (m *OAuthManager) EnsureToken(serverName string) (string, error) {
 		return "", err
 	}
 	return "", WrapKind(ErrKindAuth, fmt.Errorf(
-		"no OAuth credentials for %q — complete the authorization flow in the connectors page", serverName))
+		"no OAuth credentials for %q — complete the authorization flow in the UI", serverName))
 }
 
 // SignOut 删除 token 并终止进行中的流程（登出）。

@@ -741,6 +741,12 @@ Your working directory is: %s
 		// 授权完成 → 自动重连该连接器并把工具同步进注册表，
 		// 用户在浏览器点完"允许"回到页面就能看到连接成功。
 		s.mcpMgr.OnOAuthAuthorized(func(name string) {
+			// 插件条目共用同一个管理器，键带 agentplugin: 命名空间。
+			// 这里先分流，插件不需要出现在 mcpServerConfigs 里。
+			if pluginName, serverName, ok := agentplugin.ParseOAuthKey(name); ok {
+				s.reconnectPluginEntryAfterOAuth(pluginName, serverName)
+				return
+			}
 			cfg, ok := s.mcpServerConfigs()[name]
 			if !ok {
 				return

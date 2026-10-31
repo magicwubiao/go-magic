@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +43,10 @@ type Runtime struct {
 	// stdio 子进程环境(覆盖 mcp.json 的同名气)。由 server 层注入,读写走 mu。
 	credentials map[string]string
 
+	// oauth 是共享的 OAuth 管理器（nil = 未配置，远程条目只走静态凭据）。
+	// 与连接器共用同一个 token 存储，键加 agentplugin: 命名空间（见 oauth.go）。
+	oauth *mcp.OAuthManager
+
 	// reqID 为 CallTool 等请求生成自增 JSON-RPC id。
 	// 必须显式带 id:无 id 的报文是通知,transport 不等响应;
 	// 自增保证并发调用在同一 stdio 流上不撞 id。
@@ -51,6 +56,11 @@ type Runtime struct {
 	// 可能在其完成前就调 Stop：此时握手成功的连接不能再塞回 conns，
 	// 否则立刻变成没人认领的孤儿子进程（Windows 上还锁着 npx 的句柄）。
 	stopped bool
+
+	// suppressAutoOAuth 在批量启动期间置位：开机时把每个"装过但还没授权"
+	// 的插件都弹一次浏览器是很糟的体验，交给用户在详情里点一次"登录"。
+	// 手动重连 / 凭据变更 / 授权后重连不受影响。
+	suppressAutoOAuth atomic.Bool
 }
 
 type connection struct {
@@ -85,7 +95,12 @@ func (r *Runtime) Start() error {
 		_ = os.MkdirAll(r.plugin.DataDir, 0o755)
 	}
 
+	// 开机批量连接期间不自动弹授权页（见 suppressAutoOAuth 注释）。
+	// 用 Store(true)/Store(false) 包住整段并行连接：startParallel 内部
+	// 等所有 goroutine 结束才返回，不会把状态泄漏到之后的单条目重连。
+	r.suppressAutoOAuth.Store(true)
 	r.startParallel()
+	r.suppressAutoOAuth.Store(false)
 	return nil
 }
 
@@ -161,7 +176,15 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) (int, error) {
 		// 缺凭据属于 auth 类失败:UI 据此亮"去授权",而不是让用户去查网络。
 		return 0, missingCredsError(missing)
 	}
-	tr, err := buildTransport(spec)
+
+	// OAuth：显式声明的条目在握手**前**就要有 token（没有就发流程并直接
+	// 报 auth），零配置条目则先看有没有历史 token，等 401 再触发探测。
+	authProvider, oauthErr := r.oauthForEntry(entry.Name, spec)
+	if oauthErr != nil {
+		return 0, oauthErr
+	}
+
+	tr, err := buildTransport(spec, authProvider)
 	if err != nil {
 		return 0, err
 	}
@@ -178,7 +201,7 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) (int, error) {
 	}
 	if _, err := tr.Send(ctx, initReq); err != nil {
 		tr.Close()
-		return 0, fmt.Errorf("initialize: %w", err)
+		return 0, r.handshakeError(entry.Name, spec, "initialize", err)
 	}
 	// initialized 通知(无响应,Send 不等待)。
 	_, _ = tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "notifications/initialized"})
@@ -187,7 +210,7 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) (int, error) {
 	resp, err := tr.Send(ctx, toolsReq)
 	if err != nil {
 		tr.Close()
-		return 0, fmt.Errorf("tools/list: %w", err)
+		return 0, r.handshakeError(entry.Name, spec, "tools/list", err)
 	}
 	if resp.Error != nil {
 		tr.Close()
@@ -236,9 +259,13 @@ func (r *Runtime) EntryStatuses() []MCPEntryStatus {
 		return nil
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	out := make([]MCPEntryStatus, len(r.plugin.MCPServers))
 	copy(out, r.plugin.MCPServers)
+	r.mu.RUnlock()
+	// OAuth 视图在锁外补：读 token 文件是 IO，不能攥着 Runtime.mu。
+	for i := range out {
+		r.enrichOAuthStatus(&out[i])
+	}
 	return out
 }
 
@@ -248,13 +275,21 @@ func (r *Runtime) EntryStatus(name string) (MCPEntryStatus, bool) {
 		return MCPEntryStatus{}, false
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	var found MCPEntryStatus
+	ok := false
 	for i := range r.plugin.MCPServers {
 		if r.plugin.MCPServers[i].Name == name {
-			return r.plugin.MCPServers[i], true
+			found = r.plugin.MCPServers[i]
+			ok = true
+			break
 		}
 	}
-	return MCPEntryStatus{}, false
+	r.mu.RUnlock()
+	if !ok {
+		return MCPEntryStatus{}, false
+	}
+	r.enrichOAuthStatus(&found)
+	return found, true
 }
 
 // ReconnectEntry 断开并重连单个 MCP server 条目,成功后用新工具列表重注册。
@@ -470,13 +505,53 @@ func (r *Runtime) UnregisterTools(reg ToolRegistrar) {
 	}
 }
 
-// buildTransport 按传输类型构造 transport。
-func buildTransport(spec MCPServerSpec) (transport, error) {
+// oauthForEntry 决定连接某个条目时挂哪个 token 提供者（nil = 不挂）。
+//
+// 三种情况：
+//   - 显式声明 oauth：必须有可用 token，拿不到就报 auth 并就地发起授权；
+//   - 零配置远程条目且本地已有（或曾有过）token：挂上，401 时还能刷新；
+//   - 其余：不挂，等握手 401 再触发探测（不主动打扰只填了 API key 的条目）。
+func (r *Runtime) oauthForEntry(serverName string, spec MCPServerSpec) (mcp.AuthTokenProvider, error) {
+	mgr := r.oauthSnapshot()
+	if mgr == nil || !isRemoteSpec(spec) || !oauthCapable(spec) {
+		return nil, nil
+	}
+	key := r.oauthKeyFor(serverName)
+	if spec.OAuth != nil {
+		if _, err := mgr.EnsureToken(key); err != nil {
+			r.maybeStartOAuth(serverName, spec)
+			return nil, fmt.Errorf("OAuth credentials for %q are not ready: %w", serverName, err)
+		}
+		return mgr.Provider(key), nil
+	}
+	switch mgr.Status(key).State {
+	case mcp.OAuthStateAuthorized, "expired":
+		return mgr.Provider(key), nil
+	}
+	return nil, nil
+}
+
+// handshakeError 给握手失败补上阶段信息；401 且条目可走 OAuth 时顺手发起
+// 授权流程——用户看到的错误是"需要授权"，浏览器里同时已经打开了授权页。
+func (r *Runtime) handshakeError(serverName string, spec MCPServerSpec, stage string, err error) error {
+	var se *httpStatusError
+	if errors.As(err, &se) && se.status == http.StatusUnauthorized && oauthCapable(spec) {
+		r.maybeStartOAuth(serverName, spec)
+		return fmt.Errorf("%s: %w", stage, mcp.WrapKind(mcp.ErrKindAuth, err))
+	}
+	return fmt.Errorf("%s: %w", stage, err)
+}
+
+// buildTransport 按传输类型构造 transport。auth 非 nil 时远程传输会自动
+// 带 Authorization 头，并在 401 时刷新重试一次。
+func buildTransport(spec MCPServerSpec, auth mcp.AuthTokenProvider) (transport, error) {
 	switch spec.Type {
 	case TransportStdio:
 		return newStdioPluginTransport(spec.Command, spec.Args, envMapToSlice(spec.Env), spec.Cwd)
 	case TransportStreamableHTTP, TransportSSE:
-		return newHTTPTransport(spec.URL, spec.Headers, spec.Type == TransportSSE)
+		tr := newHTTPTransport(spec.URL, spec.Headers, spec.Type == TransportSSE)
+		tr.SetAuthProvider(auth)
+		return tr, nil
 	default:
 		return nil, fmt.Errorf("unsupported transport %q", spec.Type)
 	}
@@ -713,18 +788,65 @@ type httpPluginTransport struct {
 	headers map[string]string
 	isSSE   bool
 	client  *http.Client
+	// auth 是 OAuth token 提供者（nil = 静态凭据）。只在构造后、首次 Send
+	// 之前由 buildTransport 设置，之后只读。
+	auth mcp.AuthTokenProvider
 }
 
-func newHTTPTransport(u string, headers map[string]string, isSSE bool) (*httpPluginTransport, error) {
+// httpStatusError 保留 HTTP 状态码，供上层区分"要去授权"(401) 与普通失败。
+type httpStatusError struct {
+	status int
+	msg    string
+}
+
+func (e *httpStatusError) Error() string { return e.msg }
+
+func newHTTPTransport(u string, headers map[string]string, isSSE bool) *httpPluginTransport {
 	return &httpPluginTransport{
 		url:     u,
 		headers: headers,
 		isSSE:   isSSE,
 		client:  &http.Client{Timeout: 60 * time.Second},
-	}, nil
+	}
+}
+
+// SetAuthProvider 挂上 OAuth token 提供者。
+func (t *httpPluginTransport) SetAuthProvider(p mcp.AuthTokenProvider) {
+	t.auth = p
 }
 
 func (t *httpPluginTransport) Send(ctx context.Context, req *mcp.JSONRPCRequest) (*mcp.JSONRPCResponse, error) {
+	resp, err := t.sendOnce(ctx, req)
+	if err == nil {
+		return resp, nil
+	}
+	// 与连接器同一策略：401 只刷新重试一次。反复刷新通常意味着 token 被
+	// 吊销，重试解决不了，只会给授权服务器刷请求量。
+	var se *httpStatusError
+	if t.auth != nil && errors.As(err, &se) && se.status == http.StatusUnauthorized {
+		if header, rerr := t.auth.RefreshToken(ctx); rerr == nil && header != "" {
+			log.Warnf("[AgentPlugin] access token rejected (HTTP 401), retrying once with refreshed credentials")
+			return t.sendOnceWithToken(ctx, req, header)
+		}
+	}
+	return nil, err
+}
+
+// sendOnce 取当前 token 后发送。
+func (t *httpPluginTransport) sendOnce(ctx context.Context, req *mcp.JSONRPCRequest) (*mcp.JSONRPCResponse, error) {
+	var tokenHeader string
+	if t.auth != nil {
+		header, err := t.auth.CurrentToken(ctx)
+		if err != nil {
+			// EnsureToken 返回的已经是 auth 类错误，原样透传。
+			return nil, err
+		}
+		tokenHeader = header
+	}
+	return t.sendOnceWithToken(ctx, req, tokenHeader)
+}
+
+func (t *httpPluginTransport) sendOnceWithToken(ctx context.Context, req *mcp.JSONRPCRequest, tokenHeader string) (*mcp.JSONRPCResponse, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -737,6 +859,9 @@ func (t *httpPluginTransport) Send(ctx context.Context, req *mcp.JSONRPCRequest)
 	for k, v := range t.headers {
 		httpReq.Header.Set(k, v)
 	}
+	if tokenHeader != "" {
+		httpReq.Header.Set("Authorization", tokenHeader)
+	}
 	if t.isSSE {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	} else {
@@ -748,7 +873,16 @@ func (t *httpPluginTransport) Send(ctx context.Context, req *mcp.JSONRPCRequest)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		// 401/403 归到 auth 类：UI 才能亮"登录/重新授权"，而不是让人去查网络。
+		msg := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusUnauthorized {
+			msg = "HTTP 401 Unauthorized: the server requires credentials"
+		}
+		err := &httpStatusError{status: resp.StatusCode, msg: msg}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, mcp.WrapKind(mcp.ErrKindAuth, err)
+		}
+		return nil, err
 	}
 	// 按 Content-Type 决定解析方式。
 	ct := resp.Header.Get("Content-Type")

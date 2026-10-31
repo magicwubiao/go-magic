@@ -132,6 +132,23 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     }
   }
 
+  // 发起插件条目的 OAuth 授权（返回 authorize_url，由调用方打开浏览器）。
+  async function startOAuth(name: string, server: string) {
+    return agentPluginsApi.startPluginOAuth(name, server)
+  }
+
+  // 轮询授权状态（不刷新整个列表：轮询频率高，列表交给授权成功后再刷）。
+  async function oauthStatus(name: string, server: string) {
+    return agentPluginsApi.getPluginOAuthStatus(name, server)
+  }
+
+  // 登出并刷新列表（条目会回到"未授权"）。
+  async function signOutOAuth(name: string, server: string) {
+    const res = await agentPluginsApi.signOutPluginOAuth(name, server)
+    plugins.value = await agentPluginsApi.getAgentPlugins()
+    return res
+  }
+
   return {
     plugins,
     loading,
@@ -151,5 +168,8 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     loadCredentials,
     saveCredentials,
     connectServer,
+    startOAuth,
+    oauthStatus,
+    signOutOAuth,
   }
 })

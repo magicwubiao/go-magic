@@ -66,6 +66,9 @@
               </div>
               <div class="conn-sub">{{ subtitle(pack) }}</div>
             </div>
+            <n-tag v-if="pack.oauth" size="tiny" :bordered="false" type="success">
+              OAuth
+            </n-tag>
             <n-tag size="tiny" :bordered="false">
               {{ kind === 'mcp' ? (pack.transport || 'mcp') : 'cli' }}
             </n-tag>
@@ -295,6 +298,9 @@ function stateText(pack: CatalogPack): string {
   if (pack.installed) return t('agentplugins.catalogInstalled')
   if (props.kind === 'cli' && !pack.binary_found) {
     return t('agentplugins.catalogCliMissingShort')
+  }
+  if (pack.oauth) {
+    return t('agentplugins.catalogOAuth')
   }
   if ((pack.required_env || []).length) {
     return t('agentplugins.catalogNeedCreds', { keys: (pack.required_env || []).join(', ') })

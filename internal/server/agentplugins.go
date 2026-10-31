@@ -45,10 +45,13 @@ func (s *Server) loadAgentPluginsParsed() (*agentplugin.Manager, map[string]*age
 	plugins := mgr.LoadAll()
 
 	// 注入用户凭据(必须在 StartAll 之前:连接时要把凭据合并进子进程环境)。
+	// OAuth 管理器一并注入:远程条目才能"点一下登录"而不是手填 API key。
+	oauthMgr := s.oauthManagerForPlugins()
 	for name, mp := range plugins {
 		if mp.Runtime == nil {
 			continue
 		}
+		mp.Runtime.SetOAuth(oauthMgr)
 		if creds := s.agentPluginCredentials(name); len(creds) > 0 {
 			mp.Runtime.SetCredentials(creds)
 		}
@@ -267,6 +270,25 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(rest, "/"):
 		parts := strings.SplitN(rest, "/", 2)
 		name, action := parts[0], parts[1]
+		// 注意 action 是 "/" 之后的**整段**（SplitN(rest, "/", 2)），
+		// {name}/mcp/{server}/... 进来时 action = "mcp/{server}/..."。
+		// 早先只在 switch 里写了 case "mcp"，导致 connect 路由永远匹配不到
+		// （前端"重试"一直 405），OAuth 路由同理，这里改成前缀判断。
+		if strings.HasPrefix(action, "mcp/") {
+			segs := strings.Split(rest, "/")
+			// {name}/mcp/{server}/connect — 重连单个条目。
+			if len(segs) == 4 && segs[3] == "connect" && r.Method == http.MethodPost {
+				s.handlePluginServerConnect(w, r, segs[0], segs[2])
+				return
+			}
+			// {name}/mcp/{server}/oauth/{start|status|signout} — OAuth 授权。
+			if len(segs) == 5 && segs[3] == "oauth" {
+				s.handlePluginEntryOAuth(w, r, segs[0], segs[2], segs[4])
+				return
+			}
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		switch action {
 		case "uninstall":
 			s.uninstallAgentPlugin(w, r, name)
@@ -282,15 +304,6 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 			return
 		case "credentials/auto":
 			s.handlePluginCredentialsAuto(w, r, name)
-			return
-		case "mcp":
-			// 形如 {name}/mcp/{server}/connect:重连插件的单个 MCP 条目。
-			segs := strings.Split(rest, "/")
-			if len(segs) == 4 && segs[3] == "connect" && r.Method == http.MethodPost {
-				s.handlePluginServerConnect(w, r, segs[0], segs[2])
-				return
-			}
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 	}

@@ -245,9 +245,29 @@
                     >
                       {{ m.error ? t('agentplugins.entryError') : (m.connected ? t('agentplugins.connected') : t('agentplugins.disconnected')) }}
                     </n-tag>
+                    <!-- OAuth 状态：等待授权 / 失败 / 过期 都要在行内可见 -->
+                    <n-tag
+                      v-if="m.oauth_available && m.oauth_state && m.oauth_state !== 'authorized'"
+                      size="tiny"
+                      :bordered="false"
+                      type="warning"
+                    >
+                      {{ oauthStateText(m.oauth_state) }}
+                    </n-tag>
                     <span class="ap-entry-spacer" />
+                    <!-- OAuth 优先：点一下去浏览器登录，不需要 API key -->
                     <n-button
-                      v-if="m.error_kind === 'auth' || (m.required_env && m.required_env.length && !m.connected)"
+                      v-if="m.oauth_available && m.oauth_state !== 'authorized'"
+                      size="tiny"
+                      type="primary"
+                      secondary
+                      :loading="oauthBusy === oauthKey(plugin.name, m.name)"
+                      @click="handleOAuthSignIn(plugin.name, m.name)"
+                    >
+                      {{ t('agentplugins.oauthSignIn') }}
+                    </n-button>
+                    <n-button
+                      v-else-if="m.error_kind === 'auth' || (m.required_env && m.required_env.length && !m.connected)"
                       size="tiny"
                       type="primary"
                       secondary
@@ -265,6 +285,14 @@
                     >
                       {{ t('agentplugins.retry') }}
                     </n-button>
+                    <n-button
+                      v-if="m.oauth_available && m.oauth_state === 'authorized'"
+                      size="tiny"
+                      text
+                      @click="handleOAuthSignOut(plugin.name, m.name)"
+                    >
+                      {{ t('agentplugins.oauthSignOut') }}
+                    </n-button>
                   </div>
                   <div class="ap-entry-desc">
                     <span class="ap-entry-meta">{{ t('agentplugins.toolCount') }}: {{ m.tools }}</span>
@@ -274,8 +302,16 @@
                     >
                       {{ t('agentplugins.needCredentials', { keys: m.required_env.join(', ') }) }}
                     </span>
+                    <!-- OAuth 可用且未授权：说清"不用找 key，点登录就行" -->
+                    <span
+                      v-if="m.oauth_available && m.oauth_state !== 'authorized' && !m.connected"
+                      class="ap-entry-hint"
+                    >
+                      {{ t('agentplugins.oauthHint') }}
+                    </span>
                     <!-- auth 类失败缺凭据行已用中文说明，不再重复透出后端英文 error -->
                     <span v-if="m.error && m.error_kind !== 'auth'" class="ap-entry-err">{{ m.error }}</span>
+                    <span v-if="m.oauth_error" class="ap-entry-err">{{ m.oauth_error }}</span>
                   </div>
                 </div>
               </div>
@@ -437,7 +473,16 @@
         <div v-for="(b, i) in blockerModal.items" :key="i" class="ap-blocker">
           <span class="ap-blocker-text">{{ blockerText(b) }}</span>
           <n-button
-            v-if="b.kind === 'auth'"
+            v-if="b.kind === 'oauth' && b.name"
+            size="tiny"
+            type="primary"
+            secondary
+            @click="fromBlockerOAuth(b)"
+          >
+            {{ t('agentplugins.blockerOAuth') }}
+          </n-button>
+          <n-button
+            v-else-if="b.kind === 'auth'"
             size="tiny"
             type="primary"
             secondary
@@ -672,6 +717,9 @@ const blockerModal = reactive({
 
 /** 把一条 blocker 翻译成一句人话（tooltip 与弹窗共用）。 */
 function blockerText(b: AgentPluginBlocker): string {
+  if (b.kind === 'oauth') {
+    return t('agentplugins.blockerOAuthText', { name: b.name || '' })
+  }
   if (b.kind === 'auth') {
     return t('agentplugins.blockerAuth', { name: b.name || '', keys: (b.keys || []).join(', ') })
   }
@@ -682,6 +730,12 @@ function blockerText(b: AgentPluginBlocker): string {
     return t('agentplugins.blockerCli', { name: b.name || '', command: b.command || '' })
   }
   return t('agentplugins.blockerRejected')
+}
+
+function fromBlockerOAuth(b: AgentPluginBlocker) {
+  const name = blockerModal.plugin
+  blockerModal.show = false
+  if (b.name) void handleOAuthSignIn(name, b.name)
 }
 
 function fromBlockerAuthorize() {
@@ -847,6 +901,91 @@ async function handleConnect(name: string, server: string) {
     }
   } catch (e: any) {
     message.error(e.message || t('agentplugins.connectFailed', { name: server }))
+  }
+}
+
+// === OAuth 授权（远程 MCP 条目）===
+
+/** 进行中的授权：键为 "plugin/server"，按钮 loading 用。 */
+const oauthBusy = ref('')
+
+function oauthKey(plugin: string, server: string): string {
+  return plugin + '/' + server
+}
+
+/** 把授权状态翻成一句短标签（行内 tag 用）。 */
+function oauthStateText(state: string): string {
+  switch (state) {
+    case 'awaiting_authorization':
+      return t('agentplugins.oauthAwaiting')
+    case 'failed':
+      return t('agentplugins.oauthFailedState')
+    case 'expired':
+      return t('agentplugins.oauthExpired')
+    case 'authorized':
+      return t('agentplugins.oauthAuthorized')
+    default:
+      return t('agentplugins.oauthStateNone')
+  }
+}
+
+/**
+ * 发起 OAuth 授权：后端完成发现/注册后返回 authorize URL，浏览器打开它；
+ * 用户点"允许"后回调落 token，后端自动重连该条目。这里轮询直到授权完成
+ * 或超时（3 分钟）——与连接器页同一套交互，用户不需要回页面再点"重试"。
+ */
+async function handleOAuthSignIn(plugin: string, server: string) {
+  const key = oauthKey(plugin, server)
+  if (oauthBusy.value) return
+  oauthBusy.value = key
+  try {
+    const res = await store.startOAuth(plugin, server)
+    if (res.already_authorized) {
+      message.success(t('agentplugins.oauthAlready'))
+      await store.loadPlugins()
+      return
+    }
+    if (!res.authorize_url) {
+      message.error(t('agentplugins.oauthFailedMsg'))
+      return
+    }
+    window.open(res.authorize_url, '_blank', 'noopener')
+    message.info(t('agentplugins.oauthPopup'), { duration: 8000 })
+
+    const deadline = Date.now() + 3 * 60 * 1000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000))
+      let st
+      try {
+        st = await store.oauthStatus(plugin, server)
+      } catch {
+        continue // 单次轮询失败不终止等待
+      }
+      if (st.state === 'authorized') {
+        message.success(t('agentplugins.oauthDone', { name: server }))
+        await store.loadPlugins()
+        return
+      }
+      if (st.state === 'failed') {
+        message.error(st.error || t('agentplugins.oauthFailedMsg'), { duration: 10000 })
+        await store.loadPlugins()
+        return
+      }
+    }
+    message.warning(t('agentplugins.oauthTimeout'))
+  } catch (e: any) {
+    message.error(e.message || t('agentplugins.oauthFailedMsg'))
+  } finally {
+    oauthBusy.value = ''
+  }
+}
+
+async function handleOAuthSignOut(plugin: string, server: string) {
+  try {
+    await store.signOutOAuth(plugin, server)
+    message.success(t('agentplugins.oauthSignedOut'))
+  } catch (e: any) {
+    message.error(e.message || t('agentplugins.oauthFailedMsg'))
   }
 }
 
@@ -1099,6 +1238,9 @@ onMounted(async () => {
 }
 .ap-entry-warn {
   color: #d48806;
+}
+.ap-entry-hint {
+  color: #2080f0;
 }
 .ap-entry-err {
   color: #d03050;

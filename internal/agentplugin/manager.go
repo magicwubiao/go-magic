@@ -230,7 +230,7 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		}
 		mcpEntries := make([]map[string]any, 0, len(mcpStatuses))
 		for _, ms := range mcpStatuses {
-			mcpEntries = append(mcpEntries, map[string]any{
+			e := map[string]any{
 				"name":       ms.Name,
 				"type":       ms.Spec.Type,
 				"connected":  ms.Connected,
@@ -239,7 +239,19 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				"error_kind": ms.ErrorKind,
 				// env 空值 + args/headers 里的 ${CRED:NAME} = 需要用户填写的凭据。
 				"required_env": SpecCredentialKeys(ms.Spec),
-			})
+			}
+			// OAuth 视图：可用时前端渲染"登录/登出"，不必再让用户找 API key。
+			if ms.OAuthAvailable {
+				e["oauth_available"] = true
+				e["oauth_state"] = ms.OAuthState
+				if ms.OAuthError != "" {
+					e["oauth_error"] = ms.OAuthError
+				}
+				if scopes := oauthScopes(ms.Spec); len(scopes) > 0 {
+					e["oauth_scopes"] = scopes
+				}
+			}
+			mcpEntries = append(mcpEntries, e)
 		}
 		entry["mcp_servers"] = mcpEntries
 

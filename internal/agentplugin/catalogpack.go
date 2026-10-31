@@ -28,6 +28,7 @@ import (
 	"sync"
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
+	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/pkg/clicatalog"
 	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/connectors"
@@ -59,6 +60,10 @@ type CatalogPack struct {
 	Transport string `json:"transport,omitempty"`
 	// RequiredEnv 是安装后需要用户填写的凭据 key（MCP: env 空值 + ${CRED:}；CLI: Requires）。
 	RequiredEnv []string `json:"required_env,omitempty"`
+	// OAuth 表示该条目走 OAuth 授权（安装后点"登录"即可，无需填凭据）。
+	OAuth bool `json:"oauth,omitempty"`
+	// OAuthScopes 是请求的权限范围（仅展示）。
+	OAuthScopes []string `json:"oauth_scopes,omitempty"`
 	// Args 是 stdio 模板参数（仅供"调整参数"预览与覆盖安装）。
 	Args []string `json:"args,omitempty"`
 	// Tools 是 CLI 条目的工具名（MCP 工具要连上才知道，这里为空）。
@@ -95,7 +100,7 @@ func mcpCatalogPacks() []CatalogPack {
 	out := make([]CatalogPack, 0, len(entries))
 	for _, c := range entries {
 		spec := buildMCPSpec(c, nil)
-		out = append(out, CatalogPack{
+		pack := CatalogPack{
 			Kind:          CatalogKindMCP,
 			ID:            c.ID,
 			Name:          CatalogPackName(CatalogKindMCP, c.ID),
@@ -109,7 +114,15 @@ func mcpCatalogPacks() []CatalogPack {
 			Args:          spec.Args,
 			DocsURL:       c.DocsURL,
 			Installed:     catalogPackInstalled(CatalogKindMCP, c.ID),
-		})
+		}
+		if spec.OAuth != nil {
+			// OAuth 条目不需要用户填任何凭据；凭据 key 列表留给前端决定
+			// 是否展示"授权"而不是"填表"。
+			pack.OAuth = true
+			pack.OAuthScopes = append([]string(nil), spec.OAuth.Scopes...)
+			pack.RequiredEnv = nil
+		}
+		out = append(out, pack)
 	}
 	return out
 }
@@ -327,6 +340,7 @@ type mcpServerOut struct {
 	Env     map[string]string `json:"env,omitempty"`
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	OAuth   *mcp.OAuthConfig  `json:"oauth,omitempty"`
 }
 
 // buildMCPSpec 把目录条目转成 mcp.json 的 server 条目。
@@ -351,6 +365,22 @@ func buildMCPSpec(c connectors.Connector, argsOverride []string) mcpServerOut {
 		}
 	default:
 		spec.URL = c.URL
+		// OAuth 只对远程条目有意义；写进 mcp.json 后由运行时在连接前取 token。
+		if c.OAuth != nil {
+			spec.OAuth = &mcp.OAuthConfig{
+				ClientID:     c.OAuth.ClientID,
+				ClientSecret: c.OAuth.ClientSecret,
+				Scopes:       append([]string(nil), c.OAuth.Scopes...),
+				RedirectPort: c.OAuth.RedirectPort,
+				Resource:     c.OAuth.Resource,
+			}
+		}
+	}
+
+	if spec.OAuth != nil {
+		// OAuth 条目不应再要求用户填 API key：两套凭据并存只会让人困惑，
+		// 而且会把本来能"点一下登录"的流程退化成手抄 token。
+		return spec
 	}
 
 	env := map[string]string{}
@@ -479,6 +509,7 @@ func mcpOutToSpec(s mcpServerOut) MCPServerSpec {
 		Env:     s.Env,
 		URL:     s.URL,
 		Headers: s.Headers,
+		OAuth:   s.OAuth,
 	}
 }
 

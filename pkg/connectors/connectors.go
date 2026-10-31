@@ -38,6 +38,19 @@ const (
 	WhereArg    = "arg"
 )
 
+// OAuthRequirement 声明该远程连接器支持 OAuth 2.1 授权。
+//
+// 有值的条目在物化成插件时会写进 mcp.json 的 "oauth" 字段：用户点一下
+// "登录"、在浏览器完成授权即可，不需要自己去后台建 API key。字段全部可空
+// （留空 = 自动发现授权服务器 + 动态注册客户端 + PKCE）。
+type OAuthRequirement struct {
+	Scopes       []string `json:"scopes,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Resource     string   `json:"resource,omitempty"`
+	RedirectPort int      `json:"redirect_port,omitempty"`
+}
+
 // Connector 是目录中的一个条目。
 type Connector struct {
 	ID          string        `json:"id"`
@@ -51,6 +64,8 @@ type Connector struct {
 	Requires    []Requirement `json:"requires,omitempty"`
 	DocsURL     string        `json:"docs_url,omitempty"`
 	Tags        []string      `json:"tags,omitempty"`
+	// OAuth 非空表示该条目支持（或要求）OAuth 授权，安装后无需填写凭据。
+	OAuth *OAuthRequirement `json:"oauth,omitempty"`
 	// DefaultName 是建议的服务器名（用户在表单里可改）。
 	DefaultName string `json:"default_name"`
 }

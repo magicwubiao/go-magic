@@ -77,6 +77,9 @@ func isSupportedMCPSchema(schema string) bool {
 func validateAndExpandSpec(spec MCPServerSpec, pluginRoot, dataDir string) (MCPServerSpec, error) {
 	switch spec.Type {
 	case TransportStdio:
+		if spec.OAuth != nil {
+			return spec, fmt.Errorf("oauth is only supported on remote entries (streamable-http / sse)")
+		}
 		return expandStdioSpec(spec, pluginRoot, dataDir)
 	case TransportStreamableHTTP, TransportSSE:
 		return validateHTTPSpec(spec)

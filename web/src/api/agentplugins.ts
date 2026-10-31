@@ -11,6 +11,14 @@ export interface AgentPluginMCPEntry {
   error_kind?: string
   // mcp.json 里值为空的 env key,即需要用户填写的凭据占位。
   required_env?: string[]
+  /** 该条目可以走 OAuth 授权（远程 server，无需手填 API key） */
+  oauth_available?: boolean
+  /** authorized / awaiting_authorization / failed / expired / none */
+  oauth_state?: string
+  /** 最近一次授权失败原因（不含 token） */
+  oauth_error?: string
+  /** 请求的权限范围（仅展示） */
+  oauth_scopes?: string[]
 }
 
 // 插件内 cli.json 声明的 CLI 连接器(本实现的扩展组件,无连接阶段)。
@@ -38,7 +46,7 @@ export interface AgentPluginCLIEntry {
  * 启用前用它拦一下,把原因摆在动作之前。
  */
 export interface AgentPluginBlocker {
-  kind: 'auth' | 'connect' | 'missing_binary' | 'rejected' | string
+  kind: 'auth' | 'oauth' | 'connect' | 'missing_binary' | 'rejected' | string
   scope: 'mcp' | 'cli' | 'plugin' | string
   /** MCP 条目名或 CLI 连接器名 */
   name?: string
@@ -48,7 +56,7 @@ export interface AgentPluginBlocker {
   command?: string
   /** missing_binary: 目录条目 id(有则可一键安装) */
   catalog_id?: string
-  /** connect: 连接失败原因 */
+  /** connect/oauth: 连接或授权失败原因 */
   detail?: string
 }
 
@@ -116,6 +124,10 @@ export interface CatalogPack {
   transport?: string
   /** 安装后需要用户填写的凭据 key */
   required_env?: string[]
+  /** 该条目走 OAuth 授权：装完点"登录"即可，不需要填凭据 */
+  oauth?: boolean
+  /** OAuth 请求的权限范围（仅展示） */
+  oauth_scopes?: string[]
   /** stdio 模板参数（仅 MCP，用于"调整参数"覆盖安装） */
   args?: string[]
   /** CLI 条目的工具名（MCP 要连上才知道） */
@@ -224,6 +236,55 @@ export async function setPluginCredentials(
 export async function connectPluginServer(name: string, server: string): Promise<{ ok: boolean; error?: string }> {
   return request(
     `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/connect`,
+    { method: 'POST' },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 插件条目的 OAuth 2.1 授权（与连接器页同一套流程，键带 agentplugin: 命名空间）。
+// ---------------------------------------------------------------------------
+
+export interface PluginOAuthStatus {
+  /** authorized / awaiting_authorization / failed / expired / none */
+  state: string
+  error?: string
+}
+
+export interface PluginOAuthStartResult {
+  /** 浏览器要打开的授权页；already_authorized=true 时为空 */
+  authorize_url?: string
+  already_authorized?: boolean
+  status: PluginOAuthStatus
+}
+
+/** 发起插件条目的 OAuth 授权，返回 authorize_url 供浏览器打开。 */
+export async function startPluginOAuth(
+  name: string,
+  server: string,
+): Promise<PluginOAuthStartResult> {
+  return request(
+    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/start`,
+    { method: 'POST' },
+  )
+}
+
+/** 轮询插件条目的授权状态。 */
+export async function getPluginOAuthStatus(
+  name: string,
+  server: string,
+): Promise<PluginOAuthStatus> {
+  return request(
+    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/status`,
+  )
+}
+
+/** 登出：删除该条目的 token（后端会顺带重连成"未授权"状态）。 */
+export async function signOutPluginOAuth(
+  name: string,
+  server: string,
+): Promise<{ ok: boolean; status: PluginOAuthStatus }> {
+  return request(
+    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/signout`,
     { method: 'POST' },
   )
 }

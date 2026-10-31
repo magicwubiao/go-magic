@@ -11,6 +11,7 @@
 package agentplugin
 
 import (
+	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/skills"
 )
 
@@ -69,6 +70,11 @@ type Author struct {
 }
 
 // MCPServerSpec 描述 mcp.json 中单个 MCP server 条目。
+//
+// OAuth 是本实现的扩展字段（规范 1.0.0 的条目 schema 未定义它）：
+// 远程 server 声明 oauth 后，连接前会先用 MCP 授权规范拿 token，用户不需要
+// 再手工准备 API key。不声明也可以——远程 server 回 401 且该条目没有任何
+// 待填凭据时，运行时会自动探测授权服务器并就地发起授权（零配置路径）。
 type MCPServerSpec struct {
 	Type    string            `json:"type"`              // stdio | streamable-http | sse
 	Command string            `json:"command,omitempty"` // stdio:单个可执行 token(不展开占位符)
@@ -77,6 +83,7 @@ type MCPServerSpec struct {
 	Cwd     string            `json:"cwd,omitempty"`     // stdio:展开占位符,须在 PLUGIN_ROOT/PLUGIN_DATA 内
 	URL     string            `json:"url,omitempty"`     // http:绝对 URL(不展开占位符)
 	Headers map[string]string `json:"headers,omitempty"` // http:字面 headers,不含凭证
+	OAuth   *mcp.OAuthConfig  `json:"oauth,omitempty"`   // http:可选 OAuth 2.1 客户端配置
 }
 
 // MCPConfig 描述 mcp.json 文档。
@@ -103,6 +110,15 @@ type MCPEntryStatus struct {
 	// ErrorKind 是错误的可行动分类(auth/network/protocol/…,见 mcp.ErrorKind)。
 	// UI 据此决定亮"去授权"还是"查网络";空 = 无错误或无法归类。
 	ErrorKind string
+
+	// OAuthAvailable 表示该条目可以用 OAuth 授权：显式声明了 oauth，或远程
+	// 条目本身没有待填凭据（此时 401 会触发自动探测）。
+	OAuthAvailable bool
+	// OAuthState 是授权状态：authorized / awaiting_authorization / failed /
+	// expired / none（空 = 未启用 OAuth）。
+	OAuthState string
+	// OAuthError 是最近一次授权失败原因（不含 token）。
+	OAuthError string
 }
 
 // Plugin 表示一个已加载的 Agent Plugin。
