@@ -571,6 +571,36 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 				required[agentplugin.CLICredentialGroup(cs.Name)] = keys
 			}
 		}
+		// 分组 → OAuth 可用性：能授权的分组直接给"一键授权"，用户不必去
+		// 厂商页面搬 token。分组键与 fields / required_env 保持一致。
+		oauthGroups := map[string]map[string]any{}
+		if mp.Runtime != nil {
+			for _, st := range mp.Runtime.EntryStatuses() {
+				if !st.OAuthAvailable {
+					continue
+				}
+				item := map[string]any{"available": true, "state": st.OAuthState}
+				if st.OAuthError != "" {
+					item["error"] = st.OAuthError
+				}
+				oauthGroups[st.Name] = item
+			}
+		}
+		for _, cs := range mp.Plugin.CLIConnectors {
+			spec := cs.Connector.OAuth
+			// 没配 client_id/scopes 的声明不构成"可授权"：设备码流程
+			// 起不来，这种分组仍走手填。
+			if spec == nil || !spec.Configured() {
+				continue
+			}
+			st := s.pluginCLIConnectorOAuthStatus(name, cs.Name)
+			item := map[string]any{"available": true, "state": st.State}
+			if st.Error != "" {
+				item["error"] = st.Error
+			}
+			oauthGroups[agentplugin.CLICredentialGroup(cs.Name)] = item
+		}
+
 		jsonResponse(w, map[string]any{
 			"plugin":       name,
 			"env":          env,
@@ -578,6 +608,8 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 			// 每个 key 的 label / 获取地址：前端把有 help_url 的渲染成
 			// "去获取"直链，用户点一下就到厂商的 token 页面。
 			"fields": agentplugin.CredentialFields(mp.Plugin),
+			// 分组 → OAuth 可用性：能授权的分组优先展示"一键授权"。
+			"oauth": oauthGroups,
 		})
 		return
 

@@ -2102,6 +2102,8 @@ export default {
     credentialsTitle: '{name} 授权',
     credentialsHint: '凭据只保存在本机配置中，用于启动连接器子进程；已保存的值以 *** 显示，留空即保持不变。',
     credentialsGetHint: '这些凭据可以直接在下面的页面获取，复制后粘贴到对应输入框即可。',
+    credOAuthHint: '这些连接器支持账号授权：点一下自动完成，不需要手动获取 token。',
+    credOAuthSignIn: '授权 {name}',
     credentialsOpenHelp: '打开 {host} 获取',
     credentialsGet: '去获取',
     credentialsKeep: '已设置，留空保持不变',

@@ -293,9 +293,10 @@
                     >
                       {{ t('agentplugins.oauthSignOut') }}
                     </n-button>
-                    <!-- 凭据能在网页上拿到的，先给页面入口（比让用户猜去哪里生成强） -->
+                    <!-- 凭据能在网页上拿到的，先给页面入口（比让用户猜去哪里生成强）；
+                         该条目能走 OAuth 时不出现——授权比搬 token 更省事 -->
                     <n-button
-                      v-if="entryHelpURL(m)"
+                      v-if="entryHelpURL(m) && !(m.oauth_available && m.oauth_state !== 'failed')"
                       size="tiny"
                       text
                       type="primary"
@@ -380,7 +381,7 @@
                       {{ c.oauth_state === 'authorized' ? t('agentplugins.cliOAuthManage') : t('agentplugins.oauthSignIn') }}
                     </n-button>
                     <n-button
-                      v-if="entryHelpURL(c)"
+                      v-if="entryHelpURL(c) && !(c.oauth_configured && c.oauth_state !== 'failed')"
                       size="tiny"
                       text
                       type="primary"
@@ -483,6 +484,29 @@
               }) }}
             </span>
           </n-alert>
+          <!-- 能 OAuth 授权的分组：点一下就完成，优先于"去网页搬 token" -->
+          <n-alert
+            v-if="credOAuthGroups.length"
+            type="success"
+            :bordered="false"
+            :show-icon="false"
+            style="margin-bottom: 12px;"
+          >
+            <div class="ap-cred-help-hint">{{ t('agentplugins.credOAuthHint') }}</div>
+            <n-space :size="8" style="margin-top: 6px;">
+              <n-button
+                v-for="g in credOAuthGroups"
+                :key="g.group"
+                size="tiny"
+                type="primary"
+                secondary
+                :loading="oauthBusy === oauthKey(credModal.plugin, g.group)"
+                @click="startGroupOAuth(g.group)"
+              >
+                {{ t('agentplugins.credOAuthSignIn', { name: g.label }) }}
+              </n-button>
+            </n-space>
+          </n-alert>
           <!-- 能跳转网站拿到的凭据：把"去哪里拿"放在第一位，别让用户先猜 -->
           <n-alert
             v-if="credHelpLinks.length"
@@ -512,7 +536,7 @@
                 <span class="ap-cred-label">
                   <span>{{ row.label }}</span>
                   <n-button
-                    v-if="row.helpUrl"
+                    v-if="row.helpUrl && !oauthCoveredKeys.has(row.key)"
                     text
                     size="tiny"
                     type="primary"
@@ -939,12 +963,18 @@ const credModal = reactive<{
   autoFilled: string[]
   /** 分组键 → 字段元数据（label / 获取地址），来自后端目录登记 */
   fields: Record<string, CredentialField[]>
+  /** 分组键 → 这一组需要的 key（判断某组是否还用得着手填） */
+  groups: Record<string, string[]>
+  /** 分组键 → OAuth 可用性：能授权就不必让用户去网页搬 token */
+  oauth: Record<string, { available: boolean; state?: string; error?: string }>
 }>({
   show: false,
   loading: false,
   plugin: '',
   keys: [],
   fields: {},
+  groups: {},
+  oauth: {},
   values: {},
   masked: {},
   autoFilled: [],
@@ -993,12 +1023,53 @@ const credHelpLinks = computed(() => {
   const seen = new Set<string>()
   const out: { url: string; host: string }[] = []
   for (const row of credRows.value) {
-    if (!row.helpUrl || seen.has(row.helpUrl)) continue
+    // 这一项所在的组能一键授权：别再劝用户去网页复制 token。
+    if (!row.helpUrl || oauthCoveredKeys.value.has(row.key) || seen.has(row.helpUrl)) continue
     seen.add(row.helpUrl)
     out.push({ url: row.helpUrl, host: urlHost(row.helpUrl) })
   }
   return out
 })
+
+/**
+ * 弹窗里能"一键授权"的分组（只算当前表单真的要用到的组）。
+ *
+ * 已授权的组不需要入口；没有任何待填 key 的组也不该占位。
+ */
+const credOAuthGroups = computed(() => {
+  const wanted = new Set(credModal.keys)
+  const out: { group: string; label: string; state?: string }[] = []
+  for (const [group, st] of Object.entries(credModal.oauth)) {
+    if (!st || !st.available || st.state === 'authorized') continue
+    const keys = credModal.groups[group] || []
+    if (!keys.some((k) => wanted.has(k))) continue
+    out.push({ group, label: oauthGroupLabel(group), state: st.state })
+  }
+  return out
+})
+
+/**
+ * 已经被 OAuth 覆盖的 key：这些项在表单里不再给"去获取"。
+ *
+ * 同一个 key 如果还被某个不能授权的组需要（少见），仍然保留直链——宁可多给
+ * 一个入口，也不要让用户无处可去。
+ */
+const oauthCoveredKeys = computed(() => {
+  const covered = new Set<string>()
+  const plain = new Set<string>()
+  for (const [group, st] of Object.entries(credModal.oauth)) {
+    const keys = credModal.groups[group] || []
+    if (st && st.available) keys.forEach((k) => covered.add(k))
+    else keys.forEach((k) => plain.add(k))
+  }
+  for (const k of plain) covered.delete(k)
+  return covered
+})
+
+/** 分组键 → 展示名：CLI 分组带 "cli:" 前缀，去掉后就是连接器名。 */
+function oauthGroupLabel(group: string): string {
+  return group.startsWith('cli:') ? group.slice(4) : group
+}
 
 /** 取 URL 的主机名，用于按钮文案（"打开 github.com 获取"）。 */
 function urlHost(url: string): string {
@@ -1069,10 +1140,14 @@ async function openCredentials(name: string, only?: string[], autoFilled: string
   credModal.values = {}
   credModal.masked = {}
   credModal.fields = {}
+  credModal.groups = {}
+  credModal.oauth = {}
   credModal.autoFilled = [...autoFilled]
   try {
     const cred = await store.loadCredentials(name)
     credModal.fields = cred.fields || {}
+    credModal.groups = cred.required_env || {}
+    credModal.oauth = cred.oauth || {}
     const all = Object.keys(cred.env || {}).sort()
     const keys = only && only.length ? only : all
     credModal.keys = keys
@@ -1086,6 +1161,29 @@ async function openCredentials(name: string, only?: string[], autoFilled: string
   } finally {
     credModal.loading = false
   }
+}
+
+/**
+ * 弹窗里的一键授权：能授权就不让用户去网页搬 token。
+ *
+ * MCP 分组走浏览器 OAuth（本机回环回调）；CLI 分组走设备码弹窗，
+ * token 由本程序申请并在执行前注入 env。
+ */
+function startGroupOAuth(group: string) {
+  const name = credModal.plugin
+  if (!name) return
+  if (group.startsWith('cli:')) {
+    const connector = group.slice(4)
+    const entry = (store.plugins.find((p) => p.name === name)?.cli_connectors || [])
+      .find((c) => c.name === connector)
+    if (!entry) {
+      message.error(t('agentplugins.oauthFailedMsg'))
+      return
+    }
+    openCLIOAuthDialog(name, entry)
+    return
+  }
+  void handleOAuthSignIn(name, group)
 }
 
 /** 保存凭据:*** 原样回传(=保持原值),空串删除,其余为新值。 */

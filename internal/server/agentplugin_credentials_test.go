@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
+	"github.com/magicwubiao/go-magic/internal/cliconn"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 )
 
@@ -82,5 +83,75 @@ func TestPluginCredentialsExposeCredentialFields(t *testing.T) {
 	}
 	if len(blockers[0].Fields) != 1 || blockers[0].Fields[0].HelpURL == "" {
 		t.Fatalf("blocker lost help url: %+v", blockers[0].Fields)
+	}
+}
+
+// 凭据表单要标出"哪些分组能一键授权"：能走 OAuth 的分组不再劝用户去网页
+// 搬 token，前端在弹窗顶部直接给授权按钮。
+func TestPluginCredentialsExposeOAuthGroups(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+
+	ghOAuth := &cliconn.OAuthSpec{
+		DeviceAuthorizationEndpoint: "https://example.com/device",
+		TokenEndpoint:               "https://example.com/token",
+		ClientID:                    "cid",
+		TokenEnv:                    "GH_TOKEN",
+	}
+	plugin := &agentplugin.Plugin{
+		Manifest: &agentplugin.Manifest{Name: "mixed"},
+		MCPServers: []agentplugin.MCPEntryStatus{{
+			Name: "svc",
+			Spec: agentplugin.MCPServerSpec{
+				Type:    agentplugin.TransportStdio,
+				Command: "x",
+				Env:     map[string]string{"SVC_TOKEN": ""},
+			},
+		}},
+		CLIConnectors: []agentplugin.CLIConnectorStatus{
+			{
+				Name: "gh",
+				Connector: cliconn.Connector{
+					Command: "gh",
+					Env:     []string{"GH_TOKEN="},
+					OAuth:   ghOAuth,
+				},
+			},
+			{
+				// 声明了 oauth 但没配 client_id：设备码流程起不来，
+				// 不能算"可授权"，否则按钮点下去只会报错。
+				Name: "glab",
+				Connector: cliconn.Connector{
+					Command: "glab",
+					Env:     []string{"GITLAB_TOKEN="},
+					OAuth:   &cliconn.OAuthSpec{TokenEnv: "GITLAB_TOKEN"},
+				},
+			},
+		},
+	}
+	plugins := map[string]*agentplugin.ManagedPlugin{"mixed": {Plugin: plugin}}
+	s := &Server{cfg: &appconfig.Config{}, agentPlugins: plugins}
+
+	rec := httptest.NewRecorder()
+	s.handlePluginCredentials(rec, httptest.NewRequest(http.MethodGet, "/", nil), "mixed")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		OAuth map[string]struct {
+			Available bool   `json:"available"`
+			State     string `json:"state"`
+		} `json:"oauth"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if !body.OAuth["cli:gh"].Available {
+		t.Fatalf("cli:gh should be oauth-capable: %+v", body.OAuth)
+	}
+	if _, ok := body.OAuth["cli:glab"]; ok {
+		t.Fatalf("unconfigured oauth must not be offered: %+v", body.OAuth)
+	}
+	if _, ok := body.OAuth["svc"]; ok {
+		t.Fatalf("plain MCP entry must not be marked oauth: %+v", body.OAuth)
 	}
 }

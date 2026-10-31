@@ -122,6 +122,14 @@ export interface AgentPlugin {
   examples?: string[]
 }
 
+/** 某个凭据分组能否走 OAuth（能授权就不必让用户去网页搬 token）。 */
+export interface CredentialOAuthState {
+  available: boolean
+  /** none / authorized / awaiting_authorization / failed / expired */
+  state?: string
+  error?: string
+}
+
 // 插件凭据掩码视图:GET 返回值一律 ***(已设置)或 ''(待填)。
 export interface AgentPluginCredentials {
   plugin: string
@@ -129,6 +137,8 @@ export interface AgentPluginCredentials {
   required_env: Record<string, string[]>
   /** 分组键（MCP 条目名 / cli:<连接器名>）→ 字段元数据 */
   fields: Record<string, CredentialField[]>
+  /** 分组键 → OAuth 可用性/状态 */
+  oauth?: Record<string, CredentialOAuthState>
 }
 
 export interface AgentPluginsReloadResult {

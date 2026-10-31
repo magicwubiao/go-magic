@@ -2100,6 +2100,8 @@ export default {
     credentialsTitle: 'Authorize {name}',
     credentialsHint: 'Credentials are stored locally only, used to launch the connector subprocess. Saved values show as ***; leave blank to keep unchanged.',
     credentialsGetHint: 'You can get these credentials on the pages below — copy them and paste into the matching fields.',
+    credOAuthHint: 'These connectors support account authorization — one click and it is done, no token hunting.',
+    credOAuthSignIn: 'Authorize {name}',
     credentialsOpenHelp: 'Open {host}',
     credentialsGet: 'Get it',
     credentialsKeep: 'Set — leave blank to keep',
