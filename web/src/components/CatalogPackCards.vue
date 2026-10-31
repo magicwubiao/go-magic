@@ -199,6 +199,29 @@
           </div>
         </template>
 
+        <!-- 装好后要填的凭据：能跳转网站拿到的直接给页面入口，别让人自己搜 -->
+        <n-alert
+          v-if="detailCredentialRows.length"
+          type="info"
+          :bordered="false"
+          :show-icon="false"
+          style="margin-top: 14px;"
+        >
+          <div class="cpc-hint">{{ t('agentplugins.catalogCredsHint') }}</div>
+          <div v-for="row in detailCredentialRows" :key="row.key" class="cpc-cmd">
+            <span class="cpc-hint">{{ row.label }}</span>
+            <a
+              v-if="row.helpUrl"
+              :href="row.helpUrl"
+              target="_blank"
+              rel="noreferrer"
+              class="cpc-link"
+            >
+              {{ t('agentplugins.credentialsGet') }}
+            </a>
+          </div>
+        </n-alert>
+
         <n-space justify="end" align="center" style="margin-top: 16px;">
           <a
             v-if="detail.docs_url"
@@ -400,6 +423,15 @@ function avatarText(name: string): string {
 }
 
 // === 一键安装命令（仅 CLI 条目） ===
+
+/** 目录条目里登记的凭据项（label + 获取地址），用于详情页给"去获取"直链。 */
+const detailCredentialRows = computed(() => {
+  return (detail.value?.credential_fields || []).map((f) => ({
+    key: f.key,
+    label: f.label || f.key,
+    helpUrl: f.help_url,
+  }))
+})
 
 const installShow = ref(false)
 const installId = ref('')

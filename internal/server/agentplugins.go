@@ -568,13 +568,16 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 				}
 			}
 			if len(keys) > 0 {
-				required["cli:"+cs.Name] = keys
+				required[agentplugin.CLICredentialGroup(cs.Name)] = keys
 			}
 		}
 		jsonResponse(w, map[string]any{
 			"plugin":       name,
 			"env":          env,
 			"required_env": required,
+			// 每个 key 的 label / 获取地址：前端把有 help_url 的渲染成
+			// "去获取"直链，用户点一下就到厂商的 token 页面。
+			"fields": agentplugin.CredentialFields(mp.Plugin),
 		})
 		return
 

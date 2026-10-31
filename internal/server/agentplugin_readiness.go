@@ -29,6 +29,10 @@ type pluginBlocker struct {
 	Name string `json:"name,omitempty"`
 	// Keys 是 auth 类缺失的凭据 key。
 	Keys []string `json:"keys,omitempty"`
+	// Fields 是这些 key 的元数据（label / help_url）。能跳转网站拿到的凭据，
+	// 前端直接把 help_url 渲染成"去获取凭据"的主按钮——比让用户猜去哪生成
+	// token 有用得多。
+	Fields []agentplugin.CredentialField `json:"fields,omitempty"`
 	// Command 是 missing_binary 类缺失的命令。
 	Command string `json:"command,omitempty"`
 	// CatalogID 是目录条目 id：有值时前端可以一键安装。
@@ -52,6 +56,8 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 	}
 
 	creds := s.agentPluginCredentials(name)
+	// 凭据的"去哪里拿"元数据（目录登记的 label / help_url）。
+	credFields := agentplugin.CredentialFields(p)
 	// 条目状态在后台连接期间会变化，走锁内快照。
 	statuses := p.MCPServers
 	if mp.Runtime != nil {
@@ -68,7 +74,13 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 			}
 		}
 		if len(missing) > 0 {
-			out = append(out, pluginBlocker{Kind: "auth", Scope: "mcp", Name: ms.Name, Keys: missing})
+			out = append(out, pluginBlocker{
+				Kind:   "auth",
+				Scope:  "mcp",
+				Name:   ms.Name,
+				Keys:   missing,
+				Fields: missingCredentialFields(credFields[ms.Name], missing),
+			})
 			continue
 		}
 		// 支持 OAuth 但还没授权：这才是"去点一下登录就好"，不要报成连接失败。
@@ -112,6 +124,27 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 				out = append(out, pluginBlocker{Kind: "oauth", Scope: "cli", Name: cs.Name, Detail: st.Error})
 			}
 		}
+	}
+	return out
+}
+
+// missingCredentialFields 从整组字段里挑出"确实缺的"几项（保持字段自己的顺序）。
+func missingCredentialFields(fields []agentplugin.CredentialField, missing []string) []agentplugin.CredentialField {
+	if len(fields) == 0 || len(missing) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(missing))
+	for _, k := range missing {
+		want[k] = true
+	}
+	out := make([]agentplugin.CredentialField, 0, len(missing))
+	for _, f := range fields {
+		if want[f.Key] {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

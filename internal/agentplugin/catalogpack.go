@@ -60,6 +60,9 @@ type CatalogPack struct {
 	Transport string `json:"transport,omitempty"`
 	// RequiredEnv 是安装后需要用户填写的凭据 key（MCP: env 空值 + ${CRED:}；CLI: Requires）。
 	RequiredEnv []string `json:"required_env,omitempty"`
+	// CredentialFields 是 RequiredEnv 的带上下文的版本（label / help_url），
+	// 目录卡片据此在安装前后都能给"去获取凭据"的直链。
+	CredentialFields []CredentialField `json:"credential_fields,omitempty"`
 	// OAuth 表示该条目走 OAuth 授权（安装后点"登录"即可，无需填凭据）。
 	OAuth bool `json:"oauth,omitempty"`
 	// OAuthScopes 是请求的权限范围（仅展示）。
@@ -118,12 +121,25 @@ func mcpCatalogPacks() []CatalogPack {
 			DocsURL:       c.DocsURL,
 			Installed:     catalogPackInstalled(CatalogKindMCP, c.ID),
 		}
+		// 目录里的 Label / HelpURL 透给前端：能跳转网站拿到的凭据优先给直链。
+		meta := make(map[string]CredentialField, len(c.Requires))
+		for _, r := range c.Requires {
+			meta[r.Key] = CredentialField{
+				Key:         r.Key,
+				Label:       r.Label,
+				Secret:      r.Secret,
+				Placeholder: r.Placeholder,
+				HelpURL:     r.HelpURL,
+			}
+		}
+		pack.CredentialFields = fieldsForKeys(pack.RequiredEnv, meta)
 		if spec.OAuth != nil {
 			// OAuth 条目不需要用户填任何凭据；凭据 key 列表留给前端决定
 			// 是否展示"授权"而不是"填表"。
 			pack.OAuth = true
 			pack.OAuthScopes = append([]string(nil), spec.OAuth.Scopes...)
 			pack.RequiredEnv = nil
+			pack.CredentialFields = nil
 		}
 		out = append(out, pack)
 	}
@@ -159,7 +175,7 @@ func cliCatalogPacks() []CatalogPack {
 			tools = append(tools, t.Name)
 		}
 		bin := e.Connector.Command
-		out = append(out, CatalogPack{
+		pack := CatalogPack{
 			Kind:          CatalogKindCLI,
 			ID:            e.ID,
 			Name:          CatalogPackName(CatalogKindCLI, e.ID),
@@ -178,7 +194,19 @@ func cliCatalogPacks() []CatalogPack {
 			LoginExec:       append([]string(nil), e.LoginExec...),
 			DocsURL:         e.DocsURL,
 			Installed:       catalogPackInstalled(CatalogKindCLI, e.ID),
-		})
+		}
+		meta := make(map[string]CredentialField, len(e.Requires))
+		for _, r := range e.Requires {
+			meta[r.Key] = CredentialField{
+				Key:         r.Key,
+				Label:       r.Label,
+				Secret:      r.Secret,
+				Placeholder: r.Placeholder,
+				HelpURL:     r.HelpURL,
+			}
+		}
+		pack.CredentialFields = fieldsForKeys(pack.RequiredEnv, meta)
+		out = append(out, pack)
 	}
 	return out
 }

@@ -1,5 +1,21 @@
 import { request, getAuthToken } from './client'
 
+/**
+ * 一项待填凭据的元数据。后端从内置目录取 label / help_url：
+ * 能跳转网站拿到的凭据优先渲染成"去获取"直链，而不是让用户猜去哪生成。
+ */
+export interface CredentialField {
+  key: string
+  /** 给人看的名字（如 API token）；空时回退显示 key */
+  label?: string
+  /** 值是否应隐藏显示 */
+  secret?: boolean
+  /** 格式提示（如 https://your.atlassian.net） */
+  placeholder?: string
+  /** 厂商页面：生成/复制凭据的地方 */
+  help_url?: string
+}
+
 // AgentPlugin 对应后端 agentplugin.Summary 返回的单个插件摘要。
 export interface AgentPluginMCPEntry {
   name: string
@@ -11,6 +27,8 @@ export interface AgentPluginMCPEntry {
   error_kind?: string
   // mcp.json 里值为空的 env key,即需要用户填写的凭据占位。
   required_env?: string[]
+  /** 上述 key 的 label / 获取地址（同序同源） */
+  credential_fields?: CredentialField[]
   /** 该条目可以走 OAuth 授权（远程 server，无需手填 API key） */
   oauth_available?: boolean
   /** authorized / awaiting_authorization / failed / expired / none */
@@ -31,6 +49,8 @@ export interface AgentPluginCLIEntry {
   tools: string[]
   /** env 中留空的键,即需要用户填写的凭据占位 */
   required_env?: string[]
+  /** 上述 key 的 label / 获取地址 */
+  credential_fields?: CredentialField[]
   /** 命令是否能在本机 PATH 上找到(目录装出来的插件才有) */
   binary_found?: boolean
   /** 目录条目 id(有值即可一键安装) */
@@ -64,6 +84,8 @@ export interface AgentPluginBlocker {
   name?: string
   /** auth: 缺的凭据 key */
   keys?: string[]
+  /** auth: 这些 key 的 label / 获取地址（有 help_url 时前端给"去获取"直链） */
+  fields?: CredentialField[]
   /** missing_binary: 缺的命令 */
   command?: string
   /** missing_binary: 目录条目 id(有则可一键安装) */
@@ -105,6 +127,8 @@ export interface AgentPluginCredentials {
   plugin: string
   env: Record<string, string>
   required_env: Record<string, string[]>
+  /** 分组键（MCP 条目名 / cli:<连接器名>）→ 字段元数据 */
+  fields: Record<string, CredentialField[]>
 }
 
 export interface AgentPluginsReloadResult {
@@ -136,6 +160,8 @@ export interface CatalogPack {
   transport?: string
   /** 安装后需要用户填写的凭据 key */
   required_env?: string[]
+  /** 上述 key 的 label / 获取地址（装之前就能点"去获取"） */
+  credential_fields?: CredentialField[]
   /** 该条目走 OAuth 授权：装完点"登录"即可，不需要填凭据 */
   oauth?: boolean
   /** OAuth 请求的权限范围（仅展示） */

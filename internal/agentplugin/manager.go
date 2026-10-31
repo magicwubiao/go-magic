@@ -228,6 +228,9 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		if mp.Runtime != nil {
 			mcpStatuses = mp.Runtime.EntryStatuses()
 		}
+		// 待填凭据的元数据（label / 去哪里获取）：与 required_env 同分组键，
+		// 前端据此把"去获取"直链直接放在条目上，用户不必先打开表单才知道去哪拿。
+		credFields := CredentialFields(p)
 		mcpEntries := make([]map[string]any, 0, len(mcpStatuses))
 		for _, ms := range mcpStatuses {
 			e := map[string]any{
@@ -239,6 +242,9 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				"error_kind": ms.ErrorKind,
 				// env 空值 + args/headers 里的 ${CRED:NAME} = 需要用户填写的凭据。
 				"required_env": SpecCredentialKeys(ms.Spec),
+			}
+			if fields := credFields[ms.Name]; len(fields) > 0 {
+				e["credential_fields"] = fields
 			}
 			// OAuth 视图：可用时前端渲染"登录/登出"，不必再让用户找 API key。
 			if ms.OAuthAvailable {
@@ -288,6 +294,9 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				"tools":        names,
 				"required_env": envPlaceholderKeys(cs.Connector.Env),
 				"binary_found": CommandAvailable(cs.Connector.Command),
+			}
+			if fields := credFields[CLICredentialGroup(cs.Name)]; len(fields) > 0 {
+				cliEntry["credential_fields"] = fields
 			}
 			if fromCatalog && catKind == CatalogKindCLI {
 				cliEntry["catalog_id"] = catID

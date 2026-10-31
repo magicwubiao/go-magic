@@ -293,6 +293,16 @@
                     >
                       {{ t('agentplugins.oauthSignOut') }}
                     </n-button>
+                    <!-- 凭据能在网页上拿到的，先给页面入口（比让用户猜去哪里生成强） -->
+                    <n-button
+                      v-if="entryHelpURL(m)"
+                      size="tiny"
+                      text
+                      type="primary"
+                      @click="openCredHelp(entryHelpURL(m))"
+                    >
+                      {{ t('agentplugins.credentialsGet') }}
+                    </n-button>
                   </div>
                   <div class="ap-entry-desc">
                     <span class="ap-entry-meta">{{ t('agentplugins.toolCount') }}: {{ m.tools }}</span>
@@ -368,6 +378,15 @@
                       @click="openCLIOAuthDialog(plugin.name, c)"
                     >
                       {{ c.oauth_state === 'authorized' ? t('agentplugins.cliOAuthManage') : t('agentplugins.oauthSignIn') }}
+                    </n-button>
+                    <n-button
+                      v-if="entryHelpURL(c)"
+                      size="tiny"
+                      text
+                      type="primary"
+                      @click="openCredHelp(entryHelpURL(c))"
+                    >
+                      {{ t('agentplugins.credentialsGet') }}
                     </n-button>
                     <n-button
                       v-if="c.required_env && c.required_env.length"
@@ -464,20 +483,53 @@
               }) }}
             </span>
           </n-alert>
+          <!-- 能跳转网站拿到的凭据：把"去哪里拿"放在第一位，别让用户先猜 -->
+          <n-alert
+            v-if="credHelpLinks.length"
+            type="info"
+            :bordered="false"
+            :show-icon="false"
+            style="margin-bottom: 12px;"
+          >
+            <div class="ap-cred-help-hint">{{ t('agentplugins.credentialsGetHint') }}</div>
+            <n-space :size="8" style="margin-top: 6px;">
+              <n-button
+                v-for="link in credHelpLinks"
+                :key="link.url"
+                size="tiny"
+                type="primary"
+                secondary
+                @click="openCredHelp(link.url)"
+              >
+                <template #icon><component :is="OpenOutline" /></template>
+                {{ t('agentplugins.credentialsOpenHelp', { host: link.host }) }}
+              </n-button>
+            </n-space>
+          </n-alert>
           <n-form label-placement="top" size="small">
-            <n-form-item
-              v-for="key in credModal.keys"
-              :key="key"
-              :label="key"
-              required
-            >
+            <n-form-item v-for="row in credRows" :key="row.key" required>
+              <template #label>
+                <span class="ap-cred-label">
+                  <span>{{ row.label }}</span>
+                  <n-button
+                    v-if="row.helpUrl"
+                    text
+                    size="tiny"
+                    type="primary"
+                    @click="openCredHelp(row.helpUrl)"
+                  >
+                    {{ t('agentplugins.credentialsGet') }}
+                  </n-button>
+                </span>
+                <span v-if="row.label !== row.key" class="ap-cred-key">{{ row.key }}</span>
+              </template>
               <n-input
-                v-model:value="credModal.values[key]"
-                :placeholder="credModal.masked[key] === '***'
+                v-model:value="credModal.values[row.key]"
+                :placeholder="credModal.masked[row.key] === '***'
                   ? t('agentplugins.credentialsKeep')
-                  : t('agentplugins.credentialsInput')"
-                type="password"
-                show-password-on="click"
+                  : (row.placeholder || t('agentplugins.credentialsInput'))"
+                :type="row.secret ? 'password' : 'text'"
+                :show-password-on="row.secret ? 'click' : undefined"
                 clearable
               />
             </n-form-item>
@@ -516,6 +568,17 @@
             @click="fromBlockerOAuth(b)"
           >
             {{ t('agentplugins.blockerOAuth') }}
+          </n-button>
+          <!-- 能跳转网站拿到的凭据优先：先去页面拿，再回来粘贴 -->
+          <n-button
+            v-if="b.kind === 'auth' && blockerHelpURL(b)"
+            size="tiny"
+            type="primary"
+            secondary
+            @click="fromBlockerGetCreds(b)"
+          >
+            <template #icon><component :is="OpenOutline" /></template>
+            {{ t('agentplugins.blockerGetCreds') }}
           </n-button>
           <n-button
             v-else-if="b.kind === 'auth'"
@@ -584,7 +647,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { NAlert, NAvatar, NButton, NCollapseTransition, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NPopconfirm, NSpace, NSpin, NSwitch, NTag, NText, NTooltip } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -597,9 +660,10 @@ import {
   TrashOutline,
   ServerOutline,
   TerminalOutline,
+  OpenOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
-import type { AgentPlugin, AgentPluginBlocker, AgentPluginCLIEntry } from '@/api/agentplugins'
+import type { AgentPlugin, AgentPluginBlocker, AgentPluginCLIEntry, CredentialField } from '@/api/agentplugins'
 import CatalogPackCards from '@/components/CatalogPackCards.vue'
 import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
 import CLILoginDialog from '@/components/CLILoginDialog.vue'
@@ -777,7 +841,11 @@ function blockerText(b: AgentPluginBlocker): string {
     return t('agentplugins.blockerOAuthText', { name: b.name || '' })
   }
   if (b.kind === 'auth') {
-    return t('agentplugins.blockerAuth', { name: b.name || '', keys: (b.keys || []).join(', ') })
+    // 有目录登记的 label 就用 label（"API token"），没有才退回 key。
+    const names = b.fields?.length
+      ? b.fields.map((f) => f.label || f.key)
+      : (b.keys || [])
+    return t('agentplugins.blockerAuth', { name: b.name || '', keys: names.join(', ') })
   }
   if (b.kind === 'connect') {
     return t('agentplugins.blockerConnect', { name: b.name || '', detail: b.detail || '' })
@@ -806,6 +874,27 @@ function fromBlockerAuthorize() {
   const name = blockerModal.plugin
   blockerModal.show = false
   void handleAuthorize(name)
+}
+
+/** blocker 里登记过的"去哪拿凭据"页（多数字段共享同一个，取第一个）。 */
+function blockerHelpURL(b: AgentPluginBlocker): string {
+  for (const f of b.fields || []) {
+    if (f.help_url) return f.help_url
+  }
+  return ''
+}
+
+/**
+ * "去获取凭据"：先打开厂商页面，同时把填写表单摆到用户面前。
+ *
+ * 不做自动探测（handleAuthorize）：这里已经确定缺哪几个 key，再探一遍只是
+ * 让用户多等一次网络超时。
+ */
+function fromBlockerGetCreds(b: AgentPluginBlocker) {
+  const name = blockerModal.plugin
+  openCredHelp(blockerHelpURL(b))
+  blockerModal.show = false
+  void openCredentials(name, b.keys && b.keys.length ? b.keys : undefined)
 }
 
 function fromBlockerInstall(b: AgentPluginBlocker) {
@@ -848,11 +937,14 @@ const credModal = reactive<{
   masked: Record<string, string>
   /** 已经被自动填好的 key（只用于提示，表单里不再重复出现） */
   autoFilled: string[]
+  /** 分组键 → 字段元数据（label / 获取地址），来自后端目录登记 */
+  fields: Record<string, CredentialField[]>
 }>({
   show: false,
   loading: false,
   plugin: '',
   keys: [],
+  fields: {},
   values: {},
   masked: {},
   autoFilled: [],
@@ -860,6 +952,75 @@ const credModal = reactive<{
 
 /** 自动授权进行中的插件名（按钮 loading 用）。 */
 const autoBusy = ref('')
+
+/** 表单里的一行：key + 目录登记的展示信息。 */
+interface CredRow {
+  key: string
+  label: string
+  helpUrl?: string
+  placeholder?: string
+  secret: boolean
+}
+
+/**
+ * 把后端给的分组字段拍平成 key → 元数据。
+ *
+ * 同一个 key 可能同时出现在 MCP 条目与 CLI 连接器里（例如两家都要 GH_TOKEN），
+ * 首次出现的元数据胜出即可——同一环境变量在两处的"去哪拿"是同一个页面。
+ */
+const credRows = computed<CredRow[]>(() => {
+  const meta = new Map<string, CredentialField>()
+  for (const list of Object.values(credModal.fields)) {
+    for (const f of list) {
+      if (f && f.key && !meta.has(f.key)) meta.set(f.key, f)
+    }
+  }
+  return credModal.keys.map((key) => {
+    const f = meta.get(key)
+    return {
+      key,
+      label: f?.label || key,
+      helpUrl: f?.help_url || undefined,
+      placeholder: f?.placeholder || undefined,
+      // 没登记 secret 时按"可能是 token"处理：默认隐藏，用户可点眼睛查看。
+      secret: f?.secret !== false,
+    }
+  })
+})
+
+/** 表单里出现过的获取地址（去重）：能跳转网站拿到的凭据优先给直链。 */
+const credHelpLinks = computed(() => {
+  const seen = new Set<string>()
+  const out: { url: string; host: string }[] = []
+  for (const row of credRows.value) {
+    if (!row.helpUrl || seen.has(row.helpUrl)) continue
+    seen.add(row.helpUrl)
+    out.push({ url: row.helpUrl, host: urlHost(row.helpUrl) })
+  }
+  return out
+})
+
+/** 取 URL 的主机名，用于按钮文案（"打开 github.com 获取"）。 */
+function urlHost(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+/** 条目里第一个"去哪拿凭据"的地址（目录登记过才有）。 */
+function entryHelpURL(entry: { credential_fields?: CredentialField[] }): string {
+  for (const f of entry.credential_fields || []) {
+    if (f.help_url) return f.help_url
+  }
+  return ''
+}
+
+/** 打开凭据获取页（新标签页，不带走当前页面状态）。 */
+function openCredHelp(url?: string) {
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
 
 /**
  * 授权入口：先自动，再手填。
@@ -907,9 +1068,11 @@ async function openCredentials(name: string, only?: string[], autoFilled: string
   credModal.keys = []
   credModal.values = {}
   credModal.masked = {}
+  credModal.fields = {}
   credModal.autoFilled = [...autoFilled]
   try {
     const cred = await store.loadCredentials(name)
+    credModal.fields = cred.fields || {}
     const all = Object.keys(cred.env || {}).sort()
     const keys = only && only.length ? only : all
     credModal.keys = keys
@@ -1348,6 +1511,21 @@ onMounted(async () => {
 .ap-entry-err {
   color: #d03050;
   word-break: break-all;
+}
+
+/* ===== 凭据表单：字段名 + "去获取"直链 ===== */
+.ap-cred-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ap-cred-key {
+  display: block;
+  font-size: 11px;
+  color: #909399;
+}
+.ap-cred-help-hint {
+  font-size: 12px;
 }
 
 /* ===== 未就绪引导 ===== */
