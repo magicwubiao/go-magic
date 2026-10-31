@@ -45,7 +45,7 @@
 | **群聊 / Rooms** | 多个 Bot 在同一房间里多轮发言、互相 @ 拉人 |
 | **跨机器 Peer** | 一台机器上的 Bot 可以直接给另一台机器上的 Bot 发消息 |
 | **消息网关** | 14 个平台：telegram、discord、slack、wechat_ilink、wecom、dingtalk、feishu、qq、line、matrix、teams、googlechat、email、sms |
-| **工具系统** | 49 个内置工具，12 个工具集（web / file / terminal / browser / code_execution / memory / skills / session / cron / delegation / utility / homeassistant） |
+| **工具系统** | 43 个内置工具，11 个工具集（web / file / terminal / browser / code_execution / memory / skills / session / cron / delegation / utility） |
 | **技能系统** | 渐进式加载（L0/L1/L2），三级来源（内置 / 全局 / 工作区），支持自动生成的技能审核流 |
 | **Cortex 认知架构** | 记忆（SOUL.md / USER.md / 快照）、感知、规划、执行、技能进化 |
 | **用量追踪** | 按模型 / 会话 / 天统计 Token |
@@ -899,7 +899,6 @@ magic tools toolsets enable <name> / disable <name>
 | **session** | `session_search` |
 | **delegation** | `delegate_task`、`poll_task`、`list_tasks`、`cancel_task` |
 | **cron** | `cronjob` |
-| **homeassistant** | `ha_list_entities`、`ha_get_state`、`ha_list_services`、`ha_call_service`、`ha_events`、`ha_config` |
 | **utility** | `json`、`yaml`、`string`、`hash`、`uuid`、`random`、`time`、`math`、`csv`、`env`、`system_info` |
 
 配置文件中控制开关：

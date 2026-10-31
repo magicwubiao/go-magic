@@ -42,7 +42,6 @@ func TestCategoryOfToolKnownNames(t *testing.T) {
 		"clarify":                   "interaction",
 		"interrupt":                 "interaction",
 		"json":                      "utility",
-		"ha_get_state":              "smart_home",
 		"mcp_github_create_pr":      "mcp",
 		"ap_cli-git_cli_git_status": "plugins",
 	}

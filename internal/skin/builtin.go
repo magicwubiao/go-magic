@@ -72,8 +72,6 @@ var DefaultSkin = &Config{
 		"skill_list":       "📚",
 		"skill_view":       "📖",
 		"skill_create":     "✨",
-		"ha_list_entities": "🏠",
-		"ha_call_service":  "🔌",
 		"execute_code":     "💻",
 		"json":             "{}",
 		"yaml":             "📝",

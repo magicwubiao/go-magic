@@ -2495,12 +2495,6 @@ export default {
     modal: 'Cloud run',
     daytona: 'Cloud run',
     singularity: 'Container run',
-    ha_get_state: 'Read device state',
-    ha_call_service: 'Call device service',
-    ha_list_entities: 'List devices',
-    ha_list_services: 'List services',
-    ha_events: 'Read events',
-    ha_config: 'Read config',
   },
   // Short labels used in tight spaces (the bottom execution dock).
   toolShortLabels: {

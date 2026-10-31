@@ -95,7 +95,7 @@ func runToolsList(cmd *cobra.Command, args []string) {
 			byCategory[cat] = append(byCategory[cat], t)
 		}
 
-		for _, cat := range []string{"web", "browser", "terminal", "file", "code_execution", "skills", "memory", "delegation", "homeassistant", "cron", "utility", "mcp", "other"} {
+		for _, cat := range []string{"web", "browser", "terminal", "file", "code_execution", "skills", "memory", "delegation", "cron", "utility", "mcp", "other"} {
 			if tools, ok := byCategory[cat]; ok && len(tools) > 0 {
 				fmt.Printf("### %s\n", cat)
 				for _, toolName := range tools {
@@ -150,13 +150,6 @@ func getAllTools() []string {
 		"poll_task",
 		"list_tasks",
 		"cancel_task",
-		// Home Assistant
-		"ha_list_entities",
-		"ha_get_state",
-		"ha_list_services",
-		"ha_call_service",
-		"ha_events",
-		"ha_config",
 		// Cron
 		"cronjob",
 		// Utility
@@ -207,12 +200,6 @@ func getToolDescription(name string) string {
 		"poll_task":          "Poll task status",
 		"list_tasks":         "List tasks",
 		"cancel_task":        "Cancel task",
-		"ha_list_entities":   "List HA entities",
-		"ha_get_state":       "Get HA entity state",
-		"ha_list_services":   "List HA services",
-		"ha_call_service":    "Call HA service",
-		"ha_events":          "HA events",
-		"ha_config":          "HA config",
 		"cronjob":            "Schedule task",
 		"json":               "JSON utilities",
 		"yaml":               "YAML utilities",
@@ -276,11 +263,6 @@ var toolsetDefinitions = map[string]struct {
 		Description: "Sub-agent delegation",
 		Tools:       []string{"delegate_task", "poll_task", "list_tasks", "cancel_task"},
 		Tags:        []string{"delegation", "agent"},
-	},
-	"homeassistant": {
-		Description: "Smart home control",
-		Tools:       []string{"ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service", "ha_events", "ha_config"},
-		Tags:        []string{"homeassistant", "iot"},
 	},
 	"cron": {
 		Description: "Scheduled tasks",

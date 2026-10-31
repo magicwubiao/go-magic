@@ -310,11 +310,6 @@ func (g *LLMGenerator) getToolsEntries() []DocumentationEntry {
 			Tags:        []string{"tools", "delegation"},
 		},
 		{
-			Title:       "Home Assistant Tools",
-			Description: "ha_list_entities, ha_get_state, ha_call_service - Smart home control.",
-			Tags:        []string{"tools", "homeassistant"},
-		},
-		{
 			Title:       "Utility Tools",
 			Description: "json, yaml, string, hash, uuid, random, time, math, csv, env, system_info.",
 			Tags:        []string{"tools", "utility"},

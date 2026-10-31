@@ -209,14 +209,6 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.Register(NewFormatTool())
 	r.Register(NewAnalyzeErrorTool())
 
-	// Home Assistant smart home integration
-	r.Register(NewHATool())
-	r.Register(NewHAGetStateTool())
-	r.Register(NewHAListServicesTool())
-	r.Register(NewHACallServiceTool())
-	r.Register(NewHAEventsTool())
-	r.Register(NewHAConfigTool())
-
 	// Skill invocation tool (will be registered when manager is set)
 	// r.Register(&SkillInvokeTool{})
 

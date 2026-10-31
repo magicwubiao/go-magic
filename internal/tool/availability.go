@@ -25,14 +25,6 @@ func (t *ImageEditTool) Available() bool       { return t.config != nil && t.con
 // 旧版曾因三个 provider 全跑不通被删，现按官方文档重写（dashscope / volcengine）。
 func (t *VideoGenerationTool) Available() bool { return t.config != nil && t.config.APIKey != "" }
 
-// Home Assistant 工具：需要 HASS_URL + HASS_TOKEN
-func (t *HATool) Available() bool             { return t.config.IsConfigured() }
-func (t *HAGetStateTool) Available() bool     { return t.config.IsConfigured() }
-func (t *HAListServicesTool) Available() bool { return t.config.IsConfigured() }
-func (t *HACallServiceTool) Available() bool  { return t.config.IsConfigured() }
-func (t *HAEventsTool) Available() bool       { return t.config.IsConfigured() }
-func (t *HAConfigTool) Available() bool       { return t.config.IsConfigured() }
-
 // VideoAnalyzeTool：依赖 ffmpeg 提取关键帧（结果缓存，避免重复探测 PATH）
 var (
 	ffmpegOnce   sync.Once
@@ -168,12 +160,6 @@ var (
 	_ AvailabilityChecker = (*ImageGenerationTool)(nil)
 	_ AvailabilityChecker = (*ImageEditTool)(nil)
 	_ AvailabilityChecker = (*VideoGenerationTool)(nil)
-	_ AvailabilityChecker = (*HATool)(nil)
-	_ AvailabilityChecker = (*HAGetStateTool)(nil)
-	_ AvailabilityChecker = (*HAListServicesTool)(nil)
-	_ AvailabilityChecker = (*HACallServiceTool)(nil)
-	_ AvailabilityChecker = (*HAEventsTool)(nil)
-	_ AvailabilityChecker = (*HAConfigTool)(nil)
 	_ AvailabilityChecker = (*VideoAnalyzeTool)(nil)
 	_ AvailabilityChecker = (*TTSTool)(nil)
 	_ AvailabilityChecker = (*ASRTool)(nil)

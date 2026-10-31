@@ -45,7 +45,7 @@
 | **Group chat / Rooms** | Multiple bots hold multi-round conversations in one room and @-mention each other to pull others in |
 | **Cross-machine Peer** | A bot on one machine can message a bot on another machine directly |
 | **Messaging gateways** | 14 platforms: telegram, discord, slack, wechat_ilink, wecom, dingtalk, feishu, qq, line, matrix, teams, googlechat, email, sms |
-| **Tool system** | 49 built-in tools, 12 toolsets (web / file / terminal / browser / code_execution / memory / skills / session / cron / delegation / utility / homeassistant) |
+| **Tool system** | 43 built-in tools, 11 toolsets (web / file / terminal / browser / code_execution / memory / skills / session / cron / delegation / utility) |
 | **Skills system** | Progressive loading (L0/L1/L2), three-tier sources (built-in / global / workspace), with a review flow for auto-generated skills |
 | **Cortex cognitive architecture** | Memory (SOUL.md / USER.md / snapshots), perception, planning, execution, skill evolution |
 | **Usage tracking** | Token and cost stats by model / session / day, with monthly budget alerts |
@@ -901,7 +901,6 @@ magic tools toolsets enable <name> / disable <name>
 | **session** | `session_search` |
 | **delegation** | `delegate_task`, `poll_task`, `list_tasks`, `cancel_task` |
 | **cron** | `cronjob` |
-| **homeassistant** | `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`, `ha_events`, `ha_config` |
 | **utility** | `json`, `yaml`, `string`, `hash`, `uuid`, `random`, `time`, `math`, `csv`, `env`, `system_info` |
 
 Toggle via config:

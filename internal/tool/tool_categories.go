@@ -152,15 +152,6 @@ var toolCategories = []ToolCategory{
 		},
 	},
 	{
-		ID:          "smart_home",
-		Label:       "Smart Home",
-		Description: "Home Assistant integration (requires HASS_URL + HASS_TOKEN)",
-		Tools: []string{
-			"ha_list_entities", "ha_get_state", "ha_list_services",
-			"ha_call_service", "ha_events", "ha_config",
-		},
-	},
-	{
 		// MCP 工具动态注册（mcp_<server>_<tool>），按前缀归类，
 		// 不在这里逐一列举。
 		ID:          "mcp",

@@ -2500,12 +2500,6 @@ export default {
     modal: '云端执行',
     daytona: '云端执行',
     singularity: '容器执行',
-    ha_get_state: '读取设备状态',
-    ha_call_service: '调用设备服务',
-    ha_list_entities: '列出设备',
-    ha_list_services: '列出服务',
-    ha_events: '读取事件',
-    ha_config: '读取配置',
   },
   // 坞里空间紧张时用的短标签。
   toolShortLabels: {

@@ -128,12 +128,6 @@ func TestOptionalToolAvailability(t *testing.T) {
 	if !imgTool2.Available() {
 		t.Error("image_gen with API key should be available")
 	}
-
-	// 未配置 HASS_URL/HASS_TOKEN 的 HA 工具应不可用
-	ha := NewHATool()
-	if ha.Available() {
-		t.Error("ha tool without env config should be unavailable")
-	}
 }
 
 // --- 新工具注册回归 ---

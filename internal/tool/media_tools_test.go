@@ -34,7 +34,8 @@ func TestRegisterMediaToolsPresent(t *testing.T) {
 	}
 
 	// 已删除的工具不能被注册回来：没有可用后端，或已改由目录连接器覆盖。
-	for _, name := range []string{"send_message", "x_search", "send_email", "send_sms"} {
+	for _, name := range []string{"send_message", "x_search", "send_email", "send_sms",
+		"ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service", "ha_events", "ha_config"} {
 		if r.HasTool(name) {
 			t.Errorf("removed tool %q is still registered", name)
 		}
