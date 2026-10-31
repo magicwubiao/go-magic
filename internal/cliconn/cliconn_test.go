@@ -276,6 +276,52 @@ func TestRunStdinEnvAndExitCode(t *testing.T) {
 	}
 }
 
+// TestRunRedactsCredentialInArgv 是"凭据经 {{env:}} 进 argv"的端到端保护。
+//
+// 真实值必须传给子进程（否则功能就废了），但回显的 argv 不能带它——那条命令
+// 会进模型上下文、会话历史与日志。两个断言缺一不可：只断言脱敏会漏掉"根本没传"，
+// 只断言传参就漏掉泄漏。
+func TestRunRedactsCredentialInArgv(t *testing.T) {
+	const secret = "ghp_0123456789abcdefghijklmnop"
+
+	conn := helperConnector("echo_args")
+	conn.Env = append(conn.Env, "GH_TOKEN="+secret)
+	spec := ToolSpec{
+		Name:        "pr_list",
+		Description: "d",
+		Args:        []string{"--token", "{{env:GH_TOKEN}}"},
+	}
+
+	res, err := Run(context.Background(), conn, spec, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(res.Stdout, secret) {
+		t.Fatalf("the real value must still reach the process, stdout = %q", res.Stdout)
+	}
+
+	rendered := strings.Join(res.Argv, " ")
+	if strings.Contains(rendered, secret) {
+		t.Fatalf("argv must not leak the credential: %q", rendered)
+	}
+	if last := res.Argv[len(res.Argv)-1]; last != MaskPlaceholder {
+		t.Fatalf("last arg = %q, want %q", last, MaskPlaceholder)
+	}
+
+	// 非凭据的 env 引用（区域名这类）保持可见：全遮掉会让失败排查失去线索。
+	conn2 := helperConnector("echo_args")
+	conn2.Env = append(conn2.Env, "REGION=cn-hangzhou")
+	res2, err := Run(context.Background(), conn2, ToolSpec{
+		Name: "d", Description: "d", Args: []string{"--region", "{{env:REGION}}"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(strings.Join(res2.Argv, " "), "cn-hangzhou") {
+		t.Fatalf("non-secret env value should stay visible: %q", strings.Join(res2.Argv, " "))
+	}
+}
+
 func TestRunTimeoutAndOutputCap(t *testing.T) {
 	slow := helperConnector("slow")
 	slow.Args = nil

@@ -183,6 +183,11 @@ type ToolSpec struct {
 	//     展开与凭据合并）；未声明或值为空时报错。用于把 webhook/token 这类
 	//     "用户填的凭据"放进参数位——凭据只存 env，不落模板。
 	// 例：["pr", "list", "--limit", "{{limit}}", "{{?verbose}}--verbose"]
+	//
+	// {{env:NAME}} 的代价要清楚：展开后的值会进入子进程 argv，同机其他用户
+	// 可通过 ps / tasklist / /proc/<pid>/cmdline 看到。回显给模型与日志的
+	// argv 已脱敏（见 SecretEnvValues），进程列表这一层挡不住——能用 header
+	// 或 stdin 传的凭据，优先用那两种方式。
 	Args []string `json:"args,omitempty"`
 	// StdinParam 指定把哪个参数的值写进子进程 stdin（比如喂一段 diff、一份 JSON）。
 	StdinParam string `json:"stdin_param,omitempty"`

@@ -1,6 +1,9 @@
 package cliconn
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLooksSecretLike(t *testing.T) {
 	cases := []struct {
@@ -31,6 +34,69 @@ func TestLooksSecretLike(t *testing.T) {
 				t.Fatalf("LooksSecretLike(%q) = %v, want %v", tc.value, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSecretEnvValues 判据是"变量名像凭据"或"值形似凭据"，两者取或。
+func TestSecretEnvValues(t *testing.T) {
+	env := map[string]string{
+		"GH_TOKEN":    "ghp_0123456789abcdefghijklmnop", // 名字命中
+		"api_key":     "abc123def456",                   // 下划线分词后命中 KEY
+		"DB_PASSWORD": "hunter2hunter2",                 // 名字命中
+		"FOO":         "sk-proj-abcdef123456",           // 名字不命中，值形似
+		"REGION":      "cn-hangzhou",                    // 都不是：保持可见
+		"SHORT_TOKEN": "abc",                            // 太短：不参与（避免把命令显示成一串 ***）
+		"MONKEY":      "banana",                         // 含 KEY 但不是独立词
+		"WEBHOOK_URL": "https://example.com/robot?k=1",  // 名字与值都不像凭据
+	}
+	got := SecretEnvValues(env)
+	masked := strings.Join(got, ",")
+	for _, want := range []string{"ghp_0123456789abcdefghijklmnop", "abc123def456", "hunter2hunter2", "sk-proj-abcdef123456"} {
+		if !strings.Contains(masked, want) {
+			t.Errorf("secret %q missing from %q", want, masked)
+		}
+	}
+	for _, unwanted := range []string{"cn-hangzhou", "banana", "robot?k=1", "abc,"} {
+		if strings.Contains(masked, unwanted) {
+			t.Errorf("%q should not be treated as a secret (got %q)", unwanted, masked)
+		}
+	}
+
+	// 长值排在短值之前：否则前缀先被替换，剩下的半截会留在命令里。
+	prefixed := SecretEnvValues(map[string]string{"A_TOKEN": "s3cr3t-abcdef"})
+	if len(prefixed) != 1 || prefixed[0] != "s3cr3t-abcdef" {
+		t.Fatalf("expected the full value, got %v", prefixed)
+	}
+
+	// extra：OAuth token 不一定以可识别的键名出现在 env 里，调用方要能强制登记。
+	withExtra := SecretEnvValues(nil, "opaque-oauth-token")
+	if len(withExtra) != 1 || withExtra[0] != "opaque-oauth-token" {
+		t.Fatalf("extra value not registered: %v", withExtra)
+	}
+	// 去重与长度过滤对 extra 同样生效。
+	if got := SecretEnvValues(nil, "abc"); len(got) != 0 {
+		t.Fatalf("too-short extra should be ignored, got %v", got)
+	}
+}
+
+// TestMaskArgv 脱敏只影响回显，不改入参。
+func TestMaskArgv(t *testing.T) {
+	secrets := []string{"s3cr3t-abcdef", "ghp_0123456789abcdefghijklmnop"}
+	in := []string{"gh", "pr", "list", "--token", "ghp_0123456789abcdefghijklmnop", "--x=s3cr3t-abcdef"}
+	out := MaskArgv(in, secrets)
+
+	want := []string{"gh", "pr", "list", "--token", MaskPlaceholder, "--x=" + MaskPlaceholder}
+	for i := range want {
+		if out[i] != want[i] {
+			t.Fatalf("MaskArgv[%d] = %q, want %q", i, out[i], want[i])
+		}
+	}
+	if in[4] != "ghp_0123456789abcdefghijklmnop" {
+		t.Fatal("MaskArgv must not mutate its input")
+	}
+	// 没有凭据时原样返回（同一个切片，不做无谓分配）。
+	if got := MaskArgv(in, nil); &got[0] != &in[0] {
+		t.Fatal("MaskArgv with no secrets should return the argument as-is")
 	}
 }
 

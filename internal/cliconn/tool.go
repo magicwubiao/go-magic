@@ -124,6 +124,8 @@ func (t *Tool) Execute(ctx context.Context, params map[string]interface{}) (inte
 	}
 
 	out := map[string]interface{}{
+		// res.Argv 已在 Run 里按 env 凭据脱敏：这个字段会进模型上下文与会话历史，
+		// 展开后的 token 绝不能原样出现在这里。
 		"command":     strings.Join(res.Argv, " "),
 		"exit_code":   res.ExitCode,
 		"stdout":      res.Stdout,

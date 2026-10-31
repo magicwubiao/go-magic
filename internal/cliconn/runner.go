@@ -21,6 +21,11 @@ import (
 // 表达业务结论（grep 没匹配到=1、diff 有差异=1），把它变成 Go error 会让模型
 // 看不到 stdout。真正的失败（命令不存在、超时）才走 error。
 type Result struct {
+	// Argv 是回显用的命令行（含可执行文件本身），**已脱敏**：由 env 提供、
+	// 且判定为凭据的值被替换成 ***（见 SecretEnvValues）。
+	//
+	// 这里刻意不保存真实 argv：它唯一的去向是 Tool.Execute 的 "command" 字段，
+	// 也就是模型上下文、会话历史与日志。真实 argv 只存在于本函数的局部变量里。
 	Argv       []string
 	Stdout     string
 	Stderr     string
@@ -57,6 +62,7 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	}
 	// OAuth 设备码取得的 token 最后覆盖：它是"当前这一秒"的最新凭据，
 	// 必须盖过 env 里可能残留的旧值（用户上次手填的、或上一枚已过期的）。
+	oauthToken := ""
 	if oauth := conn.OAuth; oauth != nil && oauth.TokenEnv != "" {
 		if oauth.Tokens == nil {
 			return nil, fmt.Errorf("connector %q uses OAuth but no token store is wired", conn.Command)
@@ -65,6 +71,7 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 		if err != nil {
 			return nil, fmt.Errorf("oauth token unavailable: %w", err)
 		}
+		oauthToken = tok
 		envList = append(envList, oauth.TokenEnv+"="+tok)
 	}
 	envMap := envMapFromList(envList)
@@ -116,7 +123,10 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	elapsed := time.Since(start)
 
 	res := &Result{
-		Argv:       append([]string{conn.Command}, argv...),
+		// 回显的 argv 必须脱敏：{{env:NAME}} 展开后就是明文凭据，而这条命令
+		// 会进模型上下文、会话历史和日志（Tool.Execute 的 "command" 字段）。
+		// 真实的 argv 只用于下面的 exec，不往外带。
+		Argv:       MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMap, oauthToken)),
 		Stdout:     decodeOutput(stdout.Bytes()),
 		Stderr:     decodeOutput(stderr.Bytes()),
 		Duration:   elapsed,
