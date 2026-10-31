@@ -333,7 +333,12 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 			toWrite = merged
 		}
 	}
-	data, err := json.MarshalIndent(toWrite, "", "  ")
+	// 拆分文件先写（mcp.json / cli.json），config.json 序列化时剥离 mcp/cli 段
+	// ——与 pkg/config.Save 完全同一约定（先拆分后主文件，崩溃安全顺序见那边注释）。
+	if err := toWrite.WriteMCPCLIFiles(magicHome); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(toWrite.WithoutMCPCLI(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -352,15 +357,34 @@ func (s *Server) persistConfig(preserveGateway bool) error {
 	return nil
 }
 
-// setConfigMtimeFromDisk 把 configMtime 基线刷成磁盘上 config.json 的当前
-// 修改时间（见 markConfigMtime）。configMtime 只被 syncConfigFromDisk 的
-// mtime 比较读取，那个比较本身容忍陈旧值（最坏情况是多重载一次配置），
-// 因此这里用 atomic 读写即可，不需要去碰 s.mu —— 拿 s.mu 会在
-// "persistConfig 的调用方已持 s.mu"时自我死锁。
+// setConfigMtimeFromDisk 把 configMtime 基线刷成三个配置文件（config.json /
+// mcp.json / cli.json）中**最新**的修改时间（见 markConfigMtime）。configMtime
+// 只被 syncConfigFromDisk 的 mtime 比较读取，那个比较本身容忍陈旧值（最坏情况
+// 是多重载一次配置），因此这里用 atomic 读写即可，不需要去碰 s.mu —— 拿 s.mu
+// 会在 "persistConfig 的调用方已持 s.mu"时自我死锁。
 func (s *Server) setConfigMtimeFromDisk() {
-	if info, err := os.Stat(s.configPath()); err == nil {
-		s.configMtimeNs.Store(info.ModTime().UnixNano())
+	if m := s.maxConfigMtime(); m > 0 {
+		s.configMtimeNs.Store(m)
 	}
+}
+
+// maxConfigMtime 返回主配置与两个拆分配置文件中最新的 mtime（UnixNano）；
+// 一个都不存在时返回 0。拆分文件纳入监测的原因：用户/外部工具可能直接手改
+// mcp.json / cli.json，只盯 config.json 会永远看不到这类变更。
+func (s *Server) maxConfigMtime() int64 {
+	var max int64
+	for _, p := range []string{
+		s.configPath(),
+		s.splitConfigPath(appconfig.MCPConfigFileName),
+		s.splitConfigPath(appconfig.CLIConfigFileName),
+	} {
+		if info, err := os.Stat(p); err == nil {
+			if m := info.ModTime().UnixNano(); m > max {
+				max = m
+			}
+		}
+	}
+	return max
 }
 
 // reloadConfig re-reads config.json into s.cfg so changes written by other
@@ -377,11 +401,20 @@ func (s *Server) reloadConfig() {
 
 // configPath 返回当前生效 profile 的 config.json 路径。
 func (s *Server) configPath() string {
+	return filepath.Join(s.configDir(), "config.json")
+}
+
+// splitConfigPath 返回 mcp.json / cli.json 的路径（与 config.json 同目录）。
+func (s *Server) splitConfigPath(name string) string {
+	return filepath.Join(s.configDir(), name)
+}
+
+func (s *Server) configDir() string {
 	magicHome := s.magicHome
 	if magicHome == "" {
 		magicHome = appconfig.GetMagicHome()
 	}
-	return filepath.Join(magicHome, "config.json")
+	return magicHome
 }
 
 // markConfigMtime 把 configMtime 基线刷成磁盘上 config.json 的当前修改时间。
@@ -413,11 +446,14 @@ func (s *Server) syncConfigFromDisk() {
 	// 见 model_switch_deadlock_test.go。
 	s.assertNotHoldingServerMu("syncConfigFromDisk")
 
-	info, err := os.Stat(s.configPath())
-	if err != nil {
+	// mtime 取三个配置文件（config.json / mcp.json / cli.json）的最大值：
+	// 外部工具可能只改拆分文件（例如脚本直接写 mcp.json 加一个 server），
+	// 只盯主文件会漏掉这类变更。
+	current := s.maxConfigMtime()
+	if current == 0 {
 		return
 	}
-	if info.ModTime().UnixNano() <= s.configMtimeNs.Load() {
+	if current <= s.configMtimeNs.Load() {
 		return
 	}
 
@@ -425,8 +461,8 @@ func (s *Server) syncConfigFromDisk() {
 	// 旧实现用 RLock 读 + Lock 判重，两次加锁之间没有任何互斥，语义等价但
 	// 多绕两圈；换成 atomic 后这段完全不碰 s.mu，也就不会在"调用方已持
 	// s.mu"时自我死锁。
-	prev := s.configMtimeNs.Swap(info.ModTime().UnixNano())
-	if prev == info.ModTime().UnixNano() {
+	prev := s.configMtimeNs.Swap(current)
+	if prev == current {
 		return
 	}
 
@@ -514,7 +550,22 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
-	configPath := filepath.Join(s.magicHome, "config.json")
+	// file=mcp / file=cli 操作拆分文件（mcp.json / cli.json）；缺省是主配置
+	// config.json。mcp / cli 两段已从主配置拆出（persistConfig 会剥离旧段），
+	// 原始编辑器必须能单独编辑拆分文件，否则手改配置的用户找不到入口。
+	switch r.URL.Query().Get("file") {
+	case "mcp":
+		s.handleSplitConfigRaw(w, r, appconfig.MCPConfigFileName)
+		return
+	case "cli":
+		s.handleSplitConfigRaw(w, r, appconfig.CLIConfigFileName)
+		return
+	case "", "config":
+	default:
+		http.Error(w, "unknown file; expected config, mcp or cli", 400)
+		return
+	}
+	configPath := s.configPath()
 
 	switch r.Method {
 	case "GET":
@@ -525,54 +576,80 @@ func (s *Server) handleConfigRaw(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonResponse(w, map[string]interface{}{"yaml": string(data)})
 	case "PUT":
-		var req struct {
-			JsonText string `json:"json_text"`
-			YamlText string `json:"yaml_text"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", 400)
-			return
-		}
-		// Support both json_text and yaml_text (frontend uses yaml_text)
-		content := req.JsonText
-		if content == "" {
-			content = req.YamlText
-		}
-		// Validate JSON
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-			http.Error(w, "invalid JSON", 400)
-			return
-		}
-		// Write atomically
-		tmpPath := configPath + ".tmp"
-		os.WriteFile(tmpPath, []byte(content), 0644)
-		os.Rename(tmpPath, configPath)
-		// Reload config
-		newCfg, err := appconfig.Load()
-		if err == nil {
-			s.acquireServerMu("")
-			s.setCfg(newCfg)
-			s.provider = createProvider(newCfg)
-			// 原始编辑器可以直接改 tools.enabled/disabled：同步重建暴露过滤，
-			// 否则要等重启（下一次 setCfg 之外的路径不会带上它）。
-			if s.toolReg != nil {
-				s.toolReg.SetToolsetFilter(newCfg.Tools.Enabled, newCfg.Tools.Disabled)
-			}
-			// Fresh provider starts with a nil ConvertCfg, which means "no
-			// vision at all" until the next agent is built. Install the
-			// derived policy right away.
-			s.refreshConvertConfig()
-			s.releaseServerMu()
-			// 清空 agent 缓存走 agentsMu（见 clearAgents）——不能在 s.mu 里做：
-			// syncConfigFromDisk 的加锁顺序是 s.mu -> s.agentsMu，而
-			// approvals/sessions 路径是 s.agentsMu -> s.cfg，反序即死锁。
-			s.clearAgents()
-		}
-		jsonResponse(w, map[string]interface{}{"ok": true})
+		s.handleConfigRawPut(w, r, configPath)
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+// handleSplitConfigRaw 是 mcp.json / cli.json 的原始读写入口。
+// 写入后走 appconfig.Load 全量重载（Load 以拆分文件为权威），后续与主配置
+// 的 PUT 完全一致：重建 provider、刷新工具过滤、清空 agent 缓存。
+func (s *Server) handleSplitConfigRaw(w http.ResponseWriter, r *http.Request, name string) {
+	path := s.splitConfigPath(name)
+	switch r.Method {
+	case "GET":
+		data, err := os.ReadFile(path)
+		if err != nil {
+			// 文件不存在 = 还没配过：返回空对象而不是 404，编辑器直接可写。
+			jsonResponse(w, map[string]interface{}{"yaml": "{}"})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"yaml": string(data)})
+	case "PUT":
+		s.handleConfigRawPut(w, r, path)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+// handleConfigRawPut 校验并原子写入一个配置 JSON 文件，然后全量重载。
+func (s *Server) handleConfigRawPut(w http.ResponseWriter, r *http.Request, configPath string) {
+	var req struct {
+		JsonText string `json:"json_text"`
+		YamlText string `json:"yaml_text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	// Support both json_text and yaml_text (frontend uses yaml_text)
+	content := req.JsonText
+	if content == "" {
+		content = req.YamlText
+	}
+	// Validate JSON
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	// Write atomically
+	tmpPath := configPath + ".tmp"
+	os.WriteFile(tmpPath, []byte(content), 0644)
+	os.Rename(tmpPath, configPath)
+	// Reload config
+	newCfg, err := appconfig.Load()
+	if err == nil {
+		s.acquireServerMu("")
+		s.setCfg(newCfg)
+		s.provider = createProvider(newCfg)
+		// 原始编辑器可以直接改 tools.enabled/disabled：同步重建暴露过滤，
+		// 否则要等重启（下一次 setCfg 之外的路径不会带上它）。
+		if s.toolReg != nil {
+			s.toolReg.SetToolsetFilter(newCfg.Tools.Enabled, newCfg.Tools.Disabled)
+		}
+		// Fresh provider starts with a nil ConvertCfg, which means "no
+		// vision at all" until the next agent is built. Install the
+		// derived policy right away.
+		s.refreshConvertConfig()
+		s.releaseServerMu()
+		// 清空 agent 缓存走 agentsMu（见 clearAgents）——不能在 s.mu 里做：
+		// syncConfigFromDisk 的加锁顺序是 s.mu -> s.agentsMu，而
+		// approvals/sessions 路径是 s.agentsMu -> s.cfg，反序即死锁。
+		s.clearAgents()
+	}
+	jsonResponse(w, map[string]interface{}{"ok": true})
 }
 
 // readEnvFile 读取 .env（键值对）。解析细节统一在 appconfig.LoadEnvFile，

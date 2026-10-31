@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/tool"
 	appconfig "github.com/magicwubiao/go-magic/pkg/config"
@@ -52,19 +53,53 @@ func doMCPRequest(t *testing.T, s *Server, method, path, body string) *httptest.
 	return rec
 }
 
-// readPersistedConfig 读回落盘的 config.json —— 断言"配置真的写下去了"，
-// 而不是只看内存里的 s.cfg。
+// readPersistedConfig 读回落盘的配置（config.json + 拆分文件 mcp.json /
+// cli.json 的合并视图）—— 断言"配置真的写下去了"，而不是只看内存里的 s.cfg。
+// mcp / cli 段已从主配置拆出，config.json 里不再有这两段，必须补读拆分文件。
 func readPersistedConfig(t *testing.T, home string) appconfig.Config {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, "config.json"))
-	if err != nil {
-		t.Fatalf("config.json not written: %v", err)
+	read := func(name string) appconfig.Config {
+		data, err := os.ReadFile(filepath.Join(home, name))
+		if err != nil {
+			return appconfig.Config{}
+		}
+		var cfg appconfig.Config
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			t.Fatalf("%s is not valid JSON: %v", name, err)
+		}
+		return cfg
 	}
-	var cfg appconfig.Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("config.json is not valid JSON: %v", err)
-	}
+	cfg := read("config.json")
+	cfg.MCP = readMCPFile(t, home)
+	cfg.Cli = readCLIFile(t, home)
 	return cfg
+}
+
+// readMCPFile / readCLIFile 读拆分配置文件；文件不存在返回 nil（等价"没配"）。
+func readMCPFile(t *testing.T, home string) *appconfig.MCPConfig {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, appconfig.MCPConfigFileName))
+	if err != nil {
+		return nil
+	}
+	var mcpCfg appconfig.MCPConfig
+	if err := json.Unmarshal(data, &mcpCfg); err != nil {
+		t.Fatalf("%s is not valid JSON: %v", appconfig.MCPConfigFileName, err)
+	}
+	return &mcpCfg
+}
+
+func readCLIFile(t *testing.T, home string) *cliconn.Config {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, appconfig.CLIConfigFileName))
+	if err != nil {
+		return nil
+	}
+	var cliCfg cliconn.Config
+	if err := json.Unmarshal(data, &cliCfg); err != nil {
+		t.Fatalf("%s is not valid JSON: %v", appconfig.CLIConfigFileName, err)
+	}
+	return &cliCfg
 }
 
 // JSON 导入：多个服务器一次写入。连接是**异步**的，所以这里的契约是

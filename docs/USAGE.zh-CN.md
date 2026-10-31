@@ -274,7 +274,7 @@ magic config reset     # 恢复默认
   "memory": { "enabled": true },
   "cortex": { "enabled": true, "skill_min_pattern_freq": 3 },
 
-  "mcp": { "servers": {} },
+  "mcp": { "servers": {} },        // 拆分至 mcp.json（兼容旧内联段，见 15.1）
   "subagent": { "max_concurrent": 4, "max_depth": 2, "timeout": 120 },
 
   "approval": {
@@ -1097,10 +1097,11 @@ magic mcp health [server-name]
 magic mcp disconnect <server-name>     # 断开并从配置中删除
 ```
 
-配置写在 `config.json` 的 `mcp.servers` 下：
+配置写在 magicHome（默认 `~/.magic`）下的独立文件 `mcp.json` 里（旧的 `config.json` 内联 `mcp.servers` 段仍然可读，首次保存时会自动搬迁到 `mcp.json`）：
 
 ```jsonc
-"mcp": {
+// <magicHome>/mcp.json —— 与旧内联段结构相同
+{
   "servers": {
     "filesystem": {
       "command": "npx",
@@ -1243,8 +1244,11 @@ magic acp disconnect helper
 
 很多软件只提供命令行，没有 MCP server（`gh`、`kubectl`、`ffmpeg`、内部运维脚本）。把它们声明成「CLI 连接器」后，每个子命令展开成一个工具 `cli_<连接器>_<工具>`，模型可以直接调用。
 
+配置写在 magicHome（默认 `~/.magic`）下的独立文件 `cli.json` 里（旧的 `config.json` 内联 `cli` 段仍然可读，首次保存时自动搬迁）。文件结构与旧内联段相同：
+
 ```jsonc
-"cli": {
+// <magicHome>/cli.json
+{
   "connectors": {
     "gh": {
       "command": "gh",                       // PATH 里的名字，或绝对路径
@@ -1347,7 +1351,7 @@ POST   /api/cli/test                试跑一次（不保存）
 }
 ```
 
-`cli.json` 的结构与 `config.json` 的 `cli.connectors` 完全一致，因此可以直接从现有配置里复制一段过来：
+`cli.json`（插件清单，注意与 magicHome 根下存 CLI 连接器配置的 `cli.json` 是两回事）的结构与 `config.json` 的 `cli.connectors` 完全一致，因此可以直接从现有配置里复制一段过来：
 
 ```json
 {

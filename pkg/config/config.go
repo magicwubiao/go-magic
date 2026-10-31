@@ -20,6 +20,15 @@ import (
 const (
 	DefaultMagicHome = "~/.magic"
 	ConfigFileName   = "config.json"
+	// MCPConfigFileName / CLIConfigFileName 是从 config.json 拆分出来的
+	// MCP 服务器与 CLI 连接器配置文件（与 config.json 同目录，即 magicHome 根）。
+	// 拆分的理由：这两段是用户通过连接器页/CLI 命令**频繁增删**的动态配置，
+	// 与"改一次用半年"的静态配置（provider、审批策略等）生命周期完全不同；
+	// 混在一起既难手改，也放大了"写 config.json 就要序列化整个 Config"的竞态面。
+	// 兼容顺序：拆分文件存在 → 权威；不存在 → 回退 config.json 里的旧 mcp/cli 段
+	// （老配置零迁移可用），任何一次 Save 会自动完成"段剥离 + 拆分文件写入"。
+	MCPConfigFileName = "mcp.json"
+	CLIConfigFileName = "cli.json"
 	// DefaultBrowserProfileDir 是自动化浏览器持久 profile 的默认目录。
 	// 默认即持久：登录一次（cookie/localStorage）后续都用同一份，适合抓需要
 	// 登录态的站点。想回到"每次全新临时 profile"就把它显式写成 ""。
@@ -614,19 +623,34 @@ func Load() (*Config, error) {
 	magicHome := GetMagicHome()
 	configPath := filepath.Join(magicHome, ConfigFileName)
 	data, err := os.ReadFile(configPath)
+	var cfg *Config
+	noMainConfig := false // config.json 不存在（首次运行）
 	if err != nil {
-		if os.IsNotExist(err) {
-			cfg := defaultConfig()
-			return cfg, ErrNoConfig
+		if !os.IsNotExist(err) {
+			// 非 IsNotExist 的读取错误（权限等）：旧行为是返回默认配置且
+			// 不带错误，不让整个进程起不来。
+			return defaultConfig(), nil
 		}
-		cfg := defaultConfig()
-		return cfg, nil
+		// config.json 缺失：从默认配置出发，随后仍尝试读拆分文件
+		// （用户可能只手写了 mcp.json），并保留 ErrNoConfig 语义。
+		cfg = defaultConfig()
+		noMainConfig = true
+	} else {
+		// **必须反序列化到零值 Config**，不能用 defaultConfig() 当基底：
+		// 缺键的指针字段（BrowserProfileDir/Context/MCP/Cli…）的语义是
+		// "没写 = nil = 走各自的默认值逻辑"，落到默认配置基底会把默认值
+		// 固化成显式值（TestBrowserProfileDirDefaultAndOptOut 钉的就是这个）。
+		cfg = &Config{}
+		if uerr := json.Unmarshal(data, cfg); uerr != nil {
+			return nil, uerr
+		}
 	}
 
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
+	// 拆分文件覆盖：mcp.json / cli.json 存在即权威（Save 会把这两段从
+	// config.json 剥离，所以拆分文件之后是唯一真源；config.json 里的旧段
+	// 只在拆分文件缺失时兜底——老配置零迁移可用）。config.json 不存在也
+	// 要读：用户可能只手写了 mcp.json。
+	loadSplitFiles(magicHome, cfg)
 
 	// Default working_dir to "working" subdirectory of current directory if not set
 	if cfg.WorkingDir == "" {
@@ -678,7 +702,77 @@ func Load() (*Config, error) {
 		cfg.Agent.TurnTimeoutMinutes = DefaultTurnTimeoutMinutes
 	}
 
-	return &cfg, nil
+	if noMainConfig {
+		return cfg, ErrNoConfig
+	}
+	return cfg, nil
+}
+
+// loadSplitFiles 把 mcp.json / cli.json（存在时）合并进 cfg，覆盖 config.json
+// 里的同名旧段。解析失败的拆分文件静默跳过：保留 config.json 的旧段（没有就
+// 保持 nil），不让一个写坏的文件挡住整个进程启动；下次 Save 会写出合法文件。
+func loadSplitFiles(magicHome string, cfg *Config) {
+	if data, err := os.ReadFile(filepath.Join(magicHome, MCPConfigFileName)); err == nil {
+		var mcpCfg MCPConfig
+		if json.Unmarshal(data, &mcpCfg) == nil {
+			cfg.MCP = &mcpCfg
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(magicHome, CLIConfigFileName)); err == nil {
+		var cliCfg cliconn.Config
+		if json.Unmarshal(data, &cliCfg) == nil {
+			cfg.Cli = &cliCfg
+		}
+	}
+}
+
+// WriteMCPCLIFiles 把 mcp / cli 两段写入独立拆分文件（mcp.json / cli.json，
+// 与 config.json 同目录）。段为 nil 时**删除**对应文件——"删除最后一个
+// 连接器"必须真正删干净，否则下次 Load 又会从拆分文件把它读回来。
+// 先写拆分文件、后写剥离段后的 config.json（Save / server persistConfig 均
+// 按此顺序），任一步崩溃剩下的都是合法形态。
+func (c *Config) WriteMCPCLIFiles(dir string) error {
+	if err := writeSplitFile(dir, MCPConfigFileName, c.MCP); err != nil {
+		return err
+	}
+	return writeSplitFile(dir, CLIConfigFileName, c.Cli)
+}
+
+func writeSplitFile[T any](dir, name string, section *T) error {
+	path := filepath.Join(dir, name)
+	if section == nil {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	data, err := json.MarshalIndent(section, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// WithoutMCPCLI 返回剥掉 mcp / cli 段的浅拷贝，用于序列化 config.json——
+// 这两段住拆分文件，config.json 不再保留副本（双真源必然漂移）。
+// 浅拷贝只复制指针值、不解引用内容，可安全用于共享快照的序列化。
+func (c *Config) WithoutMCPCLI() *Config {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.MCP = nil
+	cp.Cli = nil
+	return &cp
 }
 
 // GetBrowserProfileDir 返回最终生效的浏览器持久 profile 目录（绝对路径）。
@@ -1014,7 +1108,12 @@ func (c *Config) Save() error {
 	}
 
 	// Step 3: Marshal and write safely (write to temp file first, then rename)
-	data, err := json.MarshalIndent(c, "", "  ")
+	// 拆分文件先写（mcp.json / cli.json），config.json 序列化时剥离 mcp/cli 段。
+	// 崩溃安全：先写拆分文件后改主文件，任一步中断都是 Load 能正确解释的形态。
+	if err := c.WriteMCPCLIFiles(configDir); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(c.WithoutMCPCLI(), "", "  ")
 	if err != nil {
 		return err
 	}

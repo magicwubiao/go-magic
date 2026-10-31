@@ -276,7 +276,7 @@ magic config reset     # restore defaults
   "memory": { "enabled": true },
   "cortex": { "enabled": true, "skill_min_pattern_freq": 3 },
 
-  "mcp": { "servers": {} },
+  "mcp": { "servers": {} },        // split into mcp.json (legacy inline section still read, see 15.1)
   "subagent": { "max_concurrent": 4, "max_depth": 2, "timeout": 120 },
 
   "approval": {
@@ -1116,10 +1116,11 @@ magic mcp health [server-name]
 magic mcp disconnect <server-name>     # disconnect and remove from config
 ```
 
-Config goes under `mcp.servers` in `config.json`:
+Config lives in a standalone `mcp.json` under magicHome (default `~/.magic`). The legacy inline `mcp.servers` section in `config.json` is still read and migrated automatically on first save:
 
 ```jsonc
-"mcp": {
+// <magicHome>/mcp.json — same shape as the old inline section
+{
   "servers": {
     "filesystem": {
       "command": "npx",
@@ -1265,8 +1266,11 @@ magic acp disconnect helper
 
 Plenty of tools only ship a command line and no MCP server (`gh`, `kubectl`, `ffmpeg`, in-house ops scripts). Declare one as a "CLI connector" and each subcommand becomes a tool named `cli_<connector>_<tool>` the model can call.
 
+Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). The legacy inline `cli` section in `config.json` is still read and migrated automatically on first save. The file keeps the same shape as that section:
+
 ```jsonc
-"cli": {
+// <magicHome>/cli.json
+{
   "connectors": {
     "gh": {
       "command": "gh",                       // name on PATH, or an absolute path
@@ -1369,7 +1373,7 @@ A plugin is not a new runtime concept: a plugin is a **directory** holding skill
 }
 ```
 
-`cli.json` uses exactly the same shape as `cli.connectors` in `config.json`, so you can copy a block across:
+`cli.json` (the plugin manifest — not to be confused with the magicHome-root `cli.json` that stores CLI connector config) uses exactly the same shape as `cli.connectors` in `config.json`, so you can copy a block across:
 
 ```json
 {
