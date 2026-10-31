@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -164,6 +165,48 @@ func TestInstallCatalogPackCLI(t *testing.T) {
 	}
 	if keys := envPlaceholderKeys(conn.Connector.Env); len(keys) != 0 {
 		t.Errorf("expected no credential placeholders, got env %v", conn.Connector.Env)
+	}
+}
+
+// git 条目物化后要带上全部只读工具：目录里点"添加"就该能查仓库状态，
+// 且 read_only 必须原样穿过 cli.json（丢了就会变成每次调用都要审批）。
+func TestInstallCatalogPackGit(t *testing.T) {
+	isolatedHome(t)
+
+	dir, name, required, err := InstallCatalogPack(CatalogKindCLI, "git", nil)
+	if err != nil {
+		t.Fatalf("InstallCatalogPack: %v", err)
+	}
+	if name != "cli-git" {
+		t.Fatalf("name = %q, want cli-git", name)
+	}
+	if len(required) != 0 {
+		t.Errorf("git needs no credentials, got required=%v", required)
+	}
+
+	p := Load(dir, filepath.Join(dir, "data"))
+	if err := verifyLoadedPack(p); err != nil {
+		t.Fatalf("loaded pack invalid: %v", err)
+	}
+	if len(p.CLIConnectors) != 1 {
+		t.Fatalf("cli connectors = %d, want 1", len(p.CLIConnectors))
+	}
+	conn := p.CLIConnectors[0]
+	if conn.Connector.Command != "git" {
+		t.Errorf("command = %q, want git", conn.Connector.Command)
+	}
+
+	wantTools := []string{"branches", "diff", "log", "show", "status"}
+	var gotTools []string
+	for _, spec := range conn.Connector.Tools {
+		gotTools = append(gotTools, spec.Name)
+		if !spec.ReadOnly {
+			t.Errorf("tool %q lost read_only across materialization", spec.Name)
+		}
+	}
+	sort.Strings(gotTools)
+	if strings.Join(gotTools, ",") != strings.Join(wantTools, ",") {
+		t.Errorf("tools = %v, want %v", gotTools, wantTools)
 	}
 }
 

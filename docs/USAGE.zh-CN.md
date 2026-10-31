@@ -1274,7 +1274,7 @@ magic acp disconnect helper
 
 **降低门槛的入口——「快速导入」**：在网页「连接器 → CLI」的新建弹窗里，直接粘贴一条完整命令（`gh pr list --repo owner/repo --limit 20 --json`），后端会解析成工具草稿——第一个词是命令、子命令拼成工具名（`pr_list`）、带值的选项变成参数（按示例值推断类型）、独立的开关选项变成 boolean 条件参数。草稿填进表单后确认或微调即可，不用手写模板。对应接口 `POST /api/cli/parse`（无状态，不落盘）。
 
-**更省事的是「应用目录」**：网页「连接器 → CLI → 应用目录」里内置了 gh、git、docker、kubectl、jq、aws 六个条目。卡片会实时检测本机是否已安装该命令（并读出版本，如 `gh version 2.40.0`）——已安装的直接填 token（需要的话）点「添加并启用」；没安装的给出当前平台的安装命令（winget / brew / apt），复制执行后点「重新检测」即可。目录只做检测与展示，**服务端不会执行任何安装命令**。
+**更省事的是「应用目录」**：网页「连接器 → CLI → 应用目录」里内置了一批常用条目（docker、git、kubectl、helm、jq、yq、ripgrep、主流云厂商 CLI、ffmpeg 等，完整列表以界面为准）。卡片会实时检测本机是否已安装该命令（并读出版本，如 `git version 2.43.0`）——已安装的直接填 token（需要的话）点「添加并启用」；没安装的给出当前平台的安装命令（winget / brew / apt），复制执行后点「重新检测」即可。目录只做检测与展示，**服务端不会执行任何安装命令**。
 
 装完会**当场自检一次**：除了版本，还会跑该条目的就绪检查（`gh auth status`、`docker info`、`kubectl config current-context`、`aws sts get-caller-identity`），弹窗里直接显示「可用 / 未就绪 + 原因」。未就绪时同时给出登录命令（`gh auth login`、`aws configure`）——这类命令是交互式的（等浏览器回调、问 region、要 MFA），必须由用户在自己的终端执行，服务端只展示命令并提供「我已登录，复检」按钮。对应接口 `POST /api/cli/catalog/check`。
 

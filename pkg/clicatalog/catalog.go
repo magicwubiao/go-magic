@@ -118,6 +118,7 @@ func Categories() []Category { return categories }
 
 var entries = []Entry{
 	dockerEntry,
+	gitEntry,
 	kubectlEntry,
 	helmEntry,
 	jqEntry,
@@ -210,6 +211,92 @@ var dockerEntry = Entry{
 	Check:   []string{"info"},
 	DocsURL: "https://docs.docker.com/reference/cli/docker/",
 	Tags:    []string{"container"},
+}
+
+// gitEntry 只暴露只读子命令：status / log / diff / show / branch。
+//
+// 不收录 commit / push / reset —— 目录条目的定位是"让模型看见仓库状态"，
+// 写操作要么交给用户，要么由用户自己手写连接器（那时 require_approval
+// 由他自己决定）。这条边界与 docker（只有 ps/images/logs）保持一致。
+//
+// 仓库位置走 -C {{repo}} 而不是 Connector.WorkingDir：同一个连接器要能查
+// 多个仓库，而 WorkingDir 是连接器级、改一次要重新保存配置。{{repo}} 为空时
+// "{{repo}}" 整条被省略，紧跟的 -C 由 ExpandArgs 的选项名回退一起收走，
+// 命令退化成"在服务进程的当前目录里执行"。
+var gitEntry = Entry{
+	ID:          "git",
+	Name:        "Git",
+	Description: "Inspect a repository: working tree status, recent commits, diffs and branches.",
+	Category:    "dev",
+	DefaultName: "git",
+	Connector: cliconn.Connector{
+		Command: "git",
+		// 认证不在这个连接器里管：本地仓库不需要，远端仓库用机器上已有的
+		// SSH agent / credential helper。这里写清楚是为了让模型不要建议
+		// 用户去"填 token"。
+		Description: "Git CLI (uses the credentials already configured on this machine: SSH agent or credential helper; local repositories need none)",
+		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "status",
+				Description: "Show the current branch and the list of changed, staged and untracked files.",
+				Args:        []string{"-C", "{{repo}}", "status", "--short", "--branch"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "repo", Description: "repository directory; omit to use the current directory"},
+				},
+			},
+			{
+				Name:        "log",
+				Description: "List recent commits as 'hash date author subject', newest first.",
+				Args: []string{"-C", "{{repo}}", "log", "--max-count", "{{limit}}",
+					"--date=short", "--pretty=format:%h %ad %an %s", "{{rev}}"},
+				ReadOnly: true,
+				Params: []cliconn.ParamSpec{
+					{Name: "repo", Description: "repository directory; omit to use the current directory"},
+					{Name: "limit", Type: "integer", Default: 20, Description: "how many commits to return"},
+					{Name: "rev", Default: "HEAD", Description: "branch, tag or commit to start from"},
+				},
+			},
+			{
+				Name:        "diff",
+				Description: "Show the unified diff of uncommitted changes, or between a revision and the working tree. Use status first to see which paths changed.",
+				Args:        []string{"-C", "{{repo}}", "diff", "{{rev}}", "--", "{{path}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "repo", Description: "repository directory; omit to use the current directory"},
+					{Name: "rev", Description: "revision to diff against; omit to compare the index and working tree"},
+					{Name: "path", Description: "limit the diff to one file or directory"},
+				},
+			},
+			{
+				Name:        "show",
+				Description: "Show one commit: message, changed files and their diff.",
+				Args:        []string{"-C", "{{repo}}", "show", "--stat", "{{rev}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "repo", Description: "repository directory; omit to use the current directory"},
+					{Name: "rev", Default: "HEAD", Description: "commit-ish to show"},
+				},
+			},
+			{
+				Name:        "branches",
+				Description: "List local and remote branches with their last commit.",
+				Args:        []string{"-C", "{{repo}}", "branch", "--all", "--no-color", "--verbose"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "repo", Description: "repository directory; omit to use the current directory"},
+				},
+			},
+		},
+	},
+	Install: InstallHints{
+		"windows": {"winget install --id Git.Git -e"},
+		"darwin":  {"brew install git", "xcode-select --install"},
+		"linux":   {"sudo apt install git", "sudo dnf install git"},
+	},
+	Detect:  []string{"--version"},
+	DocsURL: "https://git-scm.com/docs",
+	Tags:    []string{"vcs", "diff", "commit"},
 }
 
 var kubectlEntry = Entry{
