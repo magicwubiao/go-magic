@@ -39,9 +39,9 @@ var toolCategories = []ToolCategory{
 	{
 		ID:          "web",
 		Label:       "Web",
-		Description: "Web search, content fetch and X (Twitter) search",
+		Description: "Web search and content fetch",
 		Tools: []string{
-			"web_search", "web_fetch", "web_select", "x_search",
+			"web_search", "web_fetch", "web_select",
 		},
 	},
 	{

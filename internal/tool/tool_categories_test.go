@@ -26,7 +26,6 @@ func TestCategoryOfToolKnownNames(t *testing.T) {
 		"directory_tree":            "file",
 		"diff_patch":                "file",
 		"web_search":                "web",
-		"x_search":                  "web",
 		"browser_navigate":          "browser",
 		"execute_command":           "terminal",
 		"execute_code":              "coding",

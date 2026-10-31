@@ -3,6 +3,7 @@ package agentplugin
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -70,7 +71,8 @@ func isSupportedMCPSchema(schema string) bool {
 //   - stdio:command 为单 token(不展开占位符);args/env 值/cwd 展开 ${PLUGIN_ROOT}/${PLUGIN_DATA}。
 //     cwd 省略时默认插件根;显式 cwd 须 plugin-relative 或以 ${PLUGIN_ROOT}/${PLUGIN_DATA} 为根,
 //     且解析后不逃逸对应目录。command 若以 ./ 开头则解析为 plugin 内路径并校验不逃逸。
-//   - streamable-http/sse:url 为绝对 HTTP(S) URL,非环回须 HTTPS;headers 字面值。
+//   - streamable-http/sse:url 为绝对 HTTP(S) URL,公网主机须 HTTPS(本机/局域网
+//     私网地址允许明文 http,见 localOnlyHost);headers 字面值。
 //   - 占位符文本展开,单次,非递归;不展开 command/url/headers/env key。
 //
 // 返回展开后的 spec 与该条目的错误(条目级错误仅禁用该条目,不影响其他)。
@@ -132,6 +134,12 @@ func validateHTTPSpec(spec MCPServerSpec) (MCPServerSpec, error) {
 	if spec.URL == "" {
 		return spec, fmt.Errorf("%s server requires a url", spec.Type)
 	}
+	// 地址本身可能是待填凭据的一部分（目录模板 {{HASS_URL}}/api/mcp 会落成
+	// ${CRED:HASS_URL}/api/mcp）。此时主机名要到连接前才可知，静态校验只能
+	// 放行——由 connectEntry 在展开后调用本函数复核，规则完全一致。
+	if strings.Contains(spec.URL, "${CRED:") {
+		return spec, nil
+	}
 	u, err := url.Parse(spec.URL)
 	if err != nil {
 		return spec, fmt.Errorf("invalid url: %w", err)
@@ -145,14 +153,42 @@ func validateHTTPSpec(spec MCPServerSpec) (MCPServerSpec, error) {
 	if u.Fragment != "" {
 		return spec, fmt.Errorf("url must not contain a fragment")
 	}
-	// 非环回端点须 HTTPS。
-	host := u.Hostname()
-	isLoopback := host == "localhost" || host == "127.0.0.1" || host == "::1" || host == ""
-	if !isLoopback && u.Scheme != "https" {
-		return spec, fmt.Errorf("non-loopback url must use https")
+	// 公网端点须 HTTPS；本机/局域网放行明文 http（见 localOnlyHost）。
+	if u.Scheme == "http" && !localOnlyHost(u.Hostname()) {
+		return spec, fmt.Errorf("non-loopback url must use https (plain http is only allowed for localhost, private networks and .local hostnames)")
 	}
 	// headers 为字面包数据,规范要求不含凭证;此处不做内容嗅探,仅保留。
 	return spec, nil
+}
+
+// localOnlyHost 判断主机名是否只可能指向本机或局域网。
+//
+// 为什么放行明文 http：Home Assistant、NAS、路由器、自建服务几乎都没有
+// 证书，一律要求 https 等于把整个"局域网设备"类目挡在门外——用户连装都装
+// 不进来。放行范围刻意收窄到"不可能解析到公网"的名字与地址段：
+//
+//   - 环回：localhost / *.localhost / 127.0.0.0/8 / ::1；
+//   - 私有网段：10/8、172.16/12、192.168/16、fc00::/7；
+//   - 链路本地：169.254/16、fe80::/10；
+//   - 家用/mDNS 域后缀：.local、.lan、.home、.home.arpa、.internal；
+//   - 单标签短主机名（http://nas:5244）：公网域名一定带点。
+//
+// 公网域名与公网 IP 仍然强制 https，避免这条豁免变成"随手关掉 TLS 校验"。
+func localOnlyHost(host string) bool {
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if h == "" || h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	}
+	for _, suffix := range []string{".local", ".lan", ".home", ".home.arpa", ".internal"} {
+		if strings.HasSuffix(h, suffix) {
+			return true
+		}
+	}
+	return !strings.Contains(h, ".")
 }
 
 // expandVars 单次、非递归文本展开 ${PLUGIN_ROOT} / ${PLUGIN_DATA}。

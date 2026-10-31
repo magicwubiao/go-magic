@@ -396,7 +396,9 @@ func buildMCPSpec(c connectors.Connector, argsOverride []string) mcpServerOut {
 			spec.Args = converted
 		}
 	default:
-		spec.URL = c.URL
+		// 地址里也可能带凭据占位（局域网设备的 base URL，如
+		// {{HASS_URL}}/api/mcp）——统一换成插件凭据引用，连接前展开。
+		spec.URL = catalogParamToCredRef(c.URL)
 		// OAuth 只对远程条目有意义；写进 mcp.json 后由运行时在连接前取 token。
 		if c.OAuth != nil {
 			spec.OAuth = &mcp.OAuthConfig{
@@ -417,12 +419,30 @@ func buildMCPSpec(c connectors.Connector, argsOverride []string) mcpServerOut {
 
 	env := map[string]string{}
 	headers := map[string]string{}
+	// 固定环境变量先铺底（IMAP/SMTP 主机端口这类），随后 Requires 里的同名项
+	// 以空值覆盖 —— 保证"用户填的"优先级高于"模板写死的"。
+	for k, v := range c.Env {
+		env[k] = catalogParamToCredRef(v)
+	}
 	for _, req := range c.Requires {
 		switch req.Where {
 		case connectors.WhereEnv:
 			env[req.Key] = ""
 		case connectors.WhereHeader:
-			headers[req.Key] = "${CRED:" + req.Key + "}"
+			// 头名与凭据名不一定相同（Authorization: Bearer <HASS_TOKEN>）。
+			name := req.Header
+			if name == "" {
+				name = req.Key
+			}
+			value := req.Value
+			if value == "" {
+				value = "${CRED:" + req.Key + "}"
+			} else {
+				value = catalogParamToCredRef(value)
+			}
+			headers[name] = value
+		case connectors.WhereURL:
+			// 只出现在 URL 模板里，已经在 spec.URL 展开，不落 env/headers。
 		}
 	}
 	if len(env) > 0 {

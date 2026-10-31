@@ -7,13 +7,13 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/config"
 )
 
-// media_tools.go — 媒体类工具（图片 / 语音 / 音频 / X 搜索）的统一注册入口。
+// media_tools.go — 媒体类工具（图片 / 语音 / 音频）的统一注册入口。
 //
 // 这批工具此前只挂在 Registry.RegisterOptionalTools 上，而那个方法全仓库零调用方
 // （web server、CLI、bot、gateway、cron 全都只走 RegisterAll），于是写好的实现一个
 // 也到不了模型手里。现在改为在 RegisterAll 末尾统一注册：
 //
-//   - 需要外部凭证的（image_gen / image_edit / text_to_speech / asr / x_search）
+//   - 需要外部凭证的（image_gen / image_edit / text_to_speech / asr）
 //     都实现了 AvailabilityChecker，没配 key 时不会出现在 ListWithSchemas 里，
 //     模型看不到，也就等于没注册 —— 所以"无条件注册"不会污染工具清单；
 //   - 一旦配上 key（config.json 或环境变量），对应工具立即出现，无需改代码。
@@ -23,6 +23,8 @@ import (
 // 的 image-to-video 必须有输入图）被整只删除，后按官方文档重写为 dashscope +
 // volcengine 两个异步任务型 provider（提交+轮询+下载，见 video_gen_tool.go）。
 // send_message 的 GatewaySender 接口在 gateway 包内没有任何实现，仍处删除状态。
+// x_search / send_email / send_sms 同理：能力分别由目录里的 X、Gmail、QQ 邮箱类
+// 连接器覆盖，内置实现（平台凭据只认环境变量、Web UI 无从配置）已删除。
 func (r *Registry) RegisterMediaTools() {
 	// 图片生成 / 编辑：同一份配置，键来自 config.json 的 image_gen 段，
 	// 环境变量 IMAGE_GEN_* 作为兜底/覆盖。
@@ -58,12 +60,6 @@ func (r *Registry) RegisterMediaTools() {
 	// 视觉模型。与 vision_analyze 配套使用。
 	r.Register(NewVideoAnalyzeTool())
 	r.SetTimeout("video_analyze", 180*time.Second)
-
-	// X/Twitter 搜索：走 X API v2 recent search，需要 app bearer token
-	// （或 OAuth2 用户令牌）。密钥此前只写在工具的错误信息里、没人读环境变量，
-	// 于是即使设了 X_BEARER_TOKEN 也永远不可用。
-	r.Register(NewXSearchTool(os.Getenv("X_API_KEY"), os.Getenv("X_BEARER_TOKEN")))
-	r.SetTimeout("x_search", 60*time.Second)
 }
 
 // LoadImageGenConfig 组装图片生成配置：config.json 的 image_gen 段优先，

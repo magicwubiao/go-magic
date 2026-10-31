@@ -9,7 +9,7 @@ package agentplugin
 // 就会把凭据位置漏掉。
 //
 // 语义：
-//   - args / env 值 / headers 值里可以写 `${CRED:NAME}`，连接前用插件凭据替换；
+//   - url / args / env 值 / headers 值里可以写 `${CRED:NAME}`，连接前用插件凭据替换；
 //   - 同一个 key 可以出现在多处（env 与 args 同时引用同一凭据）；
 //   - 未填写的凭据不做任何替换，并在连接时以 auth 类错误中止——比带着
 //     `${CRED:X}` 字面量去请求、再把 401 抛给用户看要清楚得多。
@@ -50,14 +50,23 @@ func resolveCredPlaceholders(s string, creds map[string]string) (string, []strin
 
 // applyCredentials 返回叠加了用户凭据的 spec 拷贝，并报告缺失的凭据 key。
 //
-// 三条通道：
+// 四条通道：
 //   - env：凭据按 key 覆盖同名 env（历史行为，保持兼容）；
-//   - args / env 值 / headers 值：替换 ${CRED:NAME}。
+//   - url / args / env 值 / headers 值：替换 ${CRED:NAME}。
+//
+// URL 也支持占位是为了局域网设备：Home Assistant 这类条目的地址前缀
+// （http://192.168.1.10:8123）本身就是用户要填的东西，模板里写成
+// {{HASS_URL}}/api/mcp，落盘成 ${CRED:HASS_URL}/api/mcp。
 //
 // 不改原 spec：重连/重载都以 mcp.json 为基准重新合并。
 func applyCredentials(spec MCPServerSpec, creds map[string]string) (MCPServerSpec, []string) {
 	out := spec
 	var missing []string
+
+	// url：展开后由 connectEntry 复核 scheme/主机（加载期看不到真实主机）。
+	resolvedURL, missURL := resolveCredPlaceholders(spec.URL, creds)
+	out.URL = resolvedURL
+	missing = append(missing, missURL...)
 
 	// env：先复制再覆盖，避免与原始 spec 共享 map。
 	if len(spec.Env) > 0 || len(creds) > 0 {
@@ -108,12 +117,13 @@ func applyCredentials(spec MCPServerSpec, creds map[string]string) (MCPServerSpe
 }
 
 // SpecCredentialKeys 返回一个 MCP 条目需要用户填写的凭据 key（升序）：
-// env 里值为空的键，加上 args/headers/env 值里出现的 ${CRED:NAME}。
+// env 里值为空的键，加上 url/args/headers/env 值里出现的 ${CRED:NAME}。
 //
 // 供凭据表单渲染输入框与 UI 判断"要不要亮授权按钮"——只看 env 空值会漏掉
 // 参数位与请求头里的凭据。
 func SpecCredentialKeys(spec MCPServerSpec) []string {
 	keys := emptyEnvKeys(spec.Env)
+	keys = append(keys, credRefsIn(spec.URL)...)
 	for _, v := range spec.Env {
 		if strings.TrimSpace(v) != "" {
 			keys = append(keys, credRefsIn(v)...)

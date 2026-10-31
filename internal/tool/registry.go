@@ -111,13 +111,6 @@ func NewRegistry() *Registry {
 	}
 }
 
-// RegistryWithConfig 带配置的工具注册表
-type RegistryWithConfig struct {
-	*Registry
-	emailConfig *EmailConfig
-	smsConfig   *SMSConfig
-}
-
 // SetStrictCommandList 把 execute_command 切到严格清单模式（必须在 RegisterAll
 // 之前调用；RegisterAll 内部据此配置它创建的 execute_command 实例）。
 //
@@ -312,29 +305,6 @@ func (r *Registry) RegisterAll(workDir string) {
 	// clarify 在 Web chat 会挂起等待用户答复（卡片交互），给足等待窗口；
 	// 内部 bridge 另有同长的答复时限，工具超时只是最后兜底。
 	r.SetTimeout("clarify", 300*time.Second)
-}
-
-// RegisterEmailTool 注册邮件发送工具（需要配置）
-func (r *Registry) RegisterEmailTool(config *EmailConfig) {
-	if config != nil && config.SMTPHost != "" {
-		r.Register(NewEmailTool(config))
-		r.SetTimeout("send_email", 30*time.Second)
-	}
-}
-
-// RegisterSMSTool 注册短信发送工具（需要配置）
-func (r *Registry) RegisterSMSTool(config *SMSConfig) {
-	if config != nil && config.Provider != "" {
-		r.Register(NewSMSTool(config))
-		r.SetTimeout("send_sms", 30*time.Second)
-	}
-}
-
-// RegisterWithNotificationConfig 注册所有工具，包括邮件和短信工具
-func (r *Registry) RegisterWithNotificationConfig(workDir string, emailConfig *EmailConfig, smsConfig *SMSConfig) {
-	r.RegisterAll(workDir)
-	r.RegisterEmailTool(emailConfig)
-	r.RegisterSMSTool(smsConfig)
 }
 
 // RegisterBotTools registers the full commonly-used tool set for Bot Mode.

@@ -19,13 +19,21 @@ import (
 
 // Requirement 描述安装时必须由用户填写的一项配置。
 //
-// Where 只有三种取值：env（stdio 子进程的环境变量）、header（远程连接的
-// HTTP 头）与 arg（stdio 命令行参数，Args 里的 {{KEY}} 占位符会被替换）。
-// 这三条正好对应 ServerConfig 的三个凭据入口。
+// Where 只有四种取值：env（stdio 子进程的环境变量）、header（远程连接的
+// HTTP 头）、arg（stdio 命令行参数，Args 里的 {{KEY}} 占位符会被替换）与
+// url（只出现在 Connector.URL 的 {{KEY}} 里，如局域网设备的 base URL）。
+// 这四条正好对应 ServerConfig 的四个凭据入口。
 type Requirement struct {
-	Key         string `json:"key"`
-	Label       string `json:"label"`
-	Where       string `json:"where"`
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Where string `json:"where"`
+	// Header 仅 Where=header 时使用：写入哪个 HTTP 头（空 = 与 Key 同名）。
+	// 绝大多数服务要的是 "Authorization: Bearer <token>"，头名与凭据名并不
+	// 相同，所以两者分开描述。
+	Header string `json:"header,omitempty"`
+	// Value 是位置模板：Where=header 时是头值（可含 {{KEY}}，默认 ${CRED:<Key>}）。
+	// Where=arg 由 Args 里的 {{KEY}} 决定，本字段不用。
+	Value       string `json:"value,omitempty"`
 	Secret      bool   `json:"secret"`
 	Required    bool   `json:"required"`
 	Placeholder string `json:"placeholder,omitempty"`
@@ -36,6 +44,10 @@ const (
 	WhereEnv    = "env"
 	WhereHeader = "header"
 	WhereArg    = "arg"
+	// WhereURL 表示这一项只出现在 Connector.URL 的 {{KEY}} 模板里，不需要落
+	// 到 env/headers。保留 Requirement 是为了带上 Label、Placeholder 与
+	// HelpURL——用户填的是"你的实例地址"，不是一串没有上下文的值。
+	WhereURL = "url"
 )
 
 // OAuthRequirement 声明该远程连接器支持 OAuth 2.1 授权。
@@ -53,17 +65,21 @@ type OAuthRequirement struct {
 
 // Connector 是目录中的一个条目。
 type Connector struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description"`
-	Category    string        `json:"category"`
-	Transport   string        `json:"transport"` // stdio / http / sse
-	Command     string        `json:"command,omitempty"`
-	Args        []string      `json:"args,omitempty"`
-	URL         string        `json:"url,omitempty"`
-	Requires    []Requirement `json:"requires,omitempty"`
-	DocsURL     string        `json:"docs_url,omitempty"`
-	Tags        []string      `json:"tags,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Category    string   `json:"category"`
+	Transport   string   `json:"transport"` // stdio / http / sse
+	Command     string   `json:"command,omitempty"`
+	Args        []string `json:"args,omitempty"`
+	// Env 是条目的**固定**环境变量（IMAP/SMTP 主机与端口这类用户不该操心的值）。
+	// 值里可以写 {{KEY}} 占位，物化时换成凭据引用；Requires 里同名的项优先，
+	// 也就是"固定值"永远盖不住"用户填的值"这条方向反过来不成立。
+	Env      map[string]string `json:"env,omitempty"`
+	URL      string            `json:"url,omitempty"`
+	Requires []Requirement     `json:"requires,omitempty"`
+	DocsURL  string            `json:"docs_url,omitempty"`
+	Tags     []string          `json:"tags,omitempty"`
 	// OAuth 非空表示该条目支持（或要求）OAuth 授权，安装后无需填写凭据。
 	OAuth *OAuthRequirement `json:"oauth,omitempty"`
 	// DefaultName 是建议的服务器名（用户在表单里可改）。
@@ -86,6 +102,7 @@ func Categories() []Category {
 		{ID: "data", Label: "Data & Databases"},
 		{ID: "productivity", Label: "Productivity"},
 		{ID: "automation", Label: "Browser & Automation"},
+		{ID: "home", Label: "Home & Devices"},
 		{ID: "local", Label: "Local & Files"},
 	}
 }
@@ -98,6 +115,84 @@ var catalog = []Connector{
 	// --- Office & Collaboration（海内外办公协同） ---
 	// 全部条目按各家官方文档核实（2026-10）：飞书/钉钉/语雀为官方 MCP，
 	// Asana 为官方 remote，Microsoft 365 / Atlassian / Airtable 为社区事实标准。
+	{
+		// 邮箱类条目共用一个实现（imap-smtp-email-mcp）：它按 IMAP/SMTP 标准协议
+		// 收信发信，同一套环境变量既能连 Gmail 也能连 QQ/163/126，所以两个条目
+		// 只在主机、端口和"去哪儿拿密码"上不同。相比各家 OAuth 方案，应用专用
+		// 密码不需要建 Google Cloud 项目，是当前成本最低的可跑通路径。
+		ID:          "gmail",
+		Name:        "Gmail",
+		Description: "Read, search and send Gmail through IMAP/SMTP with an app password (Google account needs 2-Step Verification; no Cloud project).",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "imap-smtp-email-mcp"},
+		Env: map[string]string{
+			"IMAP_HOST": "imap.gmail.com",
+			"IMAP_PORT": "993",
+			"SMTP_HOST": "smtp.gmail.com",
+			"SMTP_PORT": "465",
+		},
+		DefaultName: "gmail",
+		Requires: []Requirement{
+			{
+				Key:         "EMAIL_USER",
+				Label:       "Gmail address",
+				Where:       WhereEnv,
+				Required:    true,
+				Placeholder: "you@gmail.com",
+				HelpURL:     "https://mail.google.com",
+			},
+			{
+				Key:         "EMAIL_PASS",
+				Label:       "App password (16 characters)",
+				Where:       WhereEnv,
+				Secret:      true,
+				Required:    true,
+				Placeholder: "abcd efgh ijkl mnop",
+				HelpURL:     "https://myaccount.google.com/apppasswords",
+			},
+		},
+		DocsURL: "https://www.npmjs.com/package/imap-smtp-email-mcp",
+		Tags:    []string{"gmail", "email", "imap", "smtp", "google", "mailbox"},
+	},
+	{
+		ID:          "qqmail",
+		Name:        "QQ Mail",
+		Description: "Read, search and send QQ Mail through IMAP/SMTP with a 16-character authorization code.",
+		Category:    "office",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "imap-smtp-email-mcp"},
+		Env: map[string]string{
+			"IMAP_HOST": "imap.qq.com",
+			"IMAP_PORT": "993",
+			"SMTP_HOST": "smtp.qq.com",
+			"SMTP_PORT": "465",
+		},
+		DefaultName: "qqmail",
+		Requires: []Requirement{
+			{
+				Key:         "EMAIL_USER",
+				Label:       "QQ Mail address",
+				Where:       WhereEnv,
+				Required:    true,
+				Placeholder: "123456789@qq.com",
+				HelpURL:     "https://mail.qq.com",
+			},
+			{
+				Key:         "EMAIL_PASS",
+				Label:       "Authorization code (not your QQ password)",
+				Where:       WhereEnv,
+				Secret:      true,
+				Required:    true,
+				Placeholder: "16-character code",
+				HelpURL:     "https://help.mail.qq.com/detail/0/1087",
+			},
+		},
+		DocsURL: "https://www.npmjs.com/package/imap-smtp-email-mcp",
+		Tags:    []string{"qq", "qqmail", "email", "imap", "smtp", "mailbox"},
+	},
 	{
 		ID:          "lark",
 		Name:        "Feishu / Lark",
@@ -467,6 +562,45 @@ var catalog = []Connector{
 		DefaultName: "puppeteer",
 		DocsURL:     "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
 		Tags:        []string{"browser", "scraping"},
+	},
+
+	// --- Home & Devices ---
+	// 内置工具里原本就有一整套 ha_* 工具，但只读环境变量 HASS_URL/HASS_TOKEN，
+	// 在 Web UI 里等于用不了。官方 MCP Server integration（2025.2+）覆盖实体、
+	// 服务与 Assist 意图，且能被别的客户端复用，做成目录条目后"填地址 + 填令牌"
+	// 就能装上。地址前缀是用户自己的实例，所以写成 {{HASS_URL}} 模板：私网地址
+	// 允许明文 http（见 agentplugin.localOnlyHost），公网仍强制 https。
+	{
+		ID:          "homeassistant",
+		Name:        "Home Assistant",
+		Description: "Official Home Assistant MCP Server: read entity states, call services and run Assist intents on your own instance (needs the Model Context Protocol Server integration).",
+		Category:    "home",
+		Transport:   "http",
+		URL:         "{{HASS_URL}}/api/mcp",
+		DefaultName: "homeassistant",
+		Requires: []Requirement{
+			{
+				Key:         "HASS_URL",
+				Label:       "Instance URL",
+				Where:       WhereURL,
+				Required:    true,
+				Placeholder: "http://192.168.1.10:8123",
+				HelpURL:     "https://www.home-assistant.io/integrations/mcp_server/",
+			},
+			{
+				Key:         "HASS_TOKEN",
+				Label:       "Long-lived access token",
+				Where:       WhereHeader,
+				Header:      "Authorization",
+				Value:       "Bearer {{HASS_TOKEN}}",
+				Secret:      true,
+				Required:    true,
+				Placeholder: "eyJhbGciOiJIUzI1NiIsInR5cCI6…",
+				HelpURL:     "https://www.home-assistant.io/docs/authentication/",
+			},
+		},
+		DocsURL: "https://www.home-assistant.io/integrations/mcp_server/",
+		Tags:    []string{"home-assistant", "hass", "iot", "smart-home"},
 	},
 
 	// --- Local & Files ---

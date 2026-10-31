@@ -25,13 +25,6 @@ func (t *ImageEditTool) Available() bool       { return t.config != nil && t.con
 // 旧版曾因三个 provider 全跑不通被删，现按官方文档重写（dashscope / volcengine）。
 func (t *VideoGenerationTool) Available() bool { return t.config != nil && t.config.APIKey != "" }
 
-// XSearchTool：需要 X API Bearer Token（X_BEARER_TOKEN / X_API_KEY）
-func (t *XSearchTool) Available() bool { return t.apiKey != "" || t.bearerToken != "" }
-
-// EmailTool / SMSTool：需要相应配置
-func (t *EmailTool) Available() bool { return t.config != nil && t.config.SMTPHost != "" }
-func (t *SMSTool) Available() bool   { return t.config != nil && t.config.Provider != "" }
-
 // Home Assistant 工具：需要 HASS_URL + HASS_TOKEN
 func (t *HATool) Available() bool             { return t.config.IsConfigured() }
 func (t *HAGetStateTool) Available() bool     { return t.config.IsConfigured() }
@@ -175,9 +168,6 @@ var (
 	_ AvailabilityChecker = (*ImageGenerationTool)(nil)
 	_ AvailabilityChecker = (*ImageEditTool)(nil)
 	_ AvailabilityChecker = (*VideoGenerationTool)(nil)
-	_ AvailabilityChecker = (*XSearchTool)(nil)
-	_ AvailabilityChecker = (*EmailTool)(nil)
-	_ AvailabilityChecker = (*SMSTool)(nil)
 	_ AvailabilityChecker = (*HATool)(nil)
 	_ AvailabilityChecker = (*HAGetStateTool)(nil)
 	_ AvailabilityChecker = (*HAListServicesTool)(nil)

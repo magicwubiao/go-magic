@@ -177,6 +177,15 @@ func (r *Runtime) connectEntry(entry *MCPEntryStatus) (int, error) {
 		return 0, missingCredsError(missing)
 	}
 
+	// 地址可能带着凭据占位（局域网设备的 base URL）：加载期看不到真实主机，
+	// 只能在这里复核一次，否则 ${CRED:X} 能被填成任意明文公网地址绕过 https 规则。
+	// 地址来自用户填写的凭据，写错了属于"要改配置"，按 auth 类亮授权入口。
+	if spec.Type == TransportStreamableHTTP || spec.Type == TransportSSE {
+		if _, err := validateHTTPSpec(spec); err != nil {
+			return 0, mcp.WrapKind(mcp.ErrKindAuth, fmt.Errorf("invalid server url: %w", err))
+		}
+	}
+
 	// OAuth：显式声明的条目在握手**前**就要有 token（没有就发流程并直接
 	// 报 auth），零配置条目则先看有没有历史 token，等 401 再触发探测。
 	authProvider, oauthErr := r.oauthForEntry(entry.Name, spec)

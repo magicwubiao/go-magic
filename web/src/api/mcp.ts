@@ -168,12 +168,18 @@ export interface CatalogConnector {
   transport: string
   command?: string
   args?: string[]
+  /** 模板里写死的环境变量（IMAP/SMTP 主机端口这类），安装时直接落进 mcp.json */
+  env?: Record<string, string>
   url?: string
   requires?: {
     key: string
     label: string
-    /** env=子进程环境变量 / header=远程请求头 / arg=命令行参数占位符（Args 里的 {{KEY}}） */
-    where: 'env' | 'header' | 'arg'
+    /** env=子进程环境变量 / header=远程请求头 / arg=命令行参数占位符（Args 里的 {{KEY}}）/ url=地址模板的一部分 */
+    where: 'env' | 'header' | 'arg' | 'url'
+    /** where=header 时写入哪个头（缺省 = key） */
+    header?: string
+    /** where=header 时的头值模板，如 "Bearer {{TOKEN}}" */
+    value?: string
     secret: boolean
     required: boolean
     placeholder?: string
