@@ -70,8 +70,27 @@
           <span style="font-size: 12px;">{{ t('agentplugins.scanDir') }}: <n-text code>{{ store.scanDir }}</n-text></span>
         </n-alert>
 
+        <!-- 列表没拉下来要说清楚：否则只剩"暂无插件"，看起来像插件被删了 -->
+        <n-alert
+          v-if="store.loadError"
+          type="error"
+          :bordered="false"
+          :show-icon="false"
+          style="margin-top: 8px;"
+        >
+          <div class="ap-load-error">
+            <span>{{ t('agentplugins.loadFailedHint') }}</span>
+            <n-text depth="3" style="font-size: 12px; display: block; margin-top: 4px;">
+              {{ store.loadError }}
+            </n-text>
+            <n-button size="tiny" style="margin-top: 6px;" @click="store.loadPlugins()">
+              {{ t('common.refresh') }}
+            </n-button>
+          </div>
+        </n-alert>
+
         <n-empty
-          v-if="!store.plugins.length"
+          v-if="!store.plugins.length && !store.loadError"
           :description="t('agentplugins.noPlugins')"
           style="padding: 40px 0;"
         />
@@ -321,7 +340,13 @@
                       {{ t('agentplugins.oauthHint') }}
                     </span>
                     <!-- auth 类失败缺凭据行已用中文说明，不再重复透出后端英文 error -->
-                    <span v-if="m.error && m.error_kind !== 'auth'" class="ap-entry-err">{{ m.error }}</span>
+                    <div v-if="m.error && m.error_kind !== 'auth'" class="ap-entry-err">
+                      <span>{{ entryErrorHint(m) }}</span>
+                      <details class="ap-entry-err-raw">
+                        <summary>{{ t('agentplugins.errorRaw') }}</summary>
+                        <pre>{{ m.error }}</pre>
+                      </details>
+                    </div>
                     <span v-if="m.oauth_error" class="ap-entry-err">{{ m.oauth_error }}</span>
                   </div>
                 </div>
@@ -1088,6 +1113,36 @@ function entryHelpURL(entry: { credential_fields?: CredentialField[] }): string 
   return ''
 }
 
+/**
+ * 条目失败原因的一句话解释。
+ *
+ * 后端只给 error_kind（auth/network/protocol/not_found/server）+ 原始错误串；
+ * 原始串通常是 "connection refused" / "HTTP 406" 这类机器话，单独摆出来
+ * 等于没解释。这里按 kind 翻成人话，原文收进"原始错误"折叠区。
+ *
+ * 先看原文再看 kind：stdio 进程被杀时错误是 "signal: interrupt" / "signal:
+ * killed"，归类只能落到 network，但真正的原因是进程被终止——照 kind 说
+ * "检查网络"会把用户带偏。
+ */
+function entryErrorHint(entry: { error?: string; error_kind?: string }): string {
+  const raw = (entry.error || '').toLowerCase()
+  if (raw.includes('signal:') || raw.includes('killed') || raw.includes('interrupt')) {
+    return t('agentplugins.errorKindProcessKilled')
+  }
+  switch (entry.error_kind) {
+    case 'network':
+      return t('agentplugins.errorKindNetwork')
+    case 'server':
+      return t('agentplugins.errorKindServer')
+    case 'protocol':
+      return t('agentplugins.errorKindProtocol')
+    case 'not_found':
+      return t('agentplugins.errorKindNotFound')
+    default:
+      return t('agentplugins.errorKindUnknown')
+  }
+}
+
 /** 打开凭据获取页（新标签页，不带走当前页面状态）。 */
 function openCredHelp(url?: string) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer')
@@ -1609,6 +1664,26 @@ onMounted(async () => {
 .ap-entry-err {
   color: #d03050;
   word-break: break-all;
+}
+/* 原始错误默认折叠：默认只看"该做什么"，需要细节时再展开 */
+.ap-entry-err-raw {
+  margin-top: 2px;
+  color: #909399;
+  font-size: 11px;
+}
+.ap-entry-err-raw summary {
+  cursor: pointer;
+  user-select: none;
+}
+.ap-entry-err-raw pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.ap-load-error {
+  font-size: 12px;
 }
 
 /* ===== 凭据表单：字段名 + "去获取"直链 ===== */

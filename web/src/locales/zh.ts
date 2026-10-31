@@ -47,6 +47,10 @@ export default {
     success: '成功',
     error: '错误',
     loading: '加载中...',
+    // 请求层兜底文案：浏览器给的原始错误（signal is aborted without reason /
+    // Failed to fetch）没法让人判断该做什么，这两条替换掉它们。
+    requestTimeout: '请求超时（等待 {seconds} 秒）：服务可能正忙，稍后重试即可。',
+    requestUnreachable: '连不上本地服务：请确认程序仍在运行，或网络/代理没有拦截。',
     noData: '暂无数据',
     confirmDelete: '确定要删除吗？',
     confirmLogout: '确定要退出登录吗？',
@@ -2043,10 +2047,20 @@ export default {
     connected: '已连接',
     disconnected: '未连接',
     entryError: '条目错误',
+    // 条目失败时先说"该做什么"，原始错误收进折叠区：只有一串英文/系统报错
+    // 等于没给原因。
+    errorKindNetwork: '连不上这个服务：检查地址、网络/代理，以及本地进程是否已启动。',
+    errorKindServer: '服务端报错：稍后重试，或查看该服务的日志。',
+    errorKindProtocol: '协议握手失败：这个地址可能不是 MCP 端点，或传输方式（stdio / HTTP）选错了。',
+    errorKindNotFound: '端点不存在：检查 URL 路径，有的服务用 /mcp 或 /sse。',
+    errorKindUnknown: '连接失败，原因未能归类：展开原始错误看详情。',
+    errorKindProcessKilled: '本地进程被中断（程序退出、被杀，或重复启动顶掉了旧进程）：点重试重新拉起即可。',
+    errorRaw: '原始错误',
     warnings: '警告',
     reloaded: '已重新加载 {count} 个插件,共 {skills} 个技能',
     reloadFailed: '重新加载失败',
     loadFailed: '加载失败',
+    loadFailedHint: '插件列表没加载出来（不是插件被删了）：',
     dragToInstall: '拖拽 zip 包到此处安装,或点击选择文件',
     dropHere: '松开以安装',
     dropHint: '支持含 plugin.json 的插件 zip 包',

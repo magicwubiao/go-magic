@@ -1,4 +1,16 @@
 import { resetSessionCache } from '@/utils/sessionCache'
+// 请求层的失败文案要跟随界面语言：这里直接读全局 i18n 实例，避免在
+// "把错误抛给调用方之前"还要让每个调用点自己翻译一遍。
+import { i18n } from '@/locales'
+
+/** 取一条本地化文案；locale 未就绪时回退到 key（不会抛异常）。 */
+function t(key: string, params?: Record<string, unknown>): string {
+  try {
+    return params ? (i18n.global.t as any)(key, params) : (i18n.global.t as any)(key)
+  } catch {
+    return key
+  }
+}
 
 const BASE_URL = '/api'
 
@@ -93,15 +105,22 @@ async function doRequest<T>(
   timeoutMs: number,
 ): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  // 谁按下了 abort 决定报什么错：超时可以说"等了多久"，用户主动取消不该弹错。
+  // 只留一个布尔不会踩并发：controller 与它都是本次调用的局部变量。
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
 
   // Forward a caller-side cancel (e.g. the user pressed "stop" on a long
   // cross-machine turn) into our controller, so the timeout and the caller's
   // abort share one signal path and the fetch is really torn down.
   const external = options.signal
+  const forwardAbort = () => controller.abort()
   if (external) {
     if (external.aborted) controller.abort()
-    else external.addEventListener('abort', () => controller.abort(), { once: true })
+    else external.addEventListener('abort', forwardAbort, { once: true })
   }
 
   try {
@@ -144,9 +163,35 @@ async function doRequest<T>(
     } catch {
       return text as unknown as T
     }
+  } catch (err) {
+    throw normalizeRequestError(err, timedOut, timeoutMs)
   } finally {
     clearTimeout(timeoutId)
+    external?.removeEventListener('abort', forwardAbort)
   }
+}
+
+/**
+ * 把 fetch 层那些"只有机器能看懂"的失败换成能行动的说法。
+ *
+ * 浏览器 abort 时抛的是 `DOMException: signal is aborted without reason`，
+ * 网络不可达时是 `TypeError: Failed to fetch`——两者直接透到 UI 上就是
+ * "信号中断，没有原因"。这里按来源分类：
+ *   - 超时：说清等了多久、可能是什么慢（后端仍在跑，重试即可）
+ *   - 调用方主动取消：原样抛出，保留 AbortError 语义给上层静默处理
+ *   - 网络不可达：提示服务没起来 / 网络断了，而不是"失败"
+ * 其它错误（HTTP 状态、JSON 解析）保持原样，调用方按 status 分支。
+ */
+function normalizeRequestError(err: unknown, timedOut: boolean, timeoutMs: number): unknown {
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    if (!timedOut) return err
+    return apiError(t('common.requestTimeout', { seconds: Math.round(timeoutMs / 1000) }))
+  }
+  if (err instanceof TypeError) {
+    // fetch 只在"连不上"时抛 TypeError（DNS、连接被拒、CORS、离线）。
+    return apiError(t('common.requestUnreachable'))
+  }
+  return err
 }
 
 export async function requestText(path: string, options: RequestOptions = {}): Promise<string> {

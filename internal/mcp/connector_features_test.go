@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -100,12 +101,31 @@ func TestKindOfFallsBackToMessage(t *testing.T) {
 		{"connection refused (is the server running?)", ErrKindNetwork},
 		{"Unsupported protocol version: 2026-07-28", ErrKindProtocol},
 		{"HTTP 503: upstream unavailable", ErrKindServer},
+		// stdio 子进程被杀时 exec.Wait 的原文：进程没了 = 够不着，
+		// 不能让前端把它当"未知错误"只显示一串英文。
+		{"process wait error: signal: interrupt", ErrKindNetwork},
+		{"signal: killed", ErrKindNetwork},
 		{"something odd happened", ErrKindUnknown},
 	}
 	for _, c := range cases {
 		if got := KindOf(errString2(c.msg)); got != c.want {
 			t.Errorf("KindOf(%q) = %q, want %q", c.msg, got, c.want)
 		}
+	}
+}
+
+// 每个分类都要有"该做什么"的建议：Hint 为空时 UI 只剩原始错误串，
+// 用户看到的就是"失败，没有原因"。工具自身的业务错误例外——连接是好的。
+func TestErrorKindHintAlwaysExplains(t *testing.T) {
+	for _, kind := range []ErrorKind{
+		ErrKindAuth, ErrKindNetwork, ErrKindServer, ErrKindProtocol, ErrKindNotFound, ErrKindUnknown,
+	} {
+		if strings.TrimSpace(ErrorKindHint(kind)) == "" {
+			t.Errorf("hint for %q must not be empty", kind)
+		}
+	}
+	if ErrorKindHint(ErrKindTool) != "" {
+		t.Error("tool errors are business errors: connection advice would mislead")
 	}
 }
 

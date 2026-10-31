@@ -196,7 +196,7 @@ export interface CatalogInstallResult extends AgentPluginInstallResult {
 
 // 返回所有已加载的 Agent Plugin 摘要。
 export async function getAgentPlugins(): Promise<AgentPlugin[]> {
-  return request('/agent-plugins')
+  return request('/agent-plugins', { timeoutMs: 60_000 })
 }
 
 // 目录插件包列表（kind=mcp|cli，含 installed 状态）。
@@ -219,7 +219,9 @@ export async function installCatalogPack(
 
 // 重新扫描并加载所有 Agent Plugin(后端会先停止旧 MCP 运行时)。
 export async function reloadAgentPlugins(): Promise<AgentPluginsReloadResult> {
-  return request('/agent-plugins/reload', { method: 'POST' })
+  // 重新加载要停旧运行时、重扫插件目录、逐个连接 MCP——30s 默认值会在
+  // 后端还在跑的时候把前端请求 abort 掉，用户只看到一句"信号中断"。
+  return request('/agent-plugins/reload', { method: 'POST', timeoutMs: 180_000 })
 }
 
 // 通过上传 zip 安装插件。file 为 zip 文件,name 为插件目录名(可选)。
@@ -247,7 +249,7 @@ export async function installAgentPlugin(file: File, name?: string): Promise<Age
 
 // 卸载插件:删除插件目录并重新加载。
 export async function uninstallAgentPlugin(name: string): Promise<{ ok: boolean; name: string; dir: string }> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/uninstall`, { method: 'POST' })
+  return request(`/agent-plugins/${encodeURIComponent(name)}/uninstall`, { method: 'POST', timeoutMs: 120_000 })
 }
 
 // 启用插件。未就绪(缺凭据 / 命令没装)时后端返回 409 + blockers,
@@ -257,12 +259,15 @@ export async function enableAgentPlugin(
   force = false,
 ): Promise<{ ok: boolean; name: string; disabled: boolean }> {
   const qs = force ? '?force=1' : ''
-  return request(`/agent-plugins/${encodeURIComponent(name)}/enable${qs}`, { method: 'POST' })
+  return request(`/agent-plugins/${encodeURIComponent(name)}/enable${qs}`, {
+    method: 'POST',
+    timeoutMs: 120_000,
+  })
 }
 
 // 禁用插件。
 export async function disableAgentPlugin(name: string): Promise<{ ok: boolean; name: string; disabled: boolean }> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/disable`, { method: 'POST' })
+  return request(`/agent-plugins/${encodeURIComponent(name)}/disable`, { method: 'POST', timeoutMs: 60_000 })
 }
 
 // 获取插件凭据掩码视图(值一律 *** 或 '',拿不到真实值)。
@@ -279,6 +284,8 @@ export async function setPluginCredentials(
   return request(`/agent-plugins/${encodeURIComponent(name)}/credentials`, {
     method: 'POST',
     body: JSON.stringify({ env }),
+    // 保存后后端会逐个重连条目（每个都要拉进程 + 握手）。
+    timeoutMs: 120_000,
   })
 }
 
@@ -286,7 +293,7 @@ export async function setPluginCredentials(
 export async function connectPluginServer(name: string, server: string): Promise<{ ok: boolean; error?: string }> {
   return request(
     `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/connect`,
-    { method: 'POST' },
+    { method: 'POST', timeoutMs: 60_000 },
   )
 }
 

@@ -117,7 +117,10 @@ func inferKindFromMessage(msg string) ErrorKind {
 		strings.Contains(lower, "connection refused") || strings.Contains(lower, "unreachable") ||
 		strings.Contains(lower, "no such host") || strings.Contains(lower, "tls") ||
 		strings.Contains(lower, "certificate") || strings.Contains(lower, "broken pipe") ||
-		strings.Contains(lower, "process exited") || strings.Contains(lower, "no such file"):
+		strings.Contains(lower, "process exited") || strings.Contains(lower, "signal:") ||
+		strings.Contains(lower, "killed") || strings.Contains(lower, "no such file"):
+		// "signal: interrupt" / "signal: killed" 是 stdio 子进程被终止时
+		// exec.Wait 的原文：进程没了，对用户来说等价于"够不着"。
 		return ErrKindNetwork
 	case strings.Contains(lower, "unsupported protocol version") ||
 		strings.Contains(lower, "protocol version") ||
@@ -164,7 +167,11 @@ func ErrorKindHint(kind ErrorKind) string {
 		return "Protocol negotiation failed. The endpoint may not speak MCP, or expects a different transport."
 	case ErrKindNotFound:
 		return "Endpoint not found. Check the URL path (some servers use /mcp or /sse)."
-	default:
+	case ErrKindTool:
+		// 工具自身的业务错误：连接是好的，给"检查网络"的建议只会误导。
 		return ""
+	default:
+		// 未知分类也要给一句话：留空会让 UI 只剩原始错误串，用户看不到原因。
+		return "Connection failed for an unclassified reason. Expand the raw error for details, then retry."
 	}
 }

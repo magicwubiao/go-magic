@@ -7,6 +7,9 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
   const plugins = ref<AgentPlugin[]>([])
   const loading = ref(false)
   const scanDir = ref('')
+  // 列表拉取失败的原因。之前 catch 里只把 plugins 清空，页面就变成
+  // "暂无插件"——看起来像插件被删了，实际是请求失败了。
+  const loadError = ref('')
 
   // 安装/卸载/启停操作的进行中状态(按插件名记录),用于禁用对应按钮。
   const pending = ref<Record<string, boolean>>({})
@@ -30,8 +33,10 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     loading.value = true
     try {
       plugins.value = await agentPluginsApi.getAgentPlugins()
-    } catch {
+      loadError.value = ''
+    } catch (e: any) {
       plugins.value = []
+      loadError.value = e?.message || String(e)
     } finally {
       loading.value = false
     }
@@ -43,6 +48,7 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
       const res = await agentPluginsApi.reloadAgentPlugins()
       scanDir.value = res.dir || ''
       plugins.value = await agentPluginsApi.getAgentPlugins()
+      loadError.value = ''
       return res
     } finally {
       loading.value = false
@@ -153,6 +159,7 @@ export const useAgentPluginsStore = defineStore('agentplugins', () => {
     plugins,
     loading,
     scanDir,
+    loadError,
     pending,
     installing,
     activePlugins,
