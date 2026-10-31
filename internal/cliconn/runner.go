@@ -48,15 +48,27 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	// 先展开 env（args 模板里的 {{env:NAME}} 引用它的最终值），再展开参数。
 	// 每次执行都展开一次，因此在 shell 里换了 token 不需要重启服务。
 	envList := conn.Env
-	var envMap map[string]string
 	if len(envList) > 0 {
 		var err error
 		envList, err = envref.ExpandList(conn.Env)
 		if err != nil {
 			return nil, fmt.Errorf("connector env: %w", err)
 		}
-		envMap = envMapFromList(envList)
 	}
+	// OAuth 设备码取得的 token 最后覆盖：它是"当前这一秒"的最新凭据，
+	// 必须盖过 env 里可能残留的旧值（用户上次手填的、或上一枚已过期的）。
+	if oauth := conn.OAuth; oauth != nil && oauth.TokenEnv != "" {
+		if oauth.Tokens == nil {
+			return nil, fmt.Errorf("connector %q uses OAuth but no token store is wired", conn.Command)
+		}
+		tok, err := oauth.Tokens.EnsureAccessToken()
+		if err != nil {
+			return nil, fmt.Errorf("oauth token unavailable: %w", err)
+		}
+		envList = append(envList, oauth.TokenEnv+"="+tok)
+	}
+	envMap := envMapFromList(envList)
+
 	argv, err := ExpandArgs(conn.Args, spec, resolved, envMap)
 	if err != nil {
 		return nil, err
@@ -76,7 +88,7 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	cmd := exec.CommandContext(ctx, conn.Command, argv...)
 	cmd.WaitDelay = 3 * time.Second // ctx 取消后给子进程收尸的宽限
 
-	if len(conn.Env) > 0 {
+	if len(envList) > 0 {
 		// ${ENV} 引用已在上面展开过（{{env:NAME}} 与进程环境取同一份值）。
 		cmd.Env = mergeEnv(os.Environ(), envList)
 	}

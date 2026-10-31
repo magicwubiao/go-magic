@@ -42,6 +42,13 @@ type cliConnectorView struct {
 	ToolNames []string `json:"tool_names"`
 	// Active 表示当前分身下是否生效（profiles / enabled 过滤后的结果）。
 	Active bool `json:"active"`
+	// OAuthConfigured 表示连接器声明了设备码配置（UI 据此显示"登录"）。
+	OAuthConfigured bool `json:"oauth_configured"`
+	// OAuthState: authorized / awaiting_authorization / none / expired / failed
+	OAuthState string `json:"oauth_state,omitempty"`
+	// OAuthUserCode / OAuthVerificationURI 供"流程已发起但还没批"时回显。
+	OAuthUserCode        string `json:"oauth_user_code,omitempty"`
+	OAuthVerificationURI string `json:"oauth_verification_uri,omitempty"`
 }
 
 func (s *Server) handleCLIConnectors(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +79,15 @@ func (s *Server) handleCLIConnectorByID(w http.ResponseWriter, r *http.Request) 
 	name = strings.TrimSuffix(name, "/")
 	if name == "" {
 		http.Error(w, "Connector name is required", http.StatusBadRequest)
+		return
+	}
+	// {name}/oauth/{start|status|signout}：OAuth 设备码流程（见 cli_oauth.go）。
+	if base, rest, ok := strings.Cut(name, "/"); ok {
+		if action, isOAuth := strings.CutPrefix(rest, "oauth/"); isOAuth {
+			s.handleCLIConnectorOAuth(w, r, base, strings.Trim(action, "/"))
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 
@@ -147,9 +163,24 @@ func (s *Server) handleCLITest(w http.ResponseWriter, r *http.Request) {
 	if name := strings.TrimSpace(body.Name); name != "" {
 		if stored, ok := s.cliConnectorConfigs()[name]; ok {
 			body.Connector.Env = mergeMaskedServerEnv(stored.Env, body.Connector.Env)
+			// client_secret 与 env 同理：回显是 ***，不还原就换不到 token。
+			if body.Connector.OAuth != nil && body.Connector.OAuth.ClientSecret == "***" {
+				if stored.OAuth != nil {
+					body.Connector.OAuth.ClientSecret = stored.OAuth.ClientSecret
+				} else {
+					body.Connector.OAuth.ClientSecret = ""
+				}
+			}
 		}
 	} else {
 		body.Connector.Env = mergeMaskedServerEnv(nil, body.Connector.Env)
+	}
+	// 试跑也要带上 OAuth token：否则"配置了 oauth 的连接器"永远试跑失败，
+	// 用户会以为是登录没生效。
+	if body.Connector.OAuth != nil {
+		spec := *body.Connector.OAuth
+		spec.Tokens = cliOAuthSource{srv: s, key: cliOAuthKey(strings.TrimSpace(body.Name))}
+		body.Connector.OAuth = &spec
 	}
 	if err := body.Connector.Validate(); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -221,10 +252,22 @@ func (s *Server) upsertCLIConnectorCore(name string, c cliconn.Connector) (int, 
 	}
 	// 掩码还原：表单回填过的 *** 不能当成真值写回去，否则用户改个超时时间
 	// 就把 token 抹掉了。
-	if stored, ok := s.cliConnectorConfigs()[name]; ok {
+	stored, hasStored := s.cliConnectorConfigs()[name]
+	if hasStored {
 		c.Env = mergeMaskedServerEnv(stored.Env, c.Env)
 	} else {
 		c.Env = mergeMaskedServerEnv(nil, c.Env)
+	}
+	// OAuth client_secret 同理：回显是 ***，原样保存会把真值替换成三个星号。
+	if c.OAuth != nil {
+		c.OAuth.Tokens = nil // 运行时字段，不能跟着配置落盘
+		if c.OAuth.ClientSecret == "***" {
+			if hasStored && stored.OAuth != nil {
+				c.OAuth.ClientSecret = stored.OAuth.ClientSecret
+			} else {
+				c.OAuth.ClientSecret = ""
+			}
+		}
 	}
 	if err := c.Validate(); err != nil {
 		return http.StatusBadRequest, err
@@ -300,6 +343,9 @@ func (s *Server) cliConnectorConfigs() map[string]cliconn.Connector {
 	for name, c := range cfg.Cli.Connectors {
 		out[name] = c
 	}
+	// 声明了 OAuth 的连接器在执行期按需取 token（见 cli_oauth.go）。
+	// 放在这里而不是 persist 时写死：token 会过期/刷新，配置里只存端点。
+	s.withCLIOAuthTokenSource(out)
 	return out
 }
 
@@ -349,18 +395,50 @@ func (s *Server) listCLIConnectors() []cliConnectorView {
 	for _, name := range names {
 		c := defs[name]
 		c.Env = maskCLIEnv(c.Env)
+		if c.OAuth != nil {
+			c.OAuth = cloneOAuthSpecMasked(c.OAuth)
+		}
 		toolNames := make([]string, 0, len(c.Tools))
 		for _, spec := range c.Tools {
 			toolNames = append(toolNames, cliconn.ToolName(name, spec.Name))
 		}
-		out = append(out, cliConnectorView{
+		view := cliConnectorView{
 			Name:      name,
 			Connector: c,
 			ToolNames: toolNames,
 			Active:    c.AutoConnect() && c.AppliesToProfile(profile),
-		})
+		}
+		if c.OAuth.Configured() {
+			view.OAuthConfigured = true
+			if mgr := s.cliOAuthManager(); mgr != nil {
+				st := mgr.Status(cliOAuthKey(name))
+				view.OAuthState = cliOAuthStatusText(st)
+				view.OAuthUserCode = st.UserCode
+				view.OAuthVerificationURI = st.VerificationURI
+			}
+		}
+		out = append(out, view)
 	}
 	return out
+}
+
+// cloneOAuthSpecMasked 复制一份 OAuth 配置并把 secret 换成 ***。
+//
+// 不能直接在遍历里改指针：defs 里的是配置副本的深拷贝吗？不是——OAuth 是
+// 指针，直接赋值会改到 map 里那份，下一次执行就会拿着 "***" 去换 token。
+func cloneOAuthSpecMasked(o *cliconn.OAuthSpec) *cliconn.OAuthSpec {
+	if o == nil {
+		return nil
+	}
+	cp := *o
+	cp.Tokens = nil
+	if cp.ClientSecret != "" {
+		cp.ClientSecret = "***"
+	}
+	if len(o.Scopes) > 0 {
+		cp.Scopes = append([]string(nil), o.Scopes...)
+	}
+	return &cp
 }
 
 // maskCLIEnv 只回显 key，值一律 ***（env 里放的是 token）。

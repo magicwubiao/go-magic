@@ -73,7 +73,10 @@ type CatalogPack struct {
 	BinaryFound     bool     `json:"binary_found"`
 	InstallCommands []string `json:"install_commands,omitempty"`
 	LoginCommands   []string `json:"login_commands,omitempty"`
-	DocsURL         string   `json:"docs_url,omitempty"`
+	// LoginExec 非空表示登录可由服务端代跑（目录已登记非交互 argv），
+	// 前端据此显示"一键登录"而不是只给一条要复制的命令。
+	LoginExec []string `json:"login_exec,omitempty"`
+	DocsURL   string   `json:"docs_url,omitempty"`
 	// Installed 报告扫描目录下是否已有同名插件。
 	Installed bool `json:"installed"`
 }
@@ -172,6 +175,7 @@ func cliCatalogPacks() []CatalogPack {
 			BinaryFound:     found[i],
 			InstallCommands: e.Install.CommandsFor(runtime.GOOS),
 			LoginCommands:   e.Login.CommandsFor(runtime.GOOS),
+			LoginExec:       append([]string(nil), e.LoginExec...),
 			DocsURL:         e.DocsURL,
 			Installed:       catalogPackInstalled(CatalogKindCLI, e.ID),
 		})

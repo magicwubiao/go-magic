@@ -70,8 +70,10 @@ func (s *Server) loadAgentPluginsParsed() (*agentplugin.Manager, map[string]*age
 	}
 
 	// 插件自带的 CLI 连接器(cli.json 组件):CLI 无连接阶段,注册即生效。
+	// token source 工厂让 cli.json 里声明了 oauth 的连接器在每次执行前
+	// 拿到本程序换来的 token（键带插件命名空间，见 agentplugin.CLIOAuthKey）。
 	if s.toolReg != nil {
-		agentplugin.RegisterCLITools(plugins, s.toolReg, s.agentPluginCredentials)
+		agentplugin.RegisterCLIToolsWithOAuth(plugins, s.toolReg, s.agentPluginCredentials, s.pluginCLITokenSource)
 	}
 
 	return mgr, plugins
@@ -284,6 +286,18 @@ func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 			// {name}/mcp/{server}/oauth/{start|status|signout} — OAuth 授权。
 			if len(segs) == 5 && segs[3] == "oauth" {
 				s.handlePluginEntryOAuth(w, r, segs[0], segs[2], segs[4])
+				return
+			}
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// {name}/cli/{connector}/oauth/{start|status|signout} — 插件内 CLI 的
+		// 设备码授权。与上面的 cli/install 不冲突：那条是 rest 级前缀，
+		// 这里是 {name}/ 之后的第二段。
+		if strings.HasPrefix(action, "cli/") {
+			segs := strings.Split(rest, "/")
+			if len(segs) == 5 && segs[3] == "oauth" {
+				s.handlePluginCLIOAuth(w, r, segs[0], segs[2], segs[4])
 				return
 			}
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -817,7 +831,7 @@ func (s *Server) refreshPluginCLITools(pluginName string, mp *agentplugin.Manage
 	defer s.releaseServerMu()
 
 	agentplugin.UnregisterCLITools(one, s.toolReg)
-	agentplugin.RegisterCLITools(one, s.toolReg, func(string) map[string]string { return creds })
+	agentplugin.RegisterCLIToolsWithOAuth(one, s.toolReg, func(string) map[string]string { return creds }, s.pluginCLITokenSource)
 }
 
 // allowedIconExts 是可作插件图标的扩展名白名单:严格限定,防止借 icon 路径

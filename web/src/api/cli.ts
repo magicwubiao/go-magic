@@ -49,7 +49,21 @@ export interface CLIConnector {
   profiles?: string[]
   /** 强制每个工具都走人工确认（优先级高于工具自己的 read_only） */
   require_approval?: boolean
+  /** OAuth 设备码：由本程序取 token 并注入 token_env，执行前自动刷新 */
+  oauth?: CLIOAuthSpec
   tools: CLIToolSpec[]
+}
+
+/** 连接器级 OAuth（RFC 8628 设备码）。client_secret 回显为 ***。 */
+export interface CLIOAuthSpec {
+  device_authorization_endpoint: string
+  token_endpoint: string
+  client_id: string
+  client_secret?: string
+  scopes?: string[]
+  /** 执行时注入 access token 的环境变量名 */
+  token_env: string
+  audience?: string
 }
 
 export interface CLIConnectorView extends CLIConnector {
@@ -58,6 +72,12 @@ export interface CLIConnectorView extends CLIConnector {
   tool_names: string[]
   /** 当前分身下是否生效 */
   active: boolean
+  /** 声明了设备码配置 */
+  oauth_configured?: boolean
+  /** authorized / awaiting_authorization / none / expired / failed */
+  oauth_state?: string
+  oauth_user_code?: string
+  oauth_verification_uri?: string
 }
 
 export interface CLITestResult {
@@ -112,6 +132,11 @@ export interface CLICatalogEntry {
   install_commands: string[]
   /** 当前平台的登录命令（仅展示，服务端不执行） */
   login_commands?: string[]
+  /**
+   * 可由服务端代跑的登录参数（不含命令本身）。
+   * 有值 = 详情页会出现"一键登录"，用户不用打开终端。
+   */
+  login_exec?: string[]
   /** 就绪检查结论：undefined 表示该条目没有检查项或尚未检查 */
   ready?: boolean
   /** 就绪检查的一句话说明（当前 context / 失败原因） */
@@ -217,4 +242,127 @@ export async function testCLIConnector(
     body: JSON.stringify({ name: connector.name ?? '', connector, tool, params }),
     timeoutMs,
   })
+}
+
+// === 委托登录（服务端代跑 CLI 自己的 login 命令） ===
+
+export interface CLILoginSession {
+  id: string
+  catalog_id: string
+  /** running | done | failed | cancelled */
+  state: string
+  /** 实际执行的命令行（展示给用户看，来源是内置目录） */
+  command: string
+  /** 子进程累计输出（含交互式提问） */
+  output: string
+  /** 从输出里抓到的授权页地址 */
+  auth_url?: string
+  /** 从输出里抓到的设备码 / 一次性短码 */
+  user_code?: string
+  /** failed 时的原因 */
+  error?: string
+  /** 就绪检查的一句话结论（登录成功后通常就是账号名） */
+  check_message?: string
+  truncated?: boolean
+  started_at: string
+  finished_at?: string
+}
+
+/** 开始（或复用）一次委托登录；只传目录 id。 */
+export async function startCLILogin(id: string): Promise<{ ok: boolean; reused?: boolean; session: CLILoginSession }> {
+  return request<{ ok: boolean; reused?: boolean; session: CLILoginSession }>('/cli/catalog/login', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  })
+}
+
+export async function getCLILoginSession(sessionId: string): Promise<{ ok: boolean; session: CLILoginSession }> {
+  return request<{ ok: boolean; session: CLILoginSession }>(
+    `/cli/catalog/login/${encodeURIComponent(sessionId)}`,
+  )
+}
+
+/** 把用户在弹窗里输入的内容转发给子进程 stdin（回答 "Press Enter" 之类的提问）。 */
+export async function sendCLILoginInput(sessionId: string, text: string): Promise<void> {
+  return request<void>(`/cli/catalog/login/${encodeURIComponent(sessionId)}/input`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+}
+
+export async function cancelCLILogin(sessionId: string): Promise<void> {
+  return request<void>(`/cli/catalog/login/${encodeURIComponent(sessionId)}/cancel`, {
+    method: 'POST',
+  })
+}
+
+// === 连接器级 OAuth（设备码流程） ===
+
+export interface CLIOAuthStatus {
+  state: string
+  error?: string
+  user_code?: string
+  verification_uri?: string
+  redirect_uri?: string
+}
+
+export interface CLIDeviceCode {
+  user_code: string
+  verification_uri: string
+  verification_uri_complete?: string
+  expires_in?: number
+  interval?: number
+}
+
+/** 发起设备码授权；已授权时 already_authorized = true。 */
+export async function startCLIConnectorOAuth(name: string): Promise<{
+  ok: boolean
+  status: CLIOAuthStatus
+  already_authorized?: boolean
+  device?: CLIDeviceCode
+}> {
+  return request(`/cli/connectors/${encodeURIComponent(name)}/oauth/start`, { method: 'POST' })
+}
+
+export async function getCLIConnectorOAuth(name: string): Promise<{
+  ok: boolean
+  status: CLIOAuthStatus
+  configured: boolean
+}> {
+  return request(`/cli/connectors/${encodeURIComponent(name)}/oauth/status`)
+}
+
+export async function signOutCLIConnectorOAuth(name: string): Promise<void> {
+  return request<void>(`/cli/connectors/${encodeURIComponent(name)}/oauth/signout`, { method: 'POST' })
+}
+
+// === 插件内连接器的 OAuth（同一套设备码流程，token 键带插件命名空间） ===
+
+export async function startPluginCLIOAuth(plugin: string, name: string): Promise<{
+  ok: boolean
+  status: CLIOAuthStatus
+  already_authorized?: boolean
+  device?: CLIDeviceCode
+}> {
+  return request(
+    `/agent-plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/start`,
+    { method: 'POST' },
+  )
+}
+
+export async function getPluginCLIOAuth(plugin: string, name: string): Promise<{
+  ok: boolean
+  status: CLIOAuthStatus
+  configured: boolean
+}> {
+  return request(
+    `/agent-plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/status`,
+  )
+}
+
+export async function signOutPluginCLIOAuth(plugin: string, name: string): Promise<void> {
+  return request<void>(
+    `/agent-plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/signout`,
+    { method: 'POST' },
+  )
 }

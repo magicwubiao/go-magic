@@ -16,6 +16,7 @@ package cliconn
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -46,6 +47,8 @@ var (
 	connectorNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 	toolNameRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$`)
 	paramNameRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,47}$`)
+	// envNameRe 是注入 token 的环境变量名（Windows 上不区分大小写，统一按大写校验）。
+	envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 )
 
 // Config 是 config.json 中 "cli" 段的结构。
@@ -76,8 +79,95 @@ type Connector struct {
 	// RequireApproval 强制该连接器下每个工具都走人工确认。
 	// nil = 按工具自己的 read_only 决定（read_only 才免确认）。
 	RequireApproval *bool `json:"require_approval,omitempty"`
+	// OAuth 声明该连接器的 token 由本程序通过设备码流程（RFC 8628）取得，
+	// 执行前注入 TokenEnv 指向的环境变量。nil = 沿用 env 里的静态凭据。
+	OAuth *OAuthSpec `json:"oauth,omitempty"`
 	// Tools 是从该程序暴露出去的子命令。
 	Tools []ToolSpec `json:"tools,omitempty"`
+}
+
+// OAuthSpec 描述"由本程序替 CLI 拿 token"所需的全部信息。
+//
+// 为什么走设备码而不是授权码：CLI 不提供回调地址，本程序也不该为每个
+// 第三方工具去申请一个 redirect_uri。设备码只需 client_id，用户在一个
+// 页面上输入短码即可，天然适配"服务端没有浏览器"的场景。
+//
+// 安全约束：token 只进子进程环境，不落 config.json（落 OAuthTokenStore，
+// 0600 原子写）；TokenEnv 必须是合法的环境变量名。
+type OAuthSpec struct {
+	// DeviceAuthorizationEndpoint 是 RFC 8628 的 device_authorization_endpoint。
+	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
+	// TokenEndpoint 是换 token 的端点。
+	TokenEndpoint string `json:"token_endpoint"`
+	// ClientID 是厂商 OAuth App 的公共标识（设备码不需要 secret）。
+	ClientID string `json:"client_id"`
+	// ClientSecret 仅机密客户端需要；API 层按 *** 掩码。
+	ClientSecret string `json:"client_secret,omitempty"`
+	// Scopes 请求的权限。
+	Scopes []string `json:"scopes,omitempty"`
+	// TokenEnv 是执行时注入 access token 的环境变量名（如 GH_TOKEN）。
+	TokenEnv string `json:"token_env"`
+	// Audience / Resource 可选：RFC 8707 resource 或厂商的 audience 参数。
+	Audience string `json:"audience,omitempty"`
+	// Tokens 是运行期注入的 token 源（不参与序列化）。
+	// 由 server 在同步连接器时挂上，指向共享的 OAuthTokenStore。
+	Tokens TokenSource `json:"-"`
+}
+
+// TokenSource 是 cliconn 对 OAuth 存储的最小依赖。
+//
+// 只用一个方法而不是直接 import internal/mcp：pkg/config 要 import 本包，
+// 而 mcp 又会 import pkg/config 一侧的东西，直接依赖会成环。
+// 实现方在构造时绑定好连接器名，因此这里不需要再传名字。
+type TokenSource interface {
+	// EnsureAccessToken 返回可用的原始 access token（不带 Bearer 前缀）。
+	EnsureAccessToken() (string, error)
+}
+
+// Configured 报告该连接器是否声明了可用的设备码配置。
+func (o *OAuthSpec) Configured() bool {
+	return o != nil && o.DeviceAuthorizationEndpoint != "" && o.TokenEndpoint != "" && o.ClientID != "" && o.TokenEnv != ""
+}
+
+// Validate 校验设备码配置。
+//
+// 只接受 https（本地调试放行 http://127.0.0.1 / localhost）：token 请求里带
+// client_secret 与后续的 refresh_token，走明文传输等于把凭据交给中间人。
+func (o *OAuthSpec) Validate() error {
+	if o == nil {
+		return nil
+	}
+	if o.DeviceAuthorizationEndpoint == "" || o.TokenEndpoint == "" {
+		return fmt.Errorf("oauth: device_authorization_endpoint and token_endpoint are required")
+	}
+	if o.ClientID == "" {
+		return fmt.Errorf("oauth: client_id is required (device code flow has no dynamic registration)")
+	}
+	if strings.TrimSpace(o.TokenEnv) == "" {
+		return fmt.Errorf("oauth: token_env is required (the env var the CLI reads its token from)")
+	}
+	if !envNameRe.MatchString(strings.TrimSpace(o.TokenEnv)) {
+		return fmt.Errorf("oauth: invalid token_env %q", o.TokenEnv)
+	}
+	for label, raw := range map[string]string{
+		"device_authorization_endpoint": o.DeviceAuthorizationEndpoint,
+		"token_endpoint":                o.TokenEndpoint,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "https" && !isLoopbackURL(u)) {
+			return fmt.Errorf("oauth: %s must be an https URL", label)
+		}
+	}
+	return nil
+}
+
+// isLoopbackURL 判断是否本机地址（仅用于允许 http 调试）。
+func isLoopbackURL(u *url.URL) bool {
+	if u == nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // ToolSpec 描述一个具体的子命令，展开成一个工具。
@@ -197,6 +287,11 @@ func (c Connector) Validate() error {
 	}
 	if len(c.Tools) == 0 {
 		return fmt.Errorf("at least one tool is required")
+	}
+	if c.OAuth != nil {
+		if err := c.OAuth.Validate(); err != nil {
+			return err
+		}
 	}
 
 	seen := make(map[string]bool, len(c.Tools))

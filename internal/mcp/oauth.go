@@ -397,6 +397,10 @@ type OAuthFlowStatus struct {
 	State       string `json:"state"`
 	Error       string `json:"error,omitempty"`
 	RedirectURI string `json:"redirect_uri,omitempty"`
+	// UserCode / VerificationURI 只在设备码流程里有值：前端要让用户看到
+	// "去哪输什么"，否则只有一个等待中的转圈。
+	UserCode        string `json:"user_code,omitempty"`
+	VerificationURI string `json:"verification_uri,omitempty"`
 }
 
 const (
@@ -423,6 +427,11 @@ type oauthFlow struct {
 	tokenURL     string
 	resource     string
 
+	// 设备码流程专用：用户要输入的短码与授权页地址。
+	userCode        string
+	verificationURI string
+	deviceAuth      *DeviceAuthorization
+
 	listener net.Listener
 	server   *http.Server
 	done     chan struct{}
@@ -446,7 +455,11 @@ type OAuthManager struct {
 	// lastAutoStart 记录每个 server 最近一次自动发起授权的时间（冷却用）。
 	// 读写都发生在 m.mu 临界区内。
 	lastAutoStart map[string]time.Time
-	hc            *http.Client
+	// lastResult 保留流程结束后的最终状态（失败原因尤其重要）：
+	// 流程一收尾就从 flows 里删掉了，没有它 UI 只会看到 "none"，
+	// 用户点完"拒绝"再刷新页面，报错就永远消失了。
+	lastResult map[string]OAuthFlowStatus
+	hc         *http.Client
 }
 
 // NewOAuthManager 构造管理器；store 为 nil 时所有流程启动都会报错。
@@ -455,6 +468,7 @@ func NewOAuthManager(store *OAuthTokenStore) *OAuthManager {
 		store:         store,
 		flows:         make(map[string]*oauthFlow),
 		lastAutoStart: make(map[string]time.Time),
+		lastResult:    make(map[string]OAuthFlowStatus),
 		hc:            &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -482,6 +496,11 @@ func (m *OAuthManager) Status(name string) OAuthFlowStatus {
 	defer m.mu.Unlock()
 	flow, ok := m.flows[name]
 	if !ok {
+		// 流程刚失败（用户拒绝 / 超时）：把最后那次失败原因再报一次，
+		// 否则前端轮询只会看到 "none"，错误被静默吞掉。
+		if last, ok := m.lastResult[name]; ok && last.State == OAuthStateFailed {
+			return last
+		}
 		// 有 token 但已过期：明确告诉用户"该重新授权"而不是笼统的 none。
 		if tok, ok := m.store.Get(name); ok && tok.AccessToken != "" {
 			return OAuthFlowStatus{State: "expired"}
@@ -496,7 +515,12 @@ func (m *OAuthManager) Status(name string) OAuthFlowStatus {
 		// done 但没有 token 也没有错误：极端竞态，按失败处理。
 		return OAuthFlowStatus{State: OAuthStateFailed, Error: "authorization flow ended without a token", RedirectURI: flow.redirectURI}
 	default:
-		return OAuthFlowStatus{State: OAuthStateAwaitingAuthorization, RedirectURI: flow.redirectURI}
+		return OAuthFlowStatus{
+			State:           OAuthStateAwaitingAuthorization,
+			RedirectURI:     flow.redirectURI,
+			UserCode:        flow.userCode,
+			VerificationURI: flow.verificationURI,
+		}
 	}
 }
 
@@ -552,6 +576,7 @@ func (m *OAuthManager) startOAuth(serverName string, cfg ServerConfig, fireNotif
 	}
 
 	m.mu.Lock()
+	delete(m.lastResult, serverName) // 新一轮授权，旧的失败原因作废
 	m.flows[serverName] = flow
 	m.mu.Unlock()
 
@@ -831,6 +856,19 @@ func (m *OAuthManager) finishFlow(flow *oauthFlow, err error) {
 	default:
 		close(flow.done)
 	}
+	// 收尾状态单独留一份：flows 里马上要删掉，Status 需要它来回答
+	// "刚才那次到底为什么失败"。
+	if err != nil {
+		m.lastResult[flow.serverName] = OAuthFlowStatus{
+			State:           OAuthStateFailed,
+			Error:           err.Error(),
+			RedirectURI:     flow.redirectURI,
+			UserCode:        flow.userCode,
+			VerificationURI: flow.verificationURI,
+		}
+	} else {
+		m.lastResult[flow.serverName] = OAuthFlowStatus{State: OAuthStateAuthorized}
+	}
 	if cur, ok := m.flows[flow.serverName]; ok && cur == flow {
 		delete(m.flows, flow.serverName)
 	}
@@ -1017,6 +1055,7 @@ func (m *OAuthManager) SignOut(serverName string) error {
 		}
 		delete(m.flows, serverName)
 	}
+	delete(m.lastResult, serverName)
 	m.mu.Unlock()
 	if m.store == nil {
 		return nil

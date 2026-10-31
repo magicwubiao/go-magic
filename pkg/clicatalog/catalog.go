@@ -76,6 +76,15 @@ type Entry struct {
 	// 这类命令几乎都是交互式的（等浏览器回调、问 region、要 MFA），
 	// 服务端无法代跑，也不该代跑——凭据必须经过用户自己的终端。
 	Login InstallHints `json:"login,omitempty"`
+	// LoginExec 是**可由服务端代跑**的登录参数（不含可执行文件名）。
+	//
+	// 只有确认能在无 TTY 下跑通的流程才登记：命令打印 device code / 授权 URL
+	// 后阻塞等待，本身不提问（或只等一次回车，由前端转发的 stdin 满足）。
+	// 空 = 不代跑，只展示 Login 里的命令。
+	//
+	// 为什么单独一个字段而不是解析 Login：Login 是给人看的 shell 字符串
+	// （可能带 sudo、管道、环境变量前缀），拆成 argv 既不可靠也不安全。
+	LoginExec []string `json:"login_exec,omitempty"`
 	// Check 是"就绪"复检参数：退出码 0 表示已登录 / 服务可达。
 	// 与 Detect 分开，是因为有些工具装了但没配（docker 没有 daemon、
 	// kubectl 没有 context、aws 没有凭证），只看 PATH 会误报可用。
@@ -85,6 +94,9 @@ type Entry struct {
 	DocsURL string       `json:"docs_url,omitempty"`
 	Tags    []string     `json:"tags,omitempty"`
 }
+
+// LoginRunnable 报告该条目是否支持"点一下由服务端代跑登录"。
+func (e Entry) LoginRunnable() bool { return len(e.LoginExec) > 0 }
 
 // Category 是目录分类（label 交给前端 locale）。
 type Category struct {
@@ -625,11 +637,13 @@ var wranglerEntry = Entry{
 		"darwin":  {"npm install -g wrangler", "brew install cloudflare-wrangler"},
 		"linux":   {"npm install -g wrangler"},
 	},
-	Detect:  []string{"--version"},
-	Login:   sameOnAllPlatforms("wrangler login"),
-	Check:   []string{"whoami"},
-	DocsURL: "https://developers.cloudflare.com/workers/wrangler/commands/",
-	Tags:    []string{"cloudflare", "workers", "kv"},
+	Detect: []string{"--version"},
+	Login:  sameOnAllPlatforms("wrangler login"),
+	// wrangler login 会打印授权 URL 后阻塞等回调，不提问，可代跑。
+	LoginExec: []string{"login"},
+	Check:     []string{"whoami"},
+	DocsURL:   "https://developers.cloudflare.com/workers/wrangler/commands/",
+	Tags:      []string{"cloudflare", "workers", "kv"},
 }
 
 var vercelEntry = Entry{
@@ -670,11 +684,13 @@ var vercelEntry = Entry{
 		"darwin":  {"npm install -g vercel", "brew install vercel-cli"},
 		"linux":   {"npm install -g vercel"},
 	},
-	Detect:  []string{"--version"},
-	Login:   sameOnAllPlatforms("vercel login"),
-	Check:   []string{"whoami"},
-	DocsURL: "https://vercel.com/docs/cli",
-	Tags:    []string{"deploy", "hosting"},
+	Detect: []string{"--version"},
+	Login:  sameOnAllPlatforms("vercel login"),
+	// vercel login 走浏览器授权；可能问一次"用哪个账号登录"，前端可以转发输入。
+	LoginExec: []string{"login"},
+	Check:     []string{"whoami"},
+	DocsURL:   "https://vercel.com/docs/cli",
+	Tags:      []string{"deploy", "hosting"},
 }
 
 var ytdlpEntry = Entry{

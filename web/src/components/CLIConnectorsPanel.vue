@@ -83,6 +83,14 @@
               <n-tag v-if="row.require_approval" size="tiny" :bordered="false" type="info">
                 {{ t('cli.approvalTag') }}
               </n-tag>
+              <n-tag
+                v-if="row.oauth_configured"
+                size="tiny"
+                :bordered="false"
+                :type="row.oauth_state === 'authorized' ? 'success' : 'warning'"
+              >
+                {{ row.oauth_state === 'authorized' ? t('cli.oauthTagAuthorized') : t('cli.oauthTag') }}
+              </n-tag>
               <span class="conn-state" :class="{ 'is-on': row.active }">
                 {{ row.active ? t('cli.stateEnabled') : t('cli.stateDisabled') }}
               </span>
@@ -124,6 +132,27 @@
               {{ t('common.delete') }}
             </n-button>
           </n-space>
+
+          <!-- 设备码登录：token 由本程序取得并注入 token_env，CLI 无需支持登录 -->
+          <n-alert
+            v-if="detailRow.oauth_configured"
+            :type="detailRow.oauth_state === 'authorized' ? 'success' : 'info'"
+            :bordered="false"
+            style="margin-bottom: 14px;"
+          >
+            <div class="cli-oauth-row">
+              <span>
+                {{
+                  detailRow.oauth_state === 'authorized'
+                    ? t('cli.oauthAuthorizedHint', { env: detailRow.oauth?.token_env || '' })
+                    : t('cli.oauthPendingHint', { env: detailRow.oauth?.token_env || '' })
+                }}
+              </span>
+              <n-button size="tiny" type="primary" secondary @click="openOAuth(detailRow)">
+                {{ detailRow.oauth_state === 'authorized' ? t('cli.oauthManage') : t('cli.oauthLogin') }}
+              </n-button>
+            </div>
+          </n-alert>
 
           <div class="conn-drawer-tools">
             <div v-for="tool in detailRow.tools" :key="tool.name" class="cli-tool">
@@ -214,6 +243,37 @@
             <template #feedback>
               <n-text depth="3" style="font-size: 12px;">{{ t('cli.envHint') }}</n-text>
             </template>
+          </n-form-item>
+
+          <n-form-item :label="t('cli.oauthSection')">
+            <n-space vertical size="small" style="width: 100%;">
+              <n-input
+                v-model:value="form.oauthDeviceEndpoint"
+                size="small"
+                :placeholder="t('cli.oauthDevicePlaceholder')"
+              />
+              <n-input
+                v-model:value="form.oauthTokenEndpoint"
+                size="small"
+                :placeholder="t('cli.oauthTokenPlaceholder')"
+              />
+              <n-space :size="8">
+                <n-input v-model:value="form.oauthClientID" size="small" :placeholder="t('cli.oauthClientId')" style="flex: 1;" />
+                <n-input
+                  v-model:value="form.oauthClientSecret"
+                  size="small"
+                  type="password"
+                  show-password-on="click"
+                  :placeholder="t('cli.oauthClientSecret')"
+                  style="flex: 1;"
+                />
+              </n-space>
+              <n-space :size="8">
+                <n-input v-model:value="form.oauthTokenEnv" size="small" :placeholder="t('cli.oauthTokenEnv')" style="flex: 1;" />
+                <n-input v-model:value="form.oauthScopes" size="small" :placeholder="t('cli.oauthScopes')" style="flex: 1;" />
+              </n-space>
+              <n-text depth="3" style="font-size: 12px;">{{ t('cli.oauthFormHint') }}</n-text>
+            </n-space>
           </n-form-item>
 
           <n-space :size="12">
@@ -366,6 +426,15 @@
         </template>
       </n-space>
     </n-modal>
+
+    <!-- 设备码授权：token 由服务端取得并注入 token_env -->
+    <CLIOAuthDialog
+      v-model:show="oauthShow"
+      :name="oauthName"
+      :display-name="oauthDisplay"
+      :token-env="oauthTokenEnv"
+      @done="onOAuthDone"
+    />
   </div>
 </template>
 
@@ -413,6 +482,7 @@ import {
   testCLIConnector,
 } from '@/api/cli'
 import type { CLIConnector, CLIConnectorView, CLITestResult } from '@/api/cli'
+import CLIOAuthDialog from '@/components/CLIOAuthDialog.vue'
 
 const emit = defineEmits<{ (e: 'count', n: number): void }>()
 
@@ -527,6 +597,13 @@ const form = reactive({
   enabled: true,
   approvalMode: 'inherit' as 'inherit' | 'always' | 'never',
   profilesStr: '',
+  // OAuth 设备码（可选）：填了四个必填项才会写进配置
+  oauthDeviceEndpoint: '',
+  oauthTokenEndpoint: '',
+  oauthClientID: '',
+  oauthClientSecret: '',
+  oauthTokenEnv: '',
+  oauthScopes: '',
 })
 const formTools = ref<ToolForm[]>([])
 
@@ -636,6 +713,24 @@ async function handleRefresh() {
   }
 }
 
+// === 设备码登录（连接器配置了 oauth 时才出现） ===
+
+const oauthShow = ref(false)
+const oauthName = ref('')
+const oauthDisplay = ref('')
+const oauthTokenEnv = ref('')
+
+function openOAuth(row: CLIConnectorView) {
+  oauthName.value = row.name
+  oauthDisplay.value = row.name
+  oauthTokenEnv.value = row.oauth?.token_env || ''
+  oauthShow.value = true
+}
+
+async function onOAuthDone() {
+  await handleRefresh()
+}
+
 /** 一行一个参数：不做 shell 拆分，值里有空格也不会被拆成两个参数。 */
 function splitLines(text: string): string[] {
   return text
@@ -673,6 +768,12 @@ function resetForm() {
   form.enabled = true
   form.approvalMode = 'inherit'
   form.profilesStr = ''
+  form.oauthDeviceEndpoint = ''
+  form.oauthTokenEndpoint = ''
+  form.oauthClientID = ''
+  form.oauthClientSecret = ''
+  form.oauthTokenEnv = ''
+  form.oauthScopes = ''
   formTools.value = [emptyTool()]
   quickCmd.value = ''
   showAdvanced.value = false
@@ -699,6 +800,13 @@ function openEdit(row: CLIConnectorView) {
   form.approvalMode =
     row.require_approval === undefined ? 'inherit' : row.require_approval ? 'always' : 'never'
   form.profilesStr = (row.profiles || []).join(', ')
+  form.oauthDeviceEndpoint = row.oauth?.device_authorization_endpoint || ''
+  form.oauthTokenEndpoint = row.oauth?.token_endpoint || ''
+  form.oauthClientID = row.oauth?.client_id || ''
+  // 回显是 ***：原样带回会被后端还原成磁盘真值（见 upsert 的掩码还原）
+  form.oauthClientSecret = row.oauth?.client_secret || ''
+  form.oauthTokenEnv = row.oauth?.token_env || ''
+  form.oauthScopes = (row.oauth?.scopes || []).join(' ')
   formTools.value = (row.tools || []).map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -784,7 +892,31 @@ function buildConnector(): CLIConnector {
     // inherit 显式传 undefined：JSON.stringify 会丢掉该字段，后端保持 nil
     require_approval:
       form.approvalMode === 'inherit' ? undefined : form.approvalMode === 'always',
+    oauth: buildOAuthSpec(),
     tools,
+  }
+}
+
+/**
+ * 组装 oauth 块：四个必填项有一个空就不写（半截配置只会让执行期报错）。
+ * scopes 按空格/逗号分词，与 RFC 6749 的 scope 语法一致。
+ */
+function buildOAuthSpec(): CLIConnector['oauth'] {
+  const device = form.oauthDeviceEndpoint.trim()
+  const token = form.oauthTokenEndpoint.trim()
+  const clientId = form.oauthClientID.trim()
+  const tokenEnv = form.oauthTokenEnv.trim()
+  if (!device && !token && !clientId && !tokenEnv) return undefined
+  if (!device || !token || !clientId || !tokenEnv) {
+    throw new Error(t('cli.oauthIncomplete'))
+  }
+  return {
+    device_authorization_endpoint: device,
+    token_endpoint: token,
+    client_id: clientId,
+    client_secret: form.oauthClientSecret.trim() || undefined,
+    token_env: tokenEnv,
+    scopes: form.oauthScopes.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
   }
 }
 

@@ -259,11 +259,12 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		// 不依赖运行时状态（CLI 没有连接这一层）。
 		// 目录装出来的连接器额外带上本机安装状态与安装/登录命令：
 		// "命令不存在"是 CLI 唯一的前置阻塞，UI 要能一键装（见 CLI 安装任务）。
-		var catalogInstall, catalogLogin []string
+		var catalogInstall, catalogLogin, catalogLoginExec []string
 		if fromCatalog && catKind == CatalogKindCLI {
 			if e, ok := clicatalog.Get(catID); ok {
 				catalogInstall = e.Install.CommandsFor(runtime.GOOS)
 				catalogLogin = e.Login.CommandsFor(runtime.GOOS)
+				catalogLoginExec = append([]string(nil), e.LoginExec...)
 			}
 		}
 		// 先并行预热，避免逐条 LookPath 串行把响应拖到秒级。
@@ -292,6 +293,7 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				cliEntry["catalog_id"] = catID
 				cliEntry["install_commands"] = catalogInstall
 				cliEntry["login_commands"] = catalogLogin
+				cliEntry["login_exec"] = catalogLoginExec
 			}
 			cliEntries = append(cliEntries, cliEntry)
 		}

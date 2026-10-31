@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
+	"github.com/magicwubiao/go-magic/internal/mcp"
 )
 
 // pluginBlocker 描述一条"为什么还不能用"。
@@ -89,19 +90,28 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 		if cs.Error != "" {
 			continue
 		}
-		if agentplugin.CommandAvailable(cs.Connector.Command) {
+		if !agentplugin.CommandAvailable(cs.Connector.Command) {
+			b := pluginBlocker{
+				Kind:    "missing_binary",
+				Scope:   "cli",
+				Name:    cs.Name,
+				Command: cs.Connector.Command,
+			}
+			if fromCatalog && catKind == agentplugin.CatalogKindCLI {
+				b.CatalogID = catID
+			}
+			out = append(out, b)
 			continue
 		}
-		b := pluginBlocker{
-			Kind:    "missing_binary",
-			Scope:   "cli",
-			Name:    cs.Name,
-			Command: cs.Connector.Command,
+		// 声明了设备码 OAuth 但还没登录：命令能跑也没用——执行前注入不出
+		// token，子进程只会回 401。这与 MCP 条目的 oauth blocker 是同一个
+		// "点一下登录就好"的分类，只是 scope 不同。
+		if cs.Connector.OAuth != nil {
+			st := s.pluginCLIConnectorOAuthStatus(name, cs.Name)
+			if st.State != mcp.OAuthStateAuthorized {
+				out = append(out, pluginBlocker{Kind: "oauth", Scope: "cli", Name: cs.Name, Detail: st.Error})
+			}
 		}
-		if fromCatalog && catKind == agentplugin.CatalogKindCLI {
-			b.CatalogID = catID
-		}
-		out = append(out, b)
 	}
 	return out
 }
@@ -113,8 +123,12 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 func (s *Server) decoratePluginSummaries(list []map[string]any, plugins map[string]*agentplugin.ManagedPlugin) {
 	for _, item := range list {
 		name, _ := item["name"].(string)
-		blockers := s.pluginBlockers(name, plugins[name])
+		mp := plugins[name]
+		blockers := s.pluginBlockers(name, mp)
 		item["blockers"] = blockers
 		item["ready"] = len(blockers) == 0
+		// CLI 连接器的 OAuth 状态（已登录 / 未登录 / 等待授权）只有
+		// server 知道：Manager 不持有 OAuth 管理器。
+		s.decorateCLIConnectorOAuth(item, mp)
 	}
 }

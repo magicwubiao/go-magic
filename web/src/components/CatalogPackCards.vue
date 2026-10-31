@@ -162,6 +162,16 @@
               <code>{{ cmd }}</code>
               <n-button text size="tiny" @click="copyText(cmd)">{{ t('cli.catalogCopy') }}</n-button>
             </div>
+            <!-- 目录登记了可代跑的登录 argv：用户不用开终端，点一下走完授权 -->
+            <n-button
+              v-if="(detail.login_exec || []).length && detail.binary_found"
+              size="tiny"
+              type="primary"
+              style="margin-top: 8px;"
+              @click="openLogin(detail)"
+            >
+              {{ t('cli.loginAction') }}
+            </n-button>
           </n-alert>
 
           <div v-if="(detail.tools || []).length" style="margin-top: 14px;">
@@ -219,6 +229,14 @@
       :display-name="installName"
       @done="onInstallDone"
     />
+
+    <!-- 委托登录：跑的是目录里登记的非交互登录命令，凭据由 CLI 自己保存 -->
+    <CLILoginDialog
+      v-model:show="loginShow"
+      :catalog-id="loginId"
+      :display-name="loginName"
+      @done="onLoginDone"
+    />
   </div>
 </template>
 
@@ -231,6 +249,7 @@ import { RefreshOutline, SearchOutline } from '@vicons/ionicons5'
 import { getCatalogPacks, installCatalogPack } from '@/api/agentplugins'
 import type { CatalogPack } from '@/api/agentplugins'
 import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
+import CLILoginDialog from '@/components/CLILoginDialog.vue'
 
 const props = defineProps<{ kind: 'mcp' | 'cli' }>()
 const emit = defineEmits<{
@@ -394,6 +413,24 @@ function openInstall(pack: CatalogPack) {
 
 /** 装完（或将装完）重新拉列表：binary_found 由后端按 PATH 现算。 */
 async function onInstallDone() {
+  await load()
+}
+
+// === 一键登录（仅登记了 login_exec 的 CLI 条目） ===
+
+const loginShow = ref(false)
+const loginId = ref('')
+const loginName = ref('')
+
+function openLogin(pack: CatalogPack) {
+  loginId.value = pack.id
+  loginName.value = pack.display_name
+  loginShow.value = true
+}
+
+/** 登录成功后重新拉一次：让"已登录/可用"状态立刻反映到卡片上。 */
+async function onLoginDone(payload: { loggedIn: boolean }) {
+  if (!payload.loggedIn) return
   await load()
 }
 

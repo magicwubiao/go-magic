@@ -132,6 +132,17 @@ type timeoutSetter interface {
 	SetTimeout(name string, d time.Duration)
 }
 
+// CLITokenSourceFactory 为插件内 CLI 连接器构造执行期 token 源（OAuth 设备码）。
+//
+// 为什么需要工厂而不是让 cliconn 自己查：token 存在哪、键叫什么、管理器
+// 什么时候可用，都是宿主（server）的知识。插件包只负责在注册工具时把源
+// 挂到连接器副本上，执行期由 cliconn.Run 直接向源要 token。
+//
+// 参数带插件名与连接器名：同一个连接器名在不同插件里是两套凭据，键必须
+// 能区分（见 CLIOAuthKey）。返回 nil 表示"这个插件不支持 OAuth"，此时
+// 带 oauth 声明的连接器会在执行时明确报错，而不是静默不带 token 去跑。
+type CLITokenSourceFactory func(pluginName, connectorName string) cliconn.TokenSource
+
 // RegisterCLITools 把插件声明的 CLI 工具注册到注册表（跳过被禁用的插件与校验失败的条目）。
 //
 // creds 按插件名返回用户凭据（key → 值），用于填充 cli.json 里留空的 env 值：
@@ -139,6 +150,12 @@ type timeoutSetter interface {
 // 只覆盖已声明的 key——不把凭据里多出来的键塞进子进程环境，
 // 否则用户在凭据表单里写什么就能给子进程注什么。
 func RegisterCLITools(plugins map[string]*ManagedPlugin, reg ToolRegistrar, creds func(pluginName string) map[string]string) {
+	RegisterCLIToolsWithOAuth(plugins, reg, creds, nil)
+}
+
+// RegisterCLIToolsWithOAuth 与 RegisterCLITools 相同，额外为声明了 oauth 的
+// 连接器挂上 token 源（nil = 不挂，等价于 RegisterCLITools）。
+func RegisterCLIToolsWithOAuth(plugins map[string]*ManagedPlugin, reg ToolRegistrar, creds func(pluginName string) map[string]string, tokenSources CLITokenSourceFactory) {
 	if reg == nil {
 		return
 	}
@@ -159,6 +176,7 @@ func RegisterCLITools(plugins map[string]*ManagedPlugin, reg ToolRegistrar, cred
 				continue
 			}
 			conn := withCLICredentials(st.Connector, pluginCreds)
+			conn = withCLITokenSource(conn, pluginName, st.Name, tokenSources)
 			for _, spec := range conn.Tools {
 				t := &cliPluginTool{Tool: cliconn.NewTool(st.Name, conn, spec), plugin: pluginName}
 				reg.Register(t)
@@ -220,6 +238,28 @@ func envPlaceholderKeys(env []string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// withCLITokenSource 给声明了 OAuth 的连接器挂上执行期 token 源。
+//
+// 必须复制 OAuthSpec 再写 Tokens：cli.json 里的 OAuth 是所有工具共享的指针，
+// 直接赋值会改到插件定义本身（后续 Unregister/重注册读到被污染的配置），
+// 而 Tokens 是 json:"-" 的运行时字段，绝不该出现在任何序列化结果里。
+func withCLITokenSource(conn cliconn.Connector, pluginName, connectorName string, factory CLITokenSourceFactory) cliconn.Connector {
+	if conn.OAuth == nil || factory == nil {
+		return conn
+	}
+	src := factory(pluginName, connectorName)
+	if src == nil {
+		return conn
+	}
+	spec := *conn.OAuth
+	if len(conn.OAuth.Scopes) > 0 {
+		spec.Scopes = append([]string(nil), conn.OAuth.Scopes...)
+	}
+	spec.Tokens = src
+	conn.OAuth = &spec
+	return conn
 }
 
 // withCLICredentials 用用户凭据填充/覆盖连接器 env 中已声明的键。

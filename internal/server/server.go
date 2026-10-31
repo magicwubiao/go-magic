@@ -111,6 +111,11 @@ type Server struct {
 	cliInstallMu   sync.Mutex
 	cliInstallJobs map[string]*cliInstallJob
 
+	// cliLoginMu/cliLoginSessions 是"委托登录"会话表（见 cli_login.go）：
+	// CLI 自己的登录命令在后台跑，状态与输出由轮询接口读取。
+	cliLoginMu       sync.Mutex
+	cliLoginSessions map[string]*cliLoginSession
+
 	skillMgr  *skills.Manager
 	magicHome string
 	// runtimeProfile 是本次进程真正在用的分身（启动时定死）。
@@ -745,6 +750,13 @@ Your working directory is: %s
 			// 这里先分流，插件不需要出现在 mcpServerConfigs 里。
 			if pluginName, serverName, ok := agentplugin.ParseOAuthKey(name); ok {
 				s.reconnectPluginEntryAfterOAuth(pluginName, serverName)
+				return
+			}
+			// CLI 连接器（设备码流程）也共用这个存储，键带 cliconn: 前缀。
+			// 它的 token 在执行时按需读取，不需要重连；但要让"已登录"立刻
+			// 反映到工具描述/就绪状态上，所以同步一次注册表。
+			if strings.HasPrefix(name, cliOAuthKeyPrefix) {
+				s.applyCLIConnectors()
 				return
 			}
 			cfg, ok := s.mcpServerConfigs()[name]
@@ -1750,6 +1762,9 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/cli/catalog", withCORS(requireAuth(s.handleCLICatalog)))
 	mux.HandleFunc("/api/cli/catalog/check", withCORS(requireAuth(s.handleCLICatalogCheck)))
 	mux.HandleFunc("/api/cli/catalog/install", withCORS(requireAuth(s.handleCLICatalogInstall)))
+	// 委托登录：服务端代跑 CLI 自己的 login 命令（只接受目录 id）。
+	mux.HandleFunc("/api/cli/catalog/login", withCORS(requireAuth(s.handleCLILoginStart)))
+	mux.HandleFunc("/api/cli/catalog/login/", withCORS(requireAuth(s.handleCLILoginByID)))
 	mux.HandleFunc("/api/cli/parse", withCORS(requireAuth(s.handleCLIParse)))
 	mux.HandleFunc("/api/cli/test", withCORS(requireAuth(s.handleCLITest)))
 

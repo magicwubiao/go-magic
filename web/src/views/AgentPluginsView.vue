@@ -330,6 +330,15 @@
                     <n-tag v-if="c.binary_found === false" size="tiny" :bordered="false" type="warning">
                       {{ t('agentplugins.cliBinaryMissing') }}
                     </n-tag>
+                    <!-- 设备码 OAuth：token 由本程序申请，执行前注入环境变量 -->
+                    <n-tag
+                      v-if="c.oauth_configured"
+                      size="tiny"
+                      :bordered="false"
+                      :type="c.oauth_state === 'authorized' ? 'success' : 'warning'"
+                    >
+                      {{ c.oauth_state === 'authorized' ? t('cli.oauthAuthorized') : t('agentplugins.cliOAuthPending') }}
+                    </n-tag>
                     <span class="ap-entry-spacer" />
                     <n-button
                       v-if="c.binary_found === false && c.catalog_id"
@@ -339,6 +348,26 @@
                       @click="openInstallDialog(plugin.name, c.catalog_id, plugin.name)"
                     >
                       {{ t('agentplugins.cliInstall') }}
+                    </n-button>
+                    <!-- 目录登记了可代跑的登录：不用开终端，点一下走完授权 -->
+                    <n-button
+                      v-if="c.catalog_id && c.login_exec && c.login_exec.length && c.binary_found !== false"
+                      size="tiny"
+                      type="primary"
+                      secondary
+                      @click="openLoginDialog(c.catalog_id, c.name)"
+                    >
+                      {{ t('cli.loginAction') }}
+                    </n-button>
+                    <!-- 插件内 CLI 的设备码登录：token 由本程序申请并注入 env -->
+                    <n-button
+                      v-if="c.oauth_configured"
+                      size="tiny"
+                      type="primary"
+                      secondary
+                      @click="openCLIOAuthDialog(plugin.name, c)"
+                    >
+                      {{ c.oauth_state === 'authorized' ? t('agentplugins.cliOAuthManage') : t('agentplugins.oauthSignIn') }}
                     </n-button>
                     <n-button
                       v-if="c.required_env && c.required_env.length"
@@ -353,6 +382,13 @@
                   </div>
                   <div class="ap-entry-desc">
                     <span v-if="c.tools && c.tools.length" class="ap-entry-meta">{{ c.tools.join(' · ') }}</span>
+                    <span
+                      v-if="c.oauth_configured && c.oauth_state !== 'authorized'"
+                      class="ap-entry-warn"
+                    >
+                      {{ t('agentplugins.cliOAuthHint', { env: c.oauth_token_env || '' }) }}
+                    </span>
+                    <span v-if="c.oauth_error" class="ap-entry-err">{{ c.oauth_error }}</span>
                     <span
                       v-if="c.required_env && c.required_env.length"
                       class="ap-entry-warn"
@@ -525,6 +561,24 @@
         :display-name="installModal.name"
         @done="onCLIInstallDone"
       />
+
+      <!-- CLI 委托登录：同样来自目录登记的命令，凭据由 CLI 自己保存 -->
+      <CLILoginDialog
+        v-model:show="loginModal.show"
+        :catalog-id="loginModal.catalogId"
+        :display-name="loginModal.name"
+        @done="onCLILoginDone"
+      />
+
+      <!-- 插件内 CLI 的设备码登录：token 由本程序申请，注入连接器声明的环境变量 -->
+      <CLIOAuthDialog
+        v-model:show="cliOAuthModal.show"
+        :plugin="cliOAuthModal.plugin"
+        :name="cliOAuthModal.name"
+        :display-name="cliOAuthModal.name"
+        :token-env="cliOAuthModal.tokenEnv"
+        @done="onCLIOAuthDone"
+      />
     </template>
   </div>
 </template>
@@ -545,9 +599,11 @@ import {
   TerminalOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
-import type { AgentPlugin, AgentPluginBlocker } from '@/api/agentplugins'
+import type { AgentPlugin, AgentPluginBlocker, AgentPluginCLIEntry } from '@/api/agentplugins'
 import CatalogPackCards from '@/components/CatalogPackCards.vue'
 import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
+import CLILoginDialog from '@/components/CLILoginDialog.vue'
+import CLIOAuthDialog from '@/components/CLIOAuthDialog.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -735,7 +791,15 @@ function blockerText(b: AgentPluginBlocker): string {
 function fromBlockerOAuth(b: AgentPluginBlocker) {
   const name = blockerModal.plugin
   blockerModal.show = false
-  if (b.name) void handleOAuthSignIn(name, b.name)
+  if (!b.name) return
+  // CLI 连接器走设备码（需要展示短码），MCP 条目走浏览器跳转授权页。
+  if (b.scope === 'cli') {
+    const entry = (store.plugins.find((p) => p.name === name)?.cli_connectors || [])
+      .find((c) => c.name === b.name)
+    openCLIOAuthDialog(name, entry || { name: b.name, command: '', tools: [] })
+    return
+  }
+  void handleOAuthSignIn(name, b.name)
 }
 
 function fromBlockerAuthorize() {
@@ -1011,6 +1075,45 @@ function openInstallDialog(plugin: string, catalogId: string, name: string) {
 
 /** 安装任务结束：命令可用后刷新列表，"未就绪"标记会随之消失。 */
 async function onCLIInstallDone() {
+  await store.loadPlugins()
+}
+
+// === CLI 委托登录（插件详情里的"登录"按钮） ===
+
+const loginModal = reactive({
+  show: false,
+  catalogId: '',
+  name: '',
+})
+
+function openLoginDialog(catalogId: string, name: string) {
+  loginModal.catalogId = catalogId
+  loginModal.name = name
+  loginModal.show = true
+}
+
+async function onCLILoginDone(payload: { loggedIn: boolean }) {
+  if (payload.loggedIn) await store.loadPlugins()
+}
+
+// === 插件内 CLI 的设备码登录（token 由本程序申请并注入 env） ===
+
+const cliOAuthModal = reactive({
+  show: false,
+  plugin: '',
+  name: '',
+  tokenEnv: '',
+})
+
+function openCLIOAuthDialog(pluginName: string, entry: AgentPluginCLIEntry) {
+  cliOAuthModal.plugin = pluginName
+  cliOAuthModal.name = entry.name
+  cliOAuthModal.tokenEnv = entry.oauth_token_env || ''
+  cliOAuthModal.show = true
+}
+
+/** 登录成功后刷新列表：状态标签与"未就绪"标记都由后端现算。 */
+async function onCLIOAuthDone() {
   await store.loadPlugins()
 }
 

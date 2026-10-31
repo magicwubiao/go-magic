@@ -39,6 +39,18 @@ export interface AgentPluginCLIEntry {
   install_commands?: string[]
   /** 当前平台的登录命令(仅展示) */
   login_commands?: string[]
+  /** 有值 = 登录可由服务端代跑(对应目录登记的非交互 argv) */
+  login_exec?: string[]
+  /** 声明了设备码 OAuth:token 由本程序申请,执行前注入 oauth_token_env */
+  oauth_configured?: boolean
+  /** 注入 access token 的环境变量名(如 GH_TOKEN) */
+  oauth_token_env?: string
+  /** none / authorized / expired / awaiting_authorization / failed */
+  oauth_state?: string
+  oauth_error?: string
+  /** 设备码流程进行中时的一次性短码与授权页 */
+  oauth_user_code?: string
+  oauth_verification_uri?: string
 }
 
 /**
@@ -136,6 +148,8 @@ export interface CatalogPack {
   binary_found?: boolean
   install_commands?: string[]
   login_commands?: string[]
+  /** 有值 = 登录可由服务端代跑（前端显示"一键登录"，不用开终端） */
+  login_exec?: string[]
   docs_url?: string
   installed: boolean
 }
