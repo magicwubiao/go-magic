@@ -27,13 +27,13 @@ type Result struct {
 	// 这里刻意不保存真实 argv：它唯一的去向是 Tool.Execute 的 "command" 字段，
 	// 也就是模型上下文、会话历史与日志。真实 argv 只存在于本函数的局部变量里。
 	Argv       []string
-	Stdout      string
-	Stderr      string
-	ExitCode    int
-	Duration    time.Duration
-	Truncated   bool
-	TimedOut    bool
-	StdinBytes  int
+	Stdout     string
+	Stderr     string
+	ExitCode   int
+	Duration   time.Duration
+	Truncated  bool
+	TimedOut   bool
+	StdinBytes int
 	// OutputLimit 是本次执行实际生效的输出上限（连接器级覆盖后的值），
 	// 截断 hint 用它而不是全局默认值，模型看到的数字与真实截断点一致。
 	OutputLimit int
