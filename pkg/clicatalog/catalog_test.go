@@ -111,6 +111,55 @@ func TestGitRepoParamIsOptional(t *testing.T) {
 	}
 }
 
+// gh 条目与 git 同一条纪律：目录里的声明式工具只放只读子命令；长尾走
+// Raw 逃生工具（恒审批），声明式免审批面不能被写操作污染。
+func TestGHEntryIsReadOnlyWithRaw(t *testing.T) {
+	e, ok := Get("gh")
+	if !ok {
+		t.Fatal("gh entry not found")
+	}
+	if !e.Connector.Raw {
+		t.Fatal("gh connector must enable Raw (its surface is too large to declare)")
+	}
+	for _, spec := range e.Connector.Tools {
+		if !spec.ReadOnly {
+			t.Errorf("gh tool %q must stay read-only (write ops belong to raw with approval)", spec.Name)
+		}
+	}
+
+	// pr_list 的 repo 可省略：空值时 --repo 与 {{repo}} 一起被收走，
+	// 命令在仓库目录内也能跑。
+	var prList cliconn.ToolSpec
+	for _, spec := range e.Connector.Tools {
+		if spec.Name == "pr_list" {
+			prList = spec
+		}
+	}
+	r, err := cliconn.ResolveParams(prList, map[string]any{})
+	if err != nil {
+		t.Fatalf("ResolveParams without repo: %v", err)
+	}
+	argv, err := cliconn.ExpandArgs(e.Connector.Args, prList, r, nil)
+	if err != nil {
+		t.Fatalf("ExpandArgs without repo: %v", err)
+	}
+	if got, want := strings.Join(argv, " "), "pr list --limit 20 --state open"; got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+
+	r2, err := cliconn.ResolveParams(prList, map[string]any{"repo": "octocat/hello"})
+	if err != nil {
+		t.Fatalf("ResolveParams with repo: %v", err)
+	}
+	argv2, err := cliconn.ExpandArgs(e.Connector.Args, prList, r2, nil)
+	if err != nil {
+		t.Fatalf("ExpandArgs with repo: %v", err)
+	}
+	if got, want := strings.Join(argv2, " "), "pr list --limit 20 --state open --repo octocat/hello"; got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+}
+
 func TestGetAndSort(t *testing.T) {
 	if _, ok := Get("jq"); !ok {
 		t.Fatal("jq entry not found")
