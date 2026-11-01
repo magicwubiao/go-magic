@@ -1278,7 +1278,9 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
       "env": ["GH_TOKEN=ghp_xxx"],           // masked as *** in API responses
       "timeout_seconds": 60,
       "require_approval": true,
+      "max_output_bytes": 32768,             // optional: per-call output cap (default 32KB, hard cap 1MB)
       "raw": false,                          // true = also register cli_gh_raw (arbitrary subcommands, see below)
+      "raw_max_args": 64,                    // optional: raw tool arg count cap (default 64, hard cap 256)
       "tools": [{
         "name": "pr_list",
         "description": "List pull requests of a repository",
@@ -1333,19 +1335,23 @@ Two template forms:
 | --- | --- |
 | `{{name}}` | Insert the value. When the whole argument is a single placeholder and the value is empty, the argument is dropped together with the option name right before it (`--limit`). |
 | `{{?name}}--flag=...` | Conditional: kept only when `name` is truthy, otherwise the whole argument is dropped. |
+| `{{env:NAME}}` | Insert the final value of env key `NAME`. Caveat: the expanded value lands in the subprocess argv, visible to other local users via `ps` / `/proc/<pid>/cmdline` — for CLIs that accept `--token-file` style flags prefer `{{envfile:NAME}}`. |
+| `{{envfile:NAME}}` | At execution time the env value is written to a 0600 temp file and this placeholder becomes the file path; the file is deleted when the process exits. The credential never enters argv. Must occupy a whole argument (e.g. `["--token-file", "{{envfile:GH_TOKEN}}"]`). |
 
 **Security model**: arguments go straight to `exec` as an argv array — **no shell**, no word splitting — so values containing `;`, `|` or `$(...)` stay literal. Every placeholder must be declared in `params`; extra keys from the model are ignored. On Windows `.bat`/`.cmd` is rejected (point at the `.exe`, or use `command: "cmd"` with `args: ["/c", ...]`).
 
-**Approval**: every call asks for confirmation by default; only tools marked `read_only: true` skip it, and the connector-level `require_approval` wins over the per-tool flag (set it to `false` to disable globally for that connector — use with care).
+**Approval**: every call asks for confirmation by default; only tools marked `read_only: true` skip it, and the connector-level `require_approval` wins over the per-tool flag (set it to `false` to disable globally for that connector — use with care). **Plugin-sourced CLI tools do not get `read_only` trust** — the declaration in a plugin's `cli.json` is written by a third-party author, so every CLI tool registered from a plugin asks for confirmation on every call (only built-in catalog entries honor the flag).
+
+**Pinned command**: when a connector is saved, `command` is resolved to an absolute path and persisted (if resolution fails the bare name is kept and the readiness probe reports it). Execution no longer depends on PATH, so a later PATH hijack cannot swap the binary.
 
 **The raw escape hatch**: set `"raw": true` on a connector and an extra `cli_<connector>_raw` tool is registered — the model can run **any** undeclared subcommand of that command, covering the long tail the catalog and your declarations do not spell out (`gh api ...`, `kubectl describe ...`). Key points:
 
-- Parameters are an argv array (`{"args": ["pr", "list", "--limit", "20"]}`, optional `stdin` payload) — like declared tools it **never goes through a shell**, and the blast radius is limited to this one binary;
+- Parameters are an argv array (`{"args": ["pr", "list", "--limit", "20"]}`, optional `stdin` payload, optional `cwd` for this call's working directory — each call is a fresh process so the directory does NOT persist; pass it explicitly when chaining steps in the same directory) — like declared tools it **never goes through a shell**, and the blast radius is limited to this one binary;
 - The raw tool **always** requires user approval; `read_only` and `require_approval` do not apply to it;
 - `"raw": true` with no declared tools is valid (pure raw connector);
-- Limits: 64 args, 1 MB stdin; credential injection, argv masking, 32 KB output truncation and timeouts are shared with declared tools.
+- Limits: 64 args by default (`raw_max_args` can raise it to 256), 1 MB stdin; credential injection, argv masking, output truncation (overridable via `max_output_bytes`) and timeouts are shared with declared tools.
 
-**Results**: a non-zero exit code is not a failure — the tool returns `{exit_code, stdout, stderr, duration_ms}` and lets the model judge. Output above 32KB is truncated with a hint; a real timeout returns `exit_code: 124` plus advice. Per-tool timeout is capped at 300s (matching `MaxTimeout` in the tool layer).
+**Results**: a non-zero exit code is not a failure — the tool returns `{exit_code, stdout, stderr, duration_ms}` and lets the model judge. Output above the limit (default 32KB, overridable via connector `max_output_bytes`, hard cap 1MB) is truncated with a hint; a real timeout returns `exit_code: 124` plus advice. Per-tool timeout is capped at 300s (matching `MaxTimeout` in the tool layer).
 
 The Connectors → CLI tab lets you add/edit/delete and run a dry run (it really spawns the process, but saves nothing).
 

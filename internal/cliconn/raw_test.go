@@ -86,7 +86,7 @@ func TestRawToolEnvAndMasking(t *testing.T) {
 }
 
 func TestRawToolParamCoercion(t *testing.T) {
-	argv, _, err := parseRawParams(map[string]any{
+	argv, _, _, err := parseRawParams(map[string]any{
 		"args": []any{"--limit", float64(20), true},
 	})
 	if err != nil {
@@ -103,17 +103,24 @@ func TestRawToolParamCoercion(t *testing.T) {
 	}
 
 	// 嵌套结构不是标量：直接报错，而不是被静默序列化
-	if _, _, err := parseRawParams(map[string]any{
+	if _, _, _, err := parseRawParams(map[string]any{
 		"args": []any{map[string]any{"a": 1}},
 	}); err == nil {
 		t.Fatal("object arg should be rejected")
 	}
 	// stdin 超限
-	if _, _, err := parseRawParams(map[string]any{
+	if _, _, _, err := parseRawParams(map[string]any{
 		"args":  []any{},
 		"stdin": strings.Repeat("a", MaxRawStdinBytes+1),
 	}); err == nil {
 		t.Fatal("oversized stdin should be rejected")
+	}
+	// cwd 非字符串
+	if _, _, _, err := parseRawParams(map[string]any{
+		"args": []any{},
+		"cwd":  42,
+	}); err == nil {
+		t.Fatal("non-string cwd should be rejected")
 	}
 }
 

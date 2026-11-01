@@ -25,6 +25,12 @@ var (
 	// 模板是配置作者写的（可信），参数值是模型给的（不可信），两者绝不能
 	// 混用一套取值来源，否则模型能借参数值把环境变量带进 argv。
 	envRefRe = regexp.MustCompile(`\{\{env:([A-Za-z_][A-Za-z0-9_]*)\}\}`)
+	// envfile 引用 {{envfile:NAME}}：执行时把 env 值物化成 0600 临时文件，
+	// 占位符替换成文件路径，进程结束后删除。用于只支持 `--token-file`
+	// 这类参数的 CLI——凭据经文件描述符进子进程，不出现在 argv 里，
+	// 同机其他用户无法通过 ps / /proc/<pid>/cmdline 看到（{{env:NAME}} 的
+	// 已知代价，见 ToolSpec.Args 注释）。
+	envFileRefRe = regexp.MustCompile(`\{\{envfile:([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 )
 
 // PlaceholderSet 是一条模板里出现过的占位符，按用法分类。
@@ -36,9 +42,19 @@ type PlaceholderSet struct {
 // EnvRefs 返回一条模板里引用的全部 {{env:NAME}} 名字（保序去重）。
 // 供 Validate 校验"引用的 env 键必须在连接器 env 里声明过"。
 func EnvRefs(tmpl string) []string {
+	return collectRefNames(tmpl, envRefRe)
+}
+
+// EnvFileRefs 返回一条模板里引用的全部 {{envfile:NAME}} 名字（保序去重）。
+func EnvFileRefs(tmpl string) []string {
+	return collectRefNames(tmpl, envFileRefRe)
+}
+
+// collectRefNames 从模板里按给定正则提取引用名（保序去重）。
+func collectRefNames(tmpl string, re *regexp.Regexp) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, m := range envRefRe.FindAllStringSubmatch(tmpl, -1) {
+	for _, m := range re.FindAllStringSubmatch(tmpl, -1) {
 		if !seen[m[1]] {
 			seen[m[1]] = true
 			out = append(out, m[1])

@@ -27,13 +27,16 @@ type Result struct {
 	// 这里刻意不保存真实 argv：它唯一的去向是 Tool.Execute 的 "command" 字段，
 	// 也就是模型上下文、会话历史与日志。真实 argv 只存在于本函数的局部变量里。
 	Argv       []string
-	Stdout     string
-	Stderr     string
-	ExitCode   int
-	Duration   time.Duration
-	Truncated  bool
-	TimedOut   bool
-	StdinBytes int
+	Stdout      string
+	Stderr      string
+	ExitCode    int
+	Duration    time.Duration
+	Truncated   bool
+	TimedOut    bool
+	StdinBytes  int
+	// OutputLimit 是本次执行实际生效的输出上限（连接器级覆盖后的值），
+	// 截断 hint 用它而不是全局默认值，模型看到的数字与真实截断点一致。
+	OutputLimit int
 }
 
 // Run 展开参数并执行一次命令。
@@ -65,15 +68,24 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	if spec.StdinParam != "" {
 		stdinPayload = resolved.str[spec.StdinParam]
 	}
-	return executeArgv(ctx, conn, envList, oauthToken, argv, stdinPayload)
+	// {{envfile:NAME}} 在模板展开之后物化：值来自 envMap（已含 ${...} 展开
+	// 与 OAuth 覆盖），落成 0600 临时文件，进程结束后删除。
+	argv, cleanup, err := materializeEnvFiles(argv, envMap)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	return executeArgv(ctx, conn, envList, oauthToken, argv, stdinPayload, "")
 }
 
 // RawParamLimits 是 raw 工具的输入上限。
 const (
-	// MaxRawArgs 是单次调用允许的 argv 元素上限。正常 CLI 调用远用不到 64 个
+	// MaxRawArgs 是单次调用允许的 argv 元素默认上限。正常 CLI 调用远用不到 64 个
 	// 参数，设上限是为了让"模型抽风输出几万个参数"变成一个明确的校验错误，
-	// 而不是一次失控的进程拉起。
+	// 而不是一次失控的进程拉起。连接器可用 RawMaxArgs 覆盖，硬上限见下。
 	MaxRawArgs = 64
+	// MaxRawArgsCap 是 raw_max_args 的硬上限：覆盖再大也到此为止。
+	MaxRawArgsCap = 256
 	// MaxRawStdinBytes 是 stdin 载荷上限。喂 diff / JSON 这类载荷通常几 KB；
 	// 真正的大文件应该走文件路径参数，而不是整份塞进 stdin。
 	MaxRawStdinBytes = 1 << 20
@@ -82,14 +94,19 @@ const (
 // RunRaw 执行"自由命令"：argv 由调用方（raw 工具）直接给出，不经模板展开，
 // 其余链路（env 展开、OAuth 注入、脱敏、截断、超时）与 Run 完全一致。
 //
+// cwd 是本次调用的可选工作目录（覆盖连接器 working_dir；相对路径按它解析）。
+// 每次调用都是新进程，cwd 无法从上一次调用延续——模型想"在同一个目录里连做
+// 几步"，就必须显式传这个参数（主流通用终端 agent 的模型侧约定一致）。
+//
 // argv 的每个元素原样成为一个参数——这里的输入来自模型而非配置作者，
 // 但不经 shell 这条底线不变：元素里的 `;` `&&` `|` 不会被解释。
-func RunRaw(ctx context.Context, conn Connector, argv []string, stdin string) (*Result, error) {
+func RunRaw(ctx context.Context, conn Connector, argv []string, stdin, cwd string) (*Result, error) {
 	if strings.TrimSpace(conn.Command) == "" {
 		return nil, errors.New("connector has no command configured")
 	}
-	if len(argv) > MaxRawArgs {
-		return nil, fmt.Errorf("too many arguments (%d, max %d); chain multiple calls or write a script file and run it", len(argv), MaxRawArgs)
+	maxArgs := conn.EffectiveRawMaxArgs()
+	if len(argv) > maxArgs {
+		return nil, fmt.Errorf("too many arguments (%d, max %d); chain multiple calls or write a script file and run it", len(argv), maxArgs)
 	}
 	if len(stdin) > MaxRawStdinBytes {
 		return nil, fmt.Errorf("stdin payload too large (%d bytes, max %d); pass a file path instead", len(stdin), MaxRawStdinBytes)
@@ -116,7 +133,7 @@ func RunRaw(ctx context.Context, conn Connector, argv []string, stdin string) (*
 		full = append(full, t)
 	}
 	full = append(full, argv...)
-	return executeArgv(ctx, conn, envList, oauthToken, full, stdin)
+	return executeArgv(ctx, conn, envList, oauthToken, full, stdin, cwd)
 }
 
 // prepareEnv 展开连接器 env 的 ${...} 引用，并取得 OAuth token（追加到 env 尾部，
@@ -147,7 +164,9 @@ func prepareEnv(conn Connector) (envList []string, oauthToken string, err error)
 
 // executeArgv 是执行尾巴：超时兜底、可执行检查、拉起子进程、收集与脱敏输出。
 // Run（模板展开后）与 RunRaw（argv 直传）在这里汇合。
-func executeArgv(ctx context.Context, conn Connector, envList []string, oauthToken string, argv []string, stdinPayload string) (*Result, error) {
+// dirOverride 非空时覆盖连接器的 working_dir（raw 的 cwd 参数用）。
+func executeArgv(ctx context.Context, conn Connector, envList []string, oauthToken string, argv []string, stdinPayload, dirOverride string) (*Result, error) {
+	outputLimit := conn.EffectiveMaxOutputBytes()
 	timeout := time.Duration(conn.EffectiveTimeout(ToolSpec{})) * time.Second
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -169,6 +188,19 @@ func executeArgv(ctx context.Context, conn Connector, envList []string, oauthTok
 	if dir := ExpandWorkingDir(conn.WorkingDir); dir != "" {
 		cmd.Dir = dir
 	}
+	if dirOverride != "" {
+		// raw 的 cwd 参数：本次调用显式指定。相对路径按连接器 working_dir 解析，
+		// 绝对路径原样使用；目录不存在是明确的参数错误，立即返回。
+		base := ExpandWorkingDir(conn.WorkingDir)
+		dir := dirOverride
+		if !filepath.IsAbs(dir) && base != "" {
+			dir = filepath.Join(base, dir)
+		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("cwd %q is not an accessible directory", dirOverride)
+		}
+		cmd.Dir = dir
+	}
 
 	stdinBytes := 0
 	if stdinPayload != "" {
@@ -176,8 +208,8 @@ func executeArgv(ctx context.Context, conn Connector, envList []string, oauthTok
 		stdinBytes = len(stdinPayload)
 	}
 
-	stdout := &cappedBuffer{limit: DefaultMaxOutputBytes}
-	stderr := &cappedBuffer{limit: DefaultMaxOutputBytes}
+	stdout := &cappedBuffer{limit: outputLimit}
+	stderr := &cappedBuffer{limit: outputLimit}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -191,12 +223,13 @@ func executeArgv(ctx context.Context, conn Connector, envList []string, oauthTok
 		// 回显的 argv 必须脱敏：{{env:NAME}} 展开后就是明文凭据，而这条命令
 		// 会进模型上下文、会话历史和日志（Tool.Execute 的 "command" 字段）。
 		// 真实的 argv 只用于上面的 exec，不往外带。
-		Argv:       MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMapFromList(envList), oauthToken)),
-		Stdout:     decodeOutput(stdout.Bytes()),
-		Stderr:     decodeOutput(stderr.Bytes()),
-		Duration:   elapsed,
-		Truncated:  stdout.truncated || stderr.truncated,
-		StdinBytes: stdinBytes,
+		Argv:        MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMapFromList(envList), oauthToken)),
+		Stdout:      decodeOutput(stdout.Bytes()),
+		Stderr:      decodeOutput(stderr.Bytes()),
+		Duration:    elapsed,
+		Truncated:   stdout.truncated || stderr.truncated,
+		StdinBytes:  stdinBytes,
+		OutputLimit: outputLimit,
 	}
 
 	if runErr != nil {
@@ -218,6 +251,102 @@ func executeArgv(ctx context.Context, conn Connector, envList []string, oauthTok
 		}
 	}
 	return res, nil
+}
+
+// PinCommandPath 把连接器的 command 解析成绝对路径并返回副本。
+//
+// 为什么在保存/注册时固定：裸命令名每次执行都重新走 PATH——保存时探测通过的
+// 二进制，执行时可能因 PATH 被前置劫持而换成另一个程序，而凭据 env 会原样
+// 注入给它。固定成绝对路径后执行不再依赖 PATH。解析失败（二进制还没装）时
+// 保留原名：由就绪探测如实报告"找不到命令"，而不是把连接器配成废的。
+// 已是绝对路径、或含路径分隔符的显式路径，规范化后原样返回。
+func (c Connector) PinCommandPath() Connector {
+	cmd := strings.TrimSpace(c.Command)
+	if cmd == "" {
+		return c
+	}
+	if filepath.IsAbs(cmd) {
+		return c
+	}
+	if strings.ContainsRune(cmd, '/') || strings.ContainsRune(cmd, '\\') {
+		// 显式的相对路径：按当前进程 cwd 转绝对，仍是"固定"语义。
+		if abs, err := filepath.Abs(cmd); err == nil {
+			out := c
+			out.Command = abs
+			return out
+		}
+		return c
+	}
+	p, err := exec.LookPath(cmd)
+	if err != nil || p == "" {
+		return c
+	}
+	out := c
+	out.Command = p
+	return out
+}
+
+// materializeEnvFiles 把 argv 里的 {{envfile:NAME}} 占位符物化成 0600 临时文件。
+//
+// 占位符必须独占一个 arg（`--token={{envfile:X}}` 这种拼进选项值的写法没有
+// 意义——CLI 要的是文件路径，不是"路径拼在选项名里"）；NAME 未声明或值为空的
+// 错误语义与 {{env:NAME}} 一致。返回替换后的 argv 与清理函数——清理在子进程
+// 退出后运行（Run/RunRaw 的 defer），绝不提前：进程可能还要读这些文件。
+func materializeEnvFiles(argv []string, env map[string]string) ([]string, func(), error) {
+	noop := func() {}
+	needs := false
+	for _, arg := range argv {
+		if strings.Contains(arg, "{{envfile:") {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return argv, noop, nil
+	}
+	var files []string
+	cleanup := func() {
+		for _, f := range files {
+			os.Remove(f)
+		}
+	}
+	out := make([]string, len(argv))
+	for i, arg := range argv {
+		if !strings.Contains(arg, "{{envfile:") {
+			out[i] = arg
+			continue
+		}
+		m := envFileRefRe.FindStringSubmatch(arg)
+		if m == nil || m[0] != arg {
+			return nil, cleanup, fmt.Errorf("%q: {{envfile:NAME}} must be the entire argument; use a --token-file style flag that accepts a path", arg)
+		}
+		val, ok := env[m[1]]
+		if !ok {
+			return nil, cleanup, fmt.Errorf("args reference envfile %q but it is not declared in connector env", m[1])
+		}
+		if strings.TrimSpace(val) == "" {
+			return nil, cleanup, fmt.Errorf("env %q is empty: fill its value in the connector settings (or write ${NAME:-default} in env)", m[1])
+		}
+		f, err := os.CreateTemp("", "cliconn-secret-")
+		if err != nil {
+			return nil, cleanup, fmt.Errorf("materialize envfile %q: %w", m[1], err)
+		}
+		name := f.Name()
+		files = append(files, name)
+		if _, err := f.WriteString(val); err != nil {
+			f.Close()
+			return nil, cleanup, fmt.Errorf("materialize envfile %q: %w", m[1], err)
+		}
+		if err := f.Close(); err != nil {
+			return nil, cleanup, fmt.Errorf("materialize envfile %q: %w", m[1], err)
+		}
+		// CreateTemp 在 POSIX 上已是 0600；chmod 兜 Windows/异常实现。
+		if err := os.Chmod(name, 0o600); err != nil {
+			return nil, cleanup, fmt.Errorf("materialize envfile %q: %w", m[1], err)
+		}
+		out[i] = name
+	}
+	return out, cleanup, nil
 }
 
 // envMapFromList 把 "KEY=VALUE" 列表转成 map（后出现者覆盖先出现者，

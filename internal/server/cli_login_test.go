@@ -1,8 +1,10 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -93,12 +95,66 @@ func TestCLILoginSessionParsesAuthOutput(t *testing.T) {
 // 而不是静默成功让用户以为操作生效了。
 func TestCLILoginInputAfterFinish(t *testing.T) {
 	sess := &cliLoginSession{state: cliLoginRunning}
-	if err := sess.writeInput("hello"); err == nil || !strings.Contains(err.Error(), "not accepting input") {
+	if err := sess.writeInput("hello", false); err == nil || !strings.Contains(err.Error(), "not accepting input") {
 		t.Fatalf("writeInput without stdin = %v", err)
 	}
 
 	sess.state = cliLoginDone
-	if err := sess.writeInput("hello"); err == nil || !strings.Contains(err.Error(), "no longer running") {
+	if err := sess.writeInput("hello", false); err == nil || !strings.Contains(err.Error(), "no longer running") {
 		t.Fatalf("writeInput after finish = %v", err)
+	}
+}
+
+// TestCLILoginSecretInputNotMirrored：secret 输入转发给 stdin，但输出缓冲里
+// 只能有占位掩码——密码落进会话输出/日志是真实泄漏面。
+func TestCLILoginSecretInputNotMirrored(t *testing.T) {
+	sess := newLoginSessionWithPipe(t)
+	if err := sess.writeInput("hunter2\n", true); err != nil {
+		t.Fatalf("writeInput secret = %v", err)
+	}
+	if got := sess.snapshot()["output"].(string); strings.Contains(got, "hunter2") {
+		t.Fatalf("secret input leaked into output: %q", got)
+	}
+	if got := sess.snapshot()["output"].(string); !strings.Contains(got, "••••") {
+		t.Fatalf("secret input should leave a mask placeholder: %q", got)
+	}
+
+	// 非 secret 输入仍然镜像（stdin 是管道时 CLI 不回显普通输入）
+	sess2 := newLoginSessionWithPipe(t)
+	if err := sess2.writeInput("myaccount@example.com", false); err != nil {
+		t.Fatalf("writeInput plain = %v", err)
+	}
+	if got := sess2.snapshot()["output"].(string); !strings.Contains(got, "myaccount@example.com") {
+		t.Fatalf("plain input should be mirrored: %q", got)
+	}
+}
+
+// newLoginSessionWithPipe 返回带可用 stdin 的会话（os.Pipe 模拟子进程管道）。
+func newLoginSessionWithPipe(t *testing.T) *cliLoginSession {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	// 排空读端，避免写入阻塞。
+	go func() { _, _ = io.Copy(io.Discard, r) }()
+	return &cliLoginSession{state: cliLoginRunning, stdin: w}
+}
+
+// TestCLILoginCarriageReturnFold：进度条 \r 重绘帧折叠后，中间帧不进输出。
+func TestCLILoginCarriageReturnFold(t *testing.T) {
+	sess := &cliLoginSession{state: cliLoginRunning}
+	sess.appendOutput([]byte("progress 10%\rprogress 50%\rprogress 99%\r\nhttps://example.com/activate\n"))
+	snap := sess.snapshot()
+	out := snap["output"].(string)
+	if strings.Contains(out, "progress 10%") || strings.Contains(out, "progress 50%") {
+		t.Fatalf("intermediate progress frames should be folded away: %q", out)
+	}
+	if !strings.Contains(out, "progress 99%") {
+		t.Fatalf("the final frame before \\n must survive: %q", out)
+	}
+	if snap["auth_url"] != "https://example.com/activate" {
+		t.Fatalf("auth_url = %v", snap["auth_url"])
 	}
 }

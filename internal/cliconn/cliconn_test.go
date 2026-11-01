@@ -53,6 +53,21 @@ func TestHelperProcess(t *testing.T) {
 		}
 	case "slow":
 		time.Sleep(5 * time.Second)
+	case "slurp":
+		// 打印最后一个参数指向的文件内容（envfile 物化验证用）。
+		data, err := os.ReadFile(os.Args[len(os.Args)-1])
+		if err != nil {
+			fmt.Print("ERR:" + err.Error())
+		} else {
+			fmt.Print(string(data))
+		}
+	case "pwd":
+		wd, err := os.Getwd()
+		if err != nil {
+			fmt.Print("ERR:" + err.Error())
+		} else {
+			fmt.Print(wd)
+		}
 	}
 	os.Exit(0)
 }

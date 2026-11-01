@@ -284,11 +284,12 @@ export async function getCLILoginSession(sessionId: string): Promise<{ ok: boole
   )
 }
 
-/** 把用户在弹窗里输入的内容转发给子进程 stdin（回答 "Press Enter" 之类的提问）。 */
-export async function sendCLILoginInput(sessionId: string, text: string): Promise<void> {
+/** 把用户在弹窗里输入的内容转发给子进程 stdin（回答 "Press Enter" 之类的提问）。
+ *  secret=true 表示密码/令牌类敏感输入：服务端不镜像进输出缓冲，只写占位掩码。 */
+export async function sendCLILoginInput(sessionId: string, text: string, secret = false): Promise<void> {
   return request<void>(`/cli/catalog/login/${encodeURIComponent(sessionId)}/input`, {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, secret }),
   })
 }
 

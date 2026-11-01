@@ -152,6 +152,37 @@ func TestRegisterCLIToolsNamesTimeoutsAndCredentials(t *testing.T) {
 	}
 }
 
+func TestPluginCLIToolAlwaysRequiresApproval(t *testing.T) {
+	// 插件 cli.json 的 read_only 是第三方作者的自声明，不是信任根：即便标了
+	// read_only，插件注册出的 CLI 工具也必须逐次审批（内置目录才信任该声明）。
+	dir := t.TempDir()
+	writePlugin(t, dir, demoCLIJSON)
+	p := Load(dir, filepath.Join(dir, "data"))
+
+	plugins := map[string]*ManagedPlugin{"demo": {Plugin: p}}
+	reg := tool.NewRegistry()
+	RegisterCLITools(plugins, reg, nil)
+	defer UnregisterCLITools(plugins, reg)
+
+	tl, err := reg.Get("ap_demo_cli_gitdemo_status")
+	if err != nil {
+		t.Fatalf("tool not registered: %v", err)
+	}
+	aw, ok := tl.(interface {
+		RequiresApproval() bool
+		ApprovalSummary() string
+	})
+	if !ok {
+		t.Fatalf("tool %T does not implement the approval-aware pair", tl)
+	}
+	if !aw.RequiresApproval() {
+		t.Fatal("plugin CLI tool declared read_only must still require approval")
+	}
+	if aw.ApprovalSummary() == "" {
+		t.Fatal("approval summary must not be empty")
+	}
+}
+
 func TestWithCLICredentialsOnlyTouchesDeclaredKeys(t *testing.T) {
 	conn := demoConnector(t)
 	out := withCLICredentials(conn, map[string]string{"GH_TOKEN": "abc", "EVIL": "x"})

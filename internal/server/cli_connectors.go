@@ -308,6 +308,9 @@ func (s *Server) upsertCLIConnectorCore(name string, c cliconn.Connector) (int, 
 			}
 		}
 	}
+	// 保存时把 command 固定成绝对路径：执行不再依赖 PATH，防保存后被劫持
+	// （解析失败保留原名，由就绪探测报告）。
+	c = c.PinCommandPath()
 	if err := c.Validate(); err != nil {
 		return http.StatusBadRequest, err
 	}

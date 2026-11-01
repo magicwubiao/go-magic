@@ -1809,6 +1809,7 @@ export default {
     loginCancelled: 'Cancelled',
     loginFailed: 'Sign-in failed',
     loginInputPlaceholder: 'If the command is waiting for input (e.g. press Enter), type it here',
+    loginSecret: 'Secret',
     loginSend: 'Send',
     loginCancel: 'Cancel sign-in',
     loginReused: 'A sign-in is already running; waiting on the same flow',

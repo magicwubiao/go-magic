@@ -120,6 +120,13 @@ func (t *cliPluginTool) Name() string {
 	return fmt.Sprintf("ap_%s_%s", t.plugin, t.Tool.Name())
 }
 
+// RequiresApproval 覆盖内嵌类型提升的版本：插件来源的 cli.json 是第三方
+// 作者写的，read_only / require_approval 是"自声明"而非信任根——把危险命令
+// 标成 read_only 就能免审批直接执行，这是明确的越权缺口。内置目录条目由
+// 本仓库审校可以信任；插件条目一律逐次审批。ApprovalSummary 仍由内嵌类型
+// 提供（上面方法提升），成对纪律不破。
+func (t *cliPluginTool) RequiresApproval() bool { return true }
+
 // ApprovalSummary 在原有描述前补上插件名，审批卡片上能看出是谁带的工具。
 func (t *cliPluginTool) ApprovalSummary() string {
 	return fmt.Sprintf("CLI %s (plugin %s) → %s", t.Tool.ConnectorName(), t.plugin, t.Tool.Spec().Name)
@@ -194,6 +201,9 @@ func RegisterCLIToolsWithOAuth(plugins map[string]*ManagedPlugin, reg ToolRegist
 			}
 			conn := withCLICredentials(st.Connector, pluginCreds)
 			conn = withCLITokenSource(conn, pluginName, st.Name, tokenSources)
+			// 插件连接器同样在注册时固定 command 绝对路径（防 PATH 劫持；
+			// 二进制未安装时保留原名，由探测报错）。
+			conn = conn.PinCommandPath()
 			for _, spec := range conn.Tools {
 				t := &cliPluginTool{Tool: cliconn.NewTool(st.Name, conn, spec), plugin: pluginName}
 				reg.Register(t)

@@ -41,6 +41,9 @@ const (
 	// DefaultMaxOutputBytes 是单次命令回传给模型的最大输出（32KB）。
 	// 超出的部分被截断并标注，避免一次 `kubectl get pods -A` 把上下文吃光。
 	DefaultMaxOutputBytes = 32 << 10
+	// MaxOutputBytesCap 是 max_output_bytes 的全局硬上限（1MB）：连接器级覆盖
+	// 不能把模型上下文吃穿——32KB 对 `git log` 偏紧，1MB 对任何单次调用都够了。
+	MaxOutputBytesCap = 1 << 20
 )
 
 var (
@@ -82,6 +85,11 @@ type Connector struct {
 	// OAuth 声明该连接器的 token 由本程序通过设备码流程（RFC 8628）取得，
 	// 执行前注入 TokenEnv 指向的环境变量。nil = 沿用 env 里的静态凭据。
 	OAuth *OAuthSpec `json:"oauth,omitempty"`
+	// MaxOutputBytes 覆盖该连接器单次执行回传给模型的输出上限（字节）。
+	// 0 = 默认 32KB；超过 MaxOutputBytesCap 的值在 Validate 时被拒。
+	// `git log`、`kubectl describe`、构建日志这类命令的输出天然偏大，
+	// 连接器作者比全局常量更清楚该留多少。
+	MaxOutputBytes int `json:"max_output_bytes,omitempty"`
 	// Raw 开启后额外注册一个"自由命令"工具 cli_<connector>_raw：模型可以对该
 	// 连接器的二进制执行**任意**子命令（args 数组直传，不经 shell），用于覆盖
 	// 没有逐条声明的长尾命令——对齐 Claude Code 一类通用终端 agent 的能力，
@@ -91,6 +99,10 @@ type Connector struct {
 	// require_approval 都不影响），因为"任意子命令"意味着没人能在事前断言它
 	// 只读。默认关闭：老配置没有该字段，语义必须是"照旧只跑声明的工具"。
 	Raw bool `json:"raw,omitempty"`
+	// RawMaxArgs 覆盖 raw 工具单次调用允许的 argv 元素上限。0 = 默认 64；
+	// 上限 MaxRawArgsCap（256）。`kubectl apply -f` 拼长参数链的场景偶尔会
+	// 撞默认值，由连接器作者按需放宽。
+	RawMaxArgs int `json:"raw_max_args,omitempty"`
 	// Tools 是从该程序暴露出去的子命令。
 	Tools []ToolSpec `json:"tools,omitempty"`
 }
@@ -191,6 +203,10 @@ type ToolSpec struct {
 	//   - {{env:NAME}}        → 替换成连接器 env 里 NAME 的最终值（含 ${...} 引用
 	//     展开与凭据合并）；未声明或值为空时报错。用于把 webhook/token 这类
 	//     "用户填的凭据"放进参数位——凭据只存 env，不落模板。
+	//   - {{envfile:NAME}}    → 执行时把 env 值物化成 0600 临时文件，本占位符
+	//     替换成文件路径，进程结束后删除。用于支持 `--token-file` 这类参数的
+	//     CLI；必须独占一个 arg（`--token={{envfile:X}}` 不合法——路径拼进
+	//     选项值没有意义）。凭据不进 argv，ps / /proc/<pid>/cmdline 看不到。
 	// 例：["pr", "list", "--limit", "{{limit}}", "{{?verbose}}--verbose"]
 	//
 	// {{env:NAME}} 的代价要清楚：展开后的值会进入子进程 argv，同机其他用户
@@ -260,6 +276,30 @@ func (c Connector) EffectiveTimeout(spec ToolSpec) int {
 	return sec
 }
 
+// EffectiveMaxOutputBytes 返回该连接器单次执行回传输出的实际上限（字节）。
+func (c Connector) EffectiveMaxOutputBytes() int {
+	limit := c.MaxOutputBytes
+	if limit <= 0 {
+		limit = DefaultMaxOutputBytes
+	}
+	if limit > MaxOutputBytesCap {
+		limit = MaxOutputBytesCap
+	}
+	return limit
+}
+
+// EffectiveRawMaxArgs 返回 raw 工具单次调用允许的 argv 元素数上限。
+func (c Connector) EffectiveRawMaxArgs() int {
+	n := c.RawMaxArgs
+	if n <= 0 {
+		n = MaxRawArgs
+	}
+	if n > MaxRawArgsCap {
+		n = MaxRawArgsCap
+	}
+	return n
+}
+
 // ToolName 返回工具在注册表里的全名。
 //
 // 分隔符沿用 mcp_ 的约定（下划线），但连接器名/工具名本身不允许下划线以外的
@@ -292,6 +332,12 @@ func (c Connector) Validate() error {
 	}
 	if c.TimeoutSeconds < 0 || c.TimeoutSeconds > MaxTimeoutSeconds {
 		return fmt.Errorf("timeout_seconds must be between 0 and %d", MaxTimeoutSeconds)
+	}
+	if c.MaxOutputBytes < 0 || c.MaxOutputBytes > MaxOutputBytesCap {
+		return fmt.Errorf("max_output_bytes must be between 0 and %d", MaxOutputBytesCap)
+	}
+	if c.RawMaxArgs < 0 || c.RawMaxArgs > MaxRawArgsCap {
+		return fmt.Errorf("raw_max_args must be between 0 and %d", MaxRawArgsCap)
 	}
 	for _, kv := range c.Env {
 		key, _, ok := strings.Cut(kv, "=")
@@ -353,11 +399,21 @@ func (c Connector) Validate() error {
 					return fmt.Errorf("tools[%d] %q: args reference env %q that is not declared in connector env", i, spec.Name, name)
 				}
 			}
+			for _, name := range EnvFileRefs(arg) {
+				if !envKeys[name] {
+					return fmt.Errorf("tools[%d] %q: args reference envfile %q that is not declared in connector env", i, spec.Name, name)
+				}
+			}
 		}
 		for _, arg := range spec.Args {
 			for _, name := range EnvRefs(arg) {
 				if !envKeys[name] {
 					return fmt.Errorf("tools[%d] %q: args reference env %q that is not declared in connector env", i, spec.Name, name)
+				}
+			}
+			for _, name := range EnvFileRefs(arg) {
+				if !envKeys[name] {
+					return fmt.Errorf("tools[%d] %q: args reference envfile %q that is not declared in connector env", i, spec.Name, name)
 				}
 			}
 		}

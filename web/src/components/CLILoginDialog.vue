@@ -65,9 +65,14 @@
       <n-input
         v-model:value="input"
         size="small"
+        :type="secret ? 'password' : 'text'"
+        :show-password-on="secret ? 'click' : undefined"
         :placeholder="t('cli.loginInputPlaceholder')"
         @keydown.enter="send"
       />
+      <n-checkbox v-model:checked="secret" class="cl-secret">
+        {{ t('cli.loginSecret') }}
+      </n-checkbox>
       <n-button size="small" :disabled="!input.trim()" @click="send">
         {{ t('cli.loginSend') }}
       </n-button>
@@ -92,7 +97,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NAlert, NButton, NInput, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
+import { NAlert, NButton, NCheckbox, NInput, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   cancelCLILogin,
@@ -125,6 +130,7 @@ const message = useMessage()
 
 const session = ref<CLILoginSession | null>(null)
 const input = ref('')
+const secret = ref(false)
 const phase = computed(() => session.value?.state ?? 'running')
 const displayName = computed(() => props.displayName || props.catalogId)
 
@@ -169,6 +175,7 @@ function finish(done: CLILoginSession) {
 async function start() {
   session.value = null
   input.value = ''
+  secret.value = false
   stopTimer()
   try {
     const res = await startCLILogin(props.catalogId)
@@ -187,7 +194,7 @@ async function send() {
   if (!text.trim() || !session.value) return
   input.value = ''
   try {
-    await sendCLILoginInput(session.value.id, text)
+    await sendCLILoginInput(session.value.id, text, secret.value)
   } catch (e: any) {
     message.error(String(e?.message || e))
   }
@@ -286,8 +293,14 @@ onBeforeUnmount(stopTimer)
 }
 .cl-input {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+.cl-secret {
+  flex-shrink: 0;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .cl-err {
   display: block;

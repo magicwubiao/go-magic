@@ -1813,6 +1813,7 @@ export default {
     loginCancelled: '已取消',
     loginFailed: '登录失败',
     loginInputPlaceholder: '如果上面的命令在等待输入（例如回车确认），在这里输入后发送',
+    loginSecret: '敏感输入',
     loginSend: '发送',
     loginCancel: '取消登录',
     loginReused: '已有进行中的登录，继续等待同一个流程',

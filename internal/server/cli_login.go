@@ -118,9 +118,16 @@ func (s *cliLoginSession) snapshot() map[string]any {
 }
 
 // appendOutput 追加输出并顺手解析授权 URL / 短码。
+//
+// 追加前先按 \r 的"覆盖重绘"语义折叠进度条：TUI 进度条/spinner 会用 \r 反复
+// 重绘同一行，原样进累计缓冲既把日志刷成天书，也会让 URL/短码正则扫到一堆
+// 中间帧。折叠规则：一段里最后一个 \r 之后的内容才是终端上真正留着的，
+// 之前的中间帧丢弃（跨 chunk 的重绘序列以 chunk 边界近似——管道写出的
+// 进度帧通常自带换行，误差可忽略）。
 func (s *cliLoginSession) appendOutput(p []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	p = foldCarriageReturns(p)
 	if !s.truncated {
 		room := cliLoginOutputLimit - s.output.Len()
 		if room <= 0 {
@@ -133,6 +140,20 @@ func (s *cliLoginSession) appendOutput(p []byte) {
 		}
 	}
 	s.parseLocked(s.output.String())
+}
+
+// foldCarriageReturns 把一段输出按 \r 重绘语义折叠成终端上实际可见的内容。
+// CRLF（\r\n）是换行不是重绘，先归一成 \n；剩下的裸 \r 才是覆盖重绘。
+func foldCarriageReturns(p []byte) []byte {
+	if !bytes.ContainsRune(p, '\r') {
+		return p
+	}
+	p = bytes.ReplaceAll(p, []byte("\r\n"), []byte("\n"))
+	if !bytes.ContainsRune(p, '\r') {
+		return p
+	}
+	parts := bytes.Split(p, []byte{'\r'})
+	return parts[len(parts)-1]
 }
 
 // parseLocked 从累计输出里挑最新的 URL 与短码。调用方必须持有 s.mu。
@@ -269,12 +290,16 @@ func (s *Server) handleCLILoginByID(w http.ResponseWriter, r *http.Request) {
 	case action == "input" && r.Method == http.MethodPost:
 		var body struct {
 			Text string `json:"text"`
+			// Secret 标记输入是密码/令牌类敏感内容：转发给子进程，但**不**镜像
+			// 进输出缓冲（旧实现一律镜像，密码会留在会话输出、日志与前端轮询
+			// 快照里）。前端在用户勾选"敏感输入"时置位。
+			Secret bool `json:"secret"`
 		}
 		if err := decodeCLIBody(r, &body); err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := sess.writeInput(body.Text); err != nil {
+		if err := sess.writeInput(body.Text, body.Secret); err != nil {
 			jsonError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -288,7 +313,11 @@ func (s *Server) handleCLILoginByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeInput 把用户在弹窗里输入的文本转发给子进程 stdin。
-func (s *cliLoginSession) writeInput(text string) error {
+//
+// secret=false 时镜像进输出缓冲，让用户看见自己输入了什么（stdin 是管道时
+// CLI 不会回显普通输入）；secret=true 时只写一个占位掩码——密码类输入绝不能
+// 落进会话输出、日志与前端轮询快照。
+func (s *cliLoginSession) writeInput(text string, secret bool) error {
 	s.mu.Lock()
 	stdin, state := s.stdin, s.state
 	s.mu.Unlock()
@@ -301,7 +330,11 @@ func (s *cliLoginSession) writeInput(text string) error {
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
-	s.appendOutput([]byte(text)) // 让用户看见自己输入了什么（不回显的密码除外）
+	if secret {
+		s.appendOutput([]byte("••••\n"))
+	} else {
+		s.appendOutput([]byte(text))
+	}
 	_, err := io.WriteString(stdin, text)
 	return err
 }

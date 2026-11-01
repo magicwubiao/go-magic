@@ -71,6 +71,10 @@ func (t *RawTool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "Optional payload piped to the process stdin (a diff, a JSON document, ...). Prefer a file path argument for large payloads.",
 			},
+			"cwd": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional working directory for THIS call (absolute path, or relative to the connector's working directory). Each call is a fresh process, so the directory does NOT persist between calls — pass it explicitly on every call when chaining steps in the same directory (e.g. first call to discover files, then the same cwd to act on them).",
+			},
 		},
 		"required": []string{"args"},
 	}
@@ -81,42 +85,42 @@ func (t *RawTool) Timeout() time.Duration {
 	return time.Duration(t.conn.EffectiveTimeout(ToolSpec{})) * time.Second
 }
 
-// Execute 解析 args/stdin 并执行。
+// Execute 解析 args/stdin/cwd 并执行。
 func (t *RawTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-	argv, stdin, err := parseRawParams(params)
+	argv, stdin, cwd, err := parseRawParams(params)
 	if err != nil {
 		return nil, err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, t.Timeout())
 	defer cancel()
 
-	res, err := RunRaw(runCtx, t.conn, argv, stdin)
+	res, err := RunRaw(runCtx, t.conn, argv, stdin, cwd)
 	if err != nil {
 		return nil, err
 	}
 	return resultOutput(res, t.Timeout()), nil
 }
 
-// parseRawParams 从模型给的参数里取 args 与 stdin。
+// parseRawParams 从模型给的参数里取 args、stdin 与 cwd。
 //
 // args 的元素容忍 JSON 数字/布尔（模型经常把 "20" 写成 20），按与声明式参数
 // 相同的规则转成字符串；嵌套结构（数组/对象元素）拒绝——argv 元素必须是
 // 标量，复杂结构应该先序列化成字符串或走 stdin。
-func parseRawParams(params map[string]interface{}) ([]string, string, error) {
+func parseRawParams(params map[string]interface{}) ([]string, string, string, error) {
 	var argv []string
 	if raw, ok := params["args"]; ok && raw != nil {
 		list, ok := raw.([]interface{})
 		if !ok {
-			return nil, "", fmt.Errorf("parameter %q must be an array of strings", "args")
+			return nil, "", "", fmt.Errorf("parameter %q must be an array of strings", "args")
 		}
-		if len(list) > MaxRawArgs {
-			return nil, "", fmt.Errorf("too many arguments (%d, max %d); chain multiple calls or write a script file and run it", len(list), MaxRawArgs)
+		if len(list) > MaxRawArgsCap {
+			return nil, "", "", fmt.Errorf("too many arguments (%d, max %d); chain multiple calls or write a script file and run it", len(list), MaxRawArgsCap)
 		}
 		argv = make([]string, 0, len(list))
 		for i, item := range list {
 			s, err := rawArgString(item)
 			if err != nil {
-				return nil, "", fmt.Errorf("args[%d]: %w", i, err)
+				return nil, "", "", fmt.Errorf("args[%d]: %w", i, err)
 			}
 			argv = append(argv, s)
 		}
@@ -125,14 +129,22 @@ func parseRawParams(params map[string]interface{}) ([]string, string, error) {
 	if raw, ok := params["stdin"]; ok && raw != nil {
 		s, ok := raw.(string)
 		if !ok {
-			return nil, "", fmt.Errorf("parameter %q must be a string", "stdin")
+			return nil, "", "", fmt.Errorf("parameter %q must be a string", "stdin")
 		}
 		if len(s) > MaxRawStdinBytes {
-			return nil, "", fmt.Errorf("stdin payload too large (%d bytes, max %d); pass a file path instead", len(s), MaxRawStdinBytes)
+			return nil, "", "", fmt.Errorf("stdin payload too large (%d bytes, max %d); pass a file path instead", len(s), MaxRawStdinBytes)
 		}
 		stdin = s
 	}
-	return argv, stdin, nil
+	cwd := ""
+	if raw, ok := params["cwd"]; ok && raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return nil, "", "", fmt.Errorf("parameter %q must be a string", "cwd")
+		}
+		cwd = strings.TrimSpace(s)
+	}
+	return argv, stdin, cwd, nil
 }
 
 // rawArgString 把单个 argv 元素转成字符串。

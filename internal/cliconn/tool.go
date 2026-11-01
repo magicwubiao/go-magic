@@ -140,8 +140,12 @@ func resultOutput(res *Result, timeout time.Duration) map[string]interface{} {
 		out["stderr"] = res.Stderr
 	}
 	if res.Truncated {
+		limit := res.OutputLimit
+		if limit <= 0 {
+			limit = DefaultMaxOutputBytes
+		}
 		out["truncated"] = true
-		out["truncated_hint"] = fmt.Sprintf("output exceeded %d bytes and was truncated; narrow the query (filters, --limit, specific fields) instead of reading everything", DefaultMaxOutputBytes)
+		out["truncated_hint"] = fmt.Sprintf("output exceeded %d bytes and was truncated; narrow the query (filters, --limit, specific fields) instead of reading everything — or raise max_output_bytes in the connector config if this command is legitimately verbose", limit)
 	}
 	if res.StdinBytes > 0 {
 		out["stdin_bytes"] = res.StdinBytes
@@ -200,10 +204,14 @@ type Manager struct {
 }
 
 // New 用给定定义构造 Manager（nil/空都可以）。
+//
+// 构造时对每个连接器做一次 PinCommandPath：直接从磁盘加载的旧配置没经过
+// 保存接口，也要享受"执行不依赖 PATH"的固定语义（保存路径已 pin 的连接器
+// 幂等，重复调用无副作用）。
 func New(connectors map[string]Connector) *Manager {
 	m := &Manager{connectors: make(map[string]Connector, len(connectors))}
 	for name, c := range connectors {
-		m.connectors[name] = c
+		m.connectors[name] = c.PinCommandPath()
 	}
 	return m
 }
