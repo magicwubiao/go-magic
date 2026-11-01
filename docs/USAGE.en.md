@@ -1489,7 +1489,38 @@ The `image_gen` / `video_gen` / `voice` sections live under **Settings → Media
 
 - Keys only go in, never out: the API returns `api_key_set` plus a masked tail; plaintext is never sent back. An empty input means "keep the current key"; clearing requires the explicit "Clear saved key" action.
 - Environment variables win over this page: once `IMAGE_GEN_*` / `VIDEO_GEN_*` / `VOICE_API_KEY` is set the page says so explicitly, so nobody re-debugs a change that never applied.
-- Endpoints: `GET /api/media/config` (masked snapshot with per-provider availability and env-override list) and `PUT /api/media/config` (per-section patch, validated server-side for provider names and duration / ratio / resolution / speed ranges).
+- Endpoints: `GET /api/media/config` (masked snapshot with per-provider availability, capability badges, console links and env-override list) and `PUT /api/media/config` (per-section patch, validated server-side for provider names and duration / ratio / resolution / speed ranges).
+
+#### Built-in providers
+
+Switching providers only swaps the backend; tool names and parameters stay the same:
+
+| Capability | provider | Notes | Local first-frame image |
+| --- | --- | --- | --- |
+| image | `dall-e` | OpenAI; the only backend with editing / variations | — |
+| image | `stable-diffusion` | Stability sd3 endpoint; the model is fixed by the endpoint | — |
+| image | `midjourney` | Third-party relay; submit only, returns a pending placeholder | — |
+| image | `together` | FLUX / SDXL, model selectable | — |
+| image | `minimax` | Hailuo image-01, chosen by aspect ratio | — |
+| video | `dashscope` | Alibaba wan, 480p-1080p | No — needs `image_url` |
+| video | `volcengine` | Ark Seedance, widest ratio set (incl. 21:9) | Yes |
+| video | `kling` | Kling 3.0; **the model is part of the URL path** | No — needs `image_url` |
+| video | `runway` | Gen-4.5; only 5 or 10 second clips | Yes (data URI, <=5MB) |
+| video | `minimax` | Hailuo H3; success returns the final URL directly | No — needs `image_url` |
+| speech | `cosyvoice` | Alibaba CosyVoice; shares the Bailian key with wan | — |
+| speech | `openai` / `elevenlabs` / `azure` / `google` / `whisper` | Existing `voice.Manager` path | — |
+
+Aliases resolve too: `dalle`, `sd`, `wan`, `seedance`, `hailuo`, `runwayml`, `qwen-tts` all work as `provider` values.
+
+**Parameters are never silently dropped.** Providers disagree on what they accept, so the tool maps first and reports back what actually took effect:
+
+- Duration: Runway only renders 5 or 10 seconds, so 8 snaps to 10; others clamp to 3-15.
+- Aspect ratio: an unsupported ratio falls back to that provider's default (Kling and MiniMax reject 4:3).
+- Resolution: MiniMax uses 768P / 2K and Kling has no 480p. The `duration` / `ratio` / `resolution` fields in the tool result are the **effective** values, not your input.
+
+**Errors tell you what to do next.** 401/403 names the provider that rejected the key, links its console and warns that a brand-new key can fail until the service is activated; 429 asks you to wait a minute and notes that limits are per account; 5xx says it is the provider's side, so don't touch the config.
+
+**The settings page fills itself in.** Switching provider brings along the recommended model, official endpoint and default voice (only when the field is empty or still holds the previous provider's default — hand-written values are never overwritten); models are searchable dropdowns, ratio/resolution options are trimmed to what that provider accepts, and every card carries a "Get a key" link plus a hint about the key format.
 
 ### 15.5 Reverse MCP: use magic as a tool
 

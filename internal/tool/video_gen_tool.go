@@ -86,7 +86,10 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 		BaseTool: *NewBaseTool(
 			"video_generate",
 			"Generate short videos from a text prompt (and optionally a first-frame image) using AI. "+
-				"Providers: dashscope (Alibaba wan, text-to-video & image-to-video) and volcengine (Seedance). "+
+				"Providers: dashscope (Alibaba wan), volcengine (Seedance), kling (Kuaishou Kling), "+
+				"runway (Runway Gen-4), minimax (Hailuo H3). Pick the provider by what the user's account "+
+				"has, and by capability: Runway only renders 5 or 10 second clips; Kling and MiniMax need a "+
+				"public URL for image-to-video while volcengine and runway accept local files. "+
 				"Generation typically takes 1-5 minutes; the tool polls the provider and saves the MP4 locally.",
 			map[string]interface{}{
 				"type": "object",
@@ -101,25 +104,25 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"image_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Local path of a first-frame image for image-to-video. Sent as a base64 data URI (supported by volcengine). For dashscope use image_url with a publicly reachable address instead.",
+						"description": "Local path of a first-frame image for image-to-video. Sent as a base64 data URI, which is supported by volcengine and runway; dashscope, kling and minimax require image_url with a publicly reachable address instead.",
 					},
 					"model": map[string]interface{}{
 						"type":        "string",
-						"description": "Provider model override, e.g. wan2.2-t2v-plus / wan2.2-i2v-plus (dashscope) or doubao-seedance-1-0-pro-250528 (volcengine). Default comes from config.",
+						"description": "Provider model override, e.g. wan2.2-t2v-plus (dashscope), doubao-seedance-1-0-pro-250528 (volcengine), kling-3.0 (kling), gen4.5 (runway), MiniMax-H3 (minimax). Default comes from config.",
 					},
 					"duration": map[string]interface{}{
 						"type":        "number",
-						"description": "Video length in seconds (3-15). Default 5.",
+						"description": "Video length in seconds (3-15). Runway snaps to 5 or 10. Default 5.",
 					},
 					"ratio": map[string]interface{}{
 						"type":        "string",
-						"description": "Aspect ratio. dashscope supports 16:9, 9:16 (480p-1080p) and 1:1 (720p only); volcengine supports 16:9, 9:16, 1:1, 4:3, 3:4, 21:9.",
+						"description": "Aspect ratio. dashscope supports 16:9, 9:16 and 1:1 (720p only); volcengine also supports 4:3, 3:4 and 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Unsupported values fall back to 16:9 and the actual value is reported back.",
 						"enum":        []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 						"default":     "16:9",
 					},
 					"resolution": map[string]interface{}{
 						"type":        "string",
-						"description": "Resolution tier: 480p, 720p (default) or 1080p.",
+						"description": "Resolution tier: 480p, 720p (default) or 1080p. Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
 						"enum":        []string{"480p", "720p", "1080p"},
 						"default":     "720p",
 					},
@@ -133,8 +136,12 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Override default provider: dashscope or volcengine",
-						"enum":        []string{"dashscope", "volcengine"},
+						"description": "Override default provider: dashscope, volcengine, kling, runway or minimax",
+						// 这个 enum 是**内置后端**的快照，故意不跟注册表联动：工具 schema 一旦
+						// 随插件注册变化，模型看到的能力面就不可复现了（同一个 prompt 在装插件
+						// 前后表现不一致，排查成本极高）。插件贡献的 provider 走
+						// config.json 的 video_gen.provider 指定，不通过这个参数选择。
+						"enum": []string{"dashscope", "volcengine", "kling", "runway", "minimax"},
 					},
 				},
 				"required": []string{"prompt"},
@@ -220,7 +227,7 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 			"provider":           provider,
 			"prompt":             prompt,
 			"message":            fmt.Sprintf("Video generation is not configured for provider %q.", provider),
-			"configuration_help": "Add a 'video_gen' section to config.json (api_key + provider: dashscope or volcengine), or set VIDEO_GEN_API_KEY.",
+			"configuration_help": ConfigHelp(MediaKindVideo, string(provider)),
 		}, nil
 	}
 
@@ -238,6 +245,22 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 		return nil, fmt.Errorf("video generation failed: %w", err)
 	}
 	videoURL, taskID := genResult.URL, genResult.TaskID
+
+	// 回显**实际生效**的参数。各厂商会做映射与钳制（Runway 只有 5/10 秒、
+	// Kling 没有 480p、MiniMax 用 768P/2K 而不是 720p/1080p），继续回显用户
+	// 原始输入等于撒谎：用户看到 "duration: 8" 但拿到 5 秒的片子，只会以为是 bug。
+	if genResult.Duration > 0 {
+		duration = genResult.Duration
+	}
+	if genResult.Ratio != "" {
+		ratio = genResult.Ratio
+	}
+	if genResult.Resolution != "" {
+		resolution = genResult.Resolution
+	}
+	if genResult.Model != "" {
+		model = genResult.Model
+	}
 
 	// 视频 URL 24 小时过期，必须立刻下载保存
 	savedPath, err := t.downloadAndSaveVideo(ctx, videoURL, outputPath)

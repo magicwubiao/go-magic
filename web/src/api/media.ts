@@ -16,6 +16,28 @@ export interface MediaProviderOption {
   /** 仅语音：能力标记 */
   supports_tts?: boolean
   supports_asr?: boolean
+
+  // ---- 以下是后端 catalog 下发的静态元信息（插件贡献的后端可能没有） ----
+  /** 展示名，如 "可灵 Kling"、"MiniMax 海螺 H3"；缺省时前端回落成 name */
+  label?: string
+  default_model?: string
+  /** 推荐模型列表，用于把模型输入框换成可搜索下拉 */
+  models?: string[]
+  default_base_url?: string
+  /** 去哪拿密钥：设置页直接渲染成"获取密钥"链接 */
+  console_url?: string
+  docs_url?: string
+  /** 密钥形态提示，如 "sk-... （百炼 API-KEY）" */
+  key_hint?: string
+  /** t2i / edit / t2v / i2v / tts / asr */
+  capabilities?: string[]
+  /** 该厂商实际接受的画幅与分辨率：设置页据此裁剪下拉，避免选到必然被拒的值 */
+  ratios?: string[]
+  resolutions?: string[]
+  min_duration?: number
+  max_duration?: number
+  default_voice?: string
+  notes?: string
 }
 
 export interface ImageGenSettings {
@@ -23,6 +45,7 @@ export interface ImageGenSettings {
   api_key_set: boolean
   api_key_hint: string
   base_url: string
+  model: string
   default_size: string
   default_style: string
   output_dir: string
@@ -73,6 +96,7 @@ export interface ImageGenPatch {
   api_key?: string
   provider?: string
   base_url?: string
+  model?: string
   default_size?: string
   default_style?: string
   output_dir?: string

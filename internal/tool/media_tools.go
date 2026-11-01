@@ -95,6 +95,9 @@ func ImageGenConfigFrom(appCfg *config.Config) *ImageGenConfig {
 		if ig.BaseURL != "" {
 			cfg.BaseURL = ig.BaseURL
 		}
+		if ig.Model != "" {
+			cfg.Model = ig.Model
+		}
 		if ig.DefaultSize != "" {
 			cfg.DefaultSize = ig.DefaultSize
 		}

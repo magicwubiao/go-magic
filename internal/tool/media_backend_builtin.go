@@ -20,9 +20,19 @@ func init() {
 	RegisterImageBackend(stableDiffusionBackend{})
 	RegisterImageBackend(midjourneyBackend{})
 	RegisterImageBackend(togetherBackend{})
+	RegisterImageBackend(minimaxImageBackend{})
 
 	RegisterVideoBackend(dashscopeVideoBackend{})
 	RegisterVideoBackend(volcengineVideoBackend{})
+	RegisterVideoBackend(klingVideoBackend{})
+	RegisterVideoBackend(runwayVideoBackend{})
+	RegisterVideoBackend(minimaxVideoBackend{})
+
+	// 语音：CosyVoice 是第一个进注册表的内置语音后端（其余 4 家仍由 voice.Manager
+	// 承载，见 media_provider.go 里关于"不替换既有语音链路"的说明）。
+	// 注册表非空后 registeredTTSBackendAvailable() 会开始读语音配置，
+	// 所以 speech_backend.go 那边配了 TTL 缓存——顺序别弄反。
+	RegisterSpeechBackend(cosyVoiceBackend{})
 }
 
 // ---- 图片 ----

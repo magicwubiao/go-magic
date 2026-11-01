@@ -53,6 +53,7 @@ type imageGenPatch struct {
 	APIKey          *string `json:"api_key"`
 	Provider        *string `json:"provider"`
 	BaseURL         *string `json:"base_url"`
+	Model           *string `json:"model"`
 	DefaultSize     *string `json:"default_size"`
 	DefaultStyle    *string `json:"default_style"`
 	OutputDirectory *string `json:"output_dir"`
@@ -121,18 +122,52 @@ func (s *Server) mediaConfigPath() string {
 	return home + string(os.PathSeparator) + "config.json"
 }
 
+// providerEntry 组装一个 provider 条目：运行态字段 + catalog 静态元信息。
+//
+// 两段信息必须一起下发。前端要同时回答"这家现在能不能用"（available）和
+// "这家是什么、去哪儿拿 key、支持哪些画幅"（catalog）；拆成两个接口拿会让
+// 下拉列表在切换瞬间闪一次空标签，也让"哪个 provider 该配哪个 key"变成前端猜测。
+func providerEntry(kind tool.MediaKind, name string, runtime map[string]interface{}) map[string]interface{} {
+	if runtime == nil {
+		runtime = map[string]interface{}{}
+	}
+	runtime["name"] = name
+
+	info, ok := tool.ProviderInfo(kind, name)
+	if !ok {
+		// 插件贡献的后端没有静态元信息：前端按 name 原样显示，不硬凑标签。
+		return runtime
+	}
+	runtime["label"] = info.Label
+	runtime["default_model"] = info.DefaultModel
+	runtime["models"] = info.Models
+	runtime["default_base_url"] = info.DefaultBaseURL
+	runtime["console_url"] = info.ConsoleURL
+	runtime["docs_url"] = info.DocsURL
+	runtime["key_hint"] = info.KeyHint
+	runtime["capabilities"] = info.Capabilities
+	runtime["ratios"] = info.Ratios
+	runtime["resolutions"] = info.Resolutions
+	runtime["min_duration"] = info.MinDuration
+	runtime["max_duration"] = info.MaxDuration
+	runtime["default_voice"] = info.DefaultVoice
+	runtime["notes"] = info.Notes
+	return runtime
+}
+
 func (s *Server) imageGenSnapshot(appCfg *appconfig.Config) map[string]interface{} {
 	var c *appconfig.ImageGenConfig
 	if appCfg != nil {
 		c = appCfg.ImageGen
 	}
 	provider := string(tool.ProviderDALLE)
-	apiKey, baseURL, size, style, outDir := "", "", "", "", ""
+	apiKey, baseURL, model, size, style, outDir := "", "", "", "", "", ""
 	if c != nil {
 		if strings.TrimSpace(c.Provider) != "" {
 			provider = c.Provider
 		}
-		apiKey, baseURL, size, style, outDir = c.APIKey, c.BaseURL, c.DefaultSize, c.DefaultStyle, c.OutputDirectory
+		apiKey, baseURL, model = c.APIKey, c.BaseURL, c.Model
+		size, style, outDir = c.DefaultSize, c.DefaultStyle, c.OutputDirectory
 	}
 
 	// 用工具本身的实际配置算"是否可用"，而不是只看 key：插件后端不需要 key，
@@ -146,12 +181,11 @@ func (s *Server) imageGenSnapshot(appCfg *appconfig.Config) map[string]interface
 		if !ok {
 			continue
 		}
-		providers = append(providers, map[string]interface{}{
-			"name":      name,
+		providers = append(providers, providerEntry(tool.MediaKindImage, name, map[string]interface{}{
 			"available": backend.Available(toolCfg),
 			"editable":  isImageEditor(name),
 			"builtin":   isBuiltinImageProvider(name),
-		})
+		}))
 	}
 
 	return map[string]interface{}{
@@ -159,6 +193,7 @@ func (s *Server) imageGenSnapshot(appCfg *appconfig.Config) map[string]interface
 		"api_key_set":   apiKey != "",
 		"api_key_hint":  maskSecret(apiKey),
 		"base_url":      baseURL,
+		"model":         model,
 		"default_size":  size,
 		"default_style": style,
 		"output_dir":    outDir,
@@ -194,11 +229,10 @@ func (s *Server) videoGenSnapshot(appCfg *appconfig.Config) map[string]interface
 		if !ok {
 			continue
 		}
-		providers = append(providers, map[string]interface{}{
-			"name":      name,
+		providers = append(providers, providerEntry(tool.MediaKindVideo, name, map[string]interface{}{
 			"available": backend.Available(toolCfg),
 			"builtin":   isBuiltinVideoProvider(name),
-		})
+		}))
 	}
 
 	return map[string]interface{}{
@@ -238,13 +272,12 @@ func (s *Server) voiceSnapshot(c *voice.VoiceConfig) map[string]interface{} {
 		if ok {
 			available = true
 		}
-		providers = append(providers, map[string]interface{}{
-			"name":         name,
+		providers = append(providers, providerEntry(tool.MediaKindSpeech, name, map[string]interface{}{
 			"available":    ok,
 			"builtin":      true,
 			"supports_tts": name != "whisper",
 			"supports_asr": name != "elevenlabs",
-		})
+		}))
 	}
 	// 插件贡献的语音后端：内核不知道它有哪些声音，但要出现在列表里，
 	// 否则用户在设置页看不到自己装的能力。
@@ -259,13 +292,12 @@ func (s *Server) voiceSnapshot(c *voice.VoiceConfig) map[string]interface{} {
 		if avail {
 			available = true
 		}
-		providers = append(providers, map[string]interface{}{
-			"name":         name,
+		providers = append(providers, providerEntry(tool.MediaKindSpeech, name, map[string]interface{}{
 			"available":    avail,
 			"builtin":      false,
 			"supports_tts": hasTTS,
 			"supports_asr": hasASR,
-		})
+		}))
 	}
 
 	return map[string]interface{}{
@@ -447,6 +479,9 @@ func applyImageGenPatch(c *appconfig.ImageGenConfig, p *imageGenPatch) {
 	}
 	if p.BaseURL != nil {
 		c.BaseURL = strings.TrimSpace(*p.BaseURL)
+	}
+	if p.Model != nil {
+		c.Model = strings.TrimSpace(*p.Model)
 	}
 	if p.DefaultSize != nil {
 		c.DefaultSize = strings.TrimSpace(*p.DefaultSize)

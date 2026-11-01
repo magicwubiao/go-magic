@@ -38,9 +38,11 @@ type ImageGenerationTool struct {
 
 // ImageGenConfig 图片生成配置
 type ImageGenConfig struct {
-	Provider        ImageProvider `json:"provider"`
-	APIKey          string        `json:"api_key"`
-	BaseURL         string        `json:"base_url"`
+	Provider ImageProvider `json:"provider"`
+	APIKey   string        `json:"api_key"`
+	BaseURL  string        `json:"base_url"`
+	// Model 可选，覆盖后端默认模型。为空时各后端用 catalog 里的推荐值。
+	Model           string        `json:"model"`
 	DefaultSize     string        `json:"default_size"`
 	DefaultStyle    string        `json:"default_style"`
 	OutputDirectory string        `json:"output_directory"`
@@ -108,12 +110,12 @@ func NewImageGenerationTool(config *ImageGenConfig) *ImageGenerationTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Override default provider: dall-e, stable-diffusion, midjourney, together",
+						"description": "Override default provider: dall-e, stable-diffusion, midjourney, together, minimax",
 						// 注意：这个 enum 是**内置后端**的快照，故意不跟注册表联动 ——
 						// 工具 schema 一旦随插件注册变化，模型看到的能力面就不可复现了。
 						// 插件贡献的 provider 走 config.json 的 image_gen.provider 指定
 						// （见 media_provider.go 的边界说明），不通过这个参数选择。
-						"enum": []string{"dall-e", "stable-diffusion", "midjourney", "together"},
+						"enum": []string{"dall-e", "stable-diffusion", "midjourney", "together", "minimax"},
 					},
 				},
 				"required": []string{"prompt"},
@@ -200,7 +202,7 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 			"size":               size,
 			"count":              count,
 			"message":            fmt.Sprintf("Image generation is not configured for provider %q.", provider),
-			"configuration_help": "Add an 'image_gen' section to config.json (api_key + provider), or set IMAGE_GEN_API_KEY.",
+			"configuration_help": ConfigHelp(MediaKindImage, string(provider)),
 		}, nil
 	}
 
@@ -264,9 +266,11 @@ func (t *ImageGenerationTool) generateWithDALLE(ctx context.Context, prompt, neg
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	// 构建请求体
+	// 构建请求体。模型可由配置覆盖：dall-e-2 与 dall-e-3 支持的尺寸、参数不同，
+	// 用户想省钱换 dall-e-2 时不该改代码。
+	model := infoOrDefaultModel(MediaKindImage, string(ProviderDALLE), t.config.Model)
 	reqBody := map[string]interface{}{
-		"model":  "dall-e-3",
+		"model":  model,
 		"prompt": t.enhancePromptWithStyle(prompt, style),
 		"n":      count,
 		"size":   size,
@@ -538,11 +542,10 @@ func (t *ImageGenerationTool) generateWithTogether(ctx context.Context, prompt, 
 	// 解析尺寸
 	width, height := parseSize(size)
 
-	// 选择模型
-	model := "stabilityai/stable-diffusion-xl-base-1.0"
-	if style == "realistic" || style == "photo" {
-		model = "stabilityai/stable-diffusion-xl-base-1.0"
-	}
+	// 选择模型：配置优先。原来是"两个分支赋同一个值"的死代码（都指向 SDXL），
+	// 现在默认改成 Together 主推的 FLUX.1-schnell（更快更便宜），想用 SDXL 或
+	// 其他模型在设置页选即可——这也是把模型开放成配置项的实际理由。
+	model := infoOrDefaultModel(MediaKindImage, string(ProviderTogether), t.config.Model)
 
 	// 构建请求体
 	reqBody := map[string]interface{}{
@@ -893,22 +896,22 @@ func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface
 			provider, strings.Join(RegisteredImageProviders(), ", "))
 	}
 
-	if !backend.Available(t.config) {
-		return map[string]interface{}{
-			"status":   "not_configured",
-			"provider": provider,
-			"message":  fmt.Sprintf("Image editing is not configured for provider %q.", provider),
-			"configuration_help": "Add an 'image_gen' section to config.json (api_key + provider), " +
-				"or set IMAGE_GEN_API_KEY. Providers that support editing: " +
-				strings.Join(RegisteredImageEditors(), ", "),
-		}, nil
-	}
-
+	// 先判断"能不能编辑"，再判断"配没配好"：顺序反了会把
+	// "这家不支持编辑" 显示成 "未配置"，用户会去翻 key，越查越远。
 	editor, ok := backend.(ImageEditor)
 	if !ok {
 		return nil, fmt.Errorf(
 			"image editing not supported for provider: %s (editing providers: %s)",
 			provider, strings.Join(RegisteredImageEditors(), ", "))
+	}
+
+	if !backend.Available(t.config) {
+		return map[string]interface{}{
+			"status":             "not_configured",
+			"provider":           provider,
+			"message":            fmt.Sprintf("Image editing is not configured for provider %q.", provider),
+			"configuration_help": ConfigHelp(MediaKindImage, string(provider)),
+		}, nil
 	}
 
 	// 读取源图片（相对路径按会话工作目录解析，与文件工具一致——附件被

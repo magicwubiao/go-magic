@@ -1467,7 +1467,38 @@ POST   /api/agent-plugins/{name}/mcp/{server}/connect
 
 - 密钥只进不出：接口返回 `api_key_set` 与掩码尾号，明文永不下发；输入框留空表示"保持不变"，点"清除已保存的密钥"再保存才是删除。
 - 环境变量优先于本页配置：`IMAGE_GEN_*` / `VIDEO_GEN_*` / `VOICE_API_KEY` 一旦设置，页面会明确提示"被环境变量覆盖"，避免出现"改了没生效"的反复排查。
-- 接口：`GET /api/media/config`（脱敏快照，含各 provider 的可用性与环境变量覆盖列表）、`PUT /api/media/config`（按段增量更新，服务端校验 provider 与时长/画幅/分辨率/语速区间）。
+- 接口：`GET /api/media/config`（脱敏快照，含各 provider 的可用性、能力标记、控制台地址与环境变量覆盖列表）、`PUT /api/media/config`（按段增量更新，服务端校验 provider 与时长/画幅/分辨率/语速区间）。
+
+#### 内置厂商一览
+
+换厂商只影响后端，工具名和参数不变：
+
+| 能力 | provider | 说明 | 本地首帧图 |
+| --- | --- | --- | --- |
+| 生图 | `dall-e` | OpenAI，唯一支持编辑/变体 | — |
+| 生图 | `stable-diffusion` | Stability sd3 端点，模型由端点固定 | — |
+| 生图 | `midjourney` | 第三方中转，只提交不轮询（返回 pending 占位） | — |
+| 生图 | `together` | FLUX / SDXL，模型可换 | — |
+| 生图 | `minimax` | 海螺 image-01，按画幅出图 | — |
+| 生视频 | `dashscope` | 通义万相 wan，480p~1080p | 不支持，需 `image_url` |
+| 生视频 | `volcengine` | 方舟 Seedance，画幅最全（含 21:9） | 支持 |
+| 生视频 | `kling` | 可灵 3.0，**模型名在请求路径里** | 不支持，需 `image_url` |
+| 生视频 | `runway` | Gen-4.5，时长只有 5/10 秒 | 支持（data URI，≤5MB） |
+| 生视频 | `minimax` | 海螺 H3，成功直接返回成片地址 | 不支持，需 `image_url` |
+| 语音 | `cosyvoice` | 阿里云 CosyVoice，与通义万相共用百炼 Key | — |
+| 语音 | `openai` / `elevenlabs` / `azure` / `google` / `whisper` | 走 `voice.Manager` 原有链路 | — |
+
+别名也认：`dalle`、`sd`、`wan`、`seedance`、`hailuo`、`runwayml`、`qwen-tts` 都能直接写进 `provider`。
+
+**参数不会被静默忽略。** 各厂商支持的档位不同，工具先映射再回显实际值：
+
+- 时长：Runway 只认 5/10 秒，传 8 吸附到 10；其余按 3~15 钳制。
+- 画幅：该厂商不支持的画幅回落到它的默认值（如 Kling / MiniMax 不支持 4:3）。
+- 分辨率：MiniMax 用 768P / 2K，Kling 没有 480p。工具结果里的 `duration` / `ratio` / `resolution` 是**实际生效值**，而不是你的输入值。
+
+**报错带下一步。** 401/403 会说明是哪家拒绝的、去哪儿检查密钥（附控制台地址，并提示新密钥可能在服务未开通前失败）；429 提示等一分钟重试并说明限额按账号计算；5xx 提示是厂商侧故障，不要改配置。
+
+**设置页会自动填。** 切换服务商时，推荐模型、官方接口地址、默认声音会跟着换（只在字段为空或仍是上一家的默认值时才覆盖，手写的内容不会被偷偷改掉）；模型是可选可搜索的下拉，画幅/分辨率下拉按当前厂商裁剪；每张卡片都带"去控制台获取密钥"入口和密钥形态提示。
 
 
 ### 15.5 反向 MCP：把 magic 当工具用

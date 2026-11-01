@@ -548,10 +548,13 @@ type VoiceConfig = voice.VoiceConfig
 type ImageGenConfig struct {
 	// APIKey 图片生成服务的 Key。为空 = 未配置，工具不会暴露给模型。
 	APIKey string `json:"api_key,omitempty"`
-	// Provider 取值 dall-e / stable-diffusion / midjourney / together，默认 dall-e。
+	// Provider 取值 dall-e / stable-diffusion / midjourney / together / minimax，默认 dall-e。
 	Provider string `json:"provider,omitempty"`
 	// BaseURL 兼容自建/中转网关；为空时按 provider 取官方地址。
-	BaseURL         string `json:"base_url,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	// Model 可选，覆盖 provider 的默认模型（如 dall-e-2、FLUX.1-schnell、image-01-live）。
+	// 为空时由后端自己决定默认值——不同厂商的模型名互不通用，不设全局默认。
+	Model           string `json:"model,omitempty"`
 	DefaultSize     string `json:"default_size,omitempty"`
 	DefaultStyle    string `json:"default_style,omitempty"`
 	OutputDirectory string `json:"output_dir,omitempty"`

@@ -107,10 +107,12 @@
   "image_gen": {
     "comment_api_key": "Image generation key for the image_gen / image_edit tools. Empty = both tools stay out of the model's tool list. IMAGE_GEN_API_KEY overrides this value.",
     "api_key": "",
-    "comment_provider": "dall-e (default), stable-diffusion, midjourney, together.",
+    "comment_provider": "dall-e (default), stable-diffusion, midjourney, together, minimax. Aliases (dalle, sd, hailuo) are accepted.",
     "provider": "dall-e",
     "comment_base_url": "Override the API base (self-hosted or relay gateway). Empty = official endpoint per provider.",
     "base_url": "",
+    "comment_model": "Model override for providers that support it (dall-e-3/dall-e-2, a Together model id, image-01/image-01-live). Empty = the provider's recommended default. Stability's sd3 endpoint ignores this.",
+    "model": "",
     "default_size": "1024x1024",
     "default_style": "digital-art",
     "output_dir": "./generated_images"
@@ -118,11 +120,11 @@
   "video_gen": {
     "comment_api_key": "Video generation key for the video_generate tool. Empty = the tool stays out of the model's tool list. VIDEO_GEN_API_KEY overrides this value.",
     "api_key": "",
-    "comment_provider": "dashscope (Alibaba Model Studio, wan series; default) or volcengine (Volcano Ark, Seedance series). Both are submit-task + poll async APIs; the tool polls internally and downloads the MP4 (video URLs expire after 24h).",
+    "comment_provider": "dashscope (Alibaba wan, default), volcengine (Seedance), kling (Kuaishou Kling), runway, minimax (Hailuo H3). All are submit-task + poll async APIs; the tool polls internally and downloads the MP4 (video URLs expire fast). Aliases: wan, seedance, hailuo, runwayml.",
     "provider": "dashscope",
     "comment_base_url": "Override the API base (self-hosted or relay gateway). Empty = official endpoint per provider.",
     "base_url": "",
-    "comment_model": "Model override. dashscope: wan2.2-t2v-plus (t2v) / wan2.2-i2v-plus (i2v, auto-swapped when a first-frame image is given). volcengine: e.g. doubao-seedance-1-0-pro-250528.",
+    "comment_model": "Model override. dashscope: wan2.2-t2v-plus (t2v) / wan2.2-i2v-plus (i2v, auto-swapped when a first-frame image is given). volcengine: doubao-seedance-1-0-pro-250528. kling: kling-3.0 / kling-3.0-turbo (the model is part of the URL path). runway: gen4.5 / gen4_turbo. minimax: MiniMax-H3. Empty = the provider's recommended default.",
     "model": "",
     "default_duration": 5,
     "default_ratio": "16:9",

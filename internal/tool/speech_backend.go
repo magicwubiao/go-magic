@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/voice"
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -36,22 +38,90 @@ type speechCall struct {
 
 // voiceDefaultProvider 返回 config.json 的 voice.provider，缺省 openai。
 func voiceDefaultProvider() string {
-	cfg, err := config.Load()
-	if err == nil && cfg != nil && cfg.Voice != nil {
-		if p := strings.TrimSpace(cfg.Voice.Provider); p != "" {
+	if cfg := loadVoiceConfig(); cfg != nil {
+		if p := strings.TrimSpace(cfg.Provider); p != "" {
 			return p
 		}
 	}
 	return "openai"
 }
 
+// voiceConfigCacheTTL 语音配置缓存的兜底存活时间。
+//
+// 为什么需要缓存：内置语音后端（cosyvoice）注册进注册表之后，
+// registeredTTSBackendAvailable() 每次 ListWithSchemas 都会遍历一遍，而
+// config.Load() 是**每次读盘 + 反序列化**。工具清单在每轮对话都要算，
+// 不缓存等于把磁盘 IO 放在热路径上（这一点在内置后端加入后从"偶尔"变成"每次"）。
+const voiceConfigCacheTTL = 15 * time.Second
+
+// voiceConfigCache 带"文件指纹"判定的语音配置缓存。
+//
+// 只靠 TTL 不够：TTL 保证的是**时间上**的新鲜，不是**内容上**的新鲜。真实踩到的
+// 场景有两个——设置页保存（已由 ResetEnvProbes 显式失效覆盖）、以及测试里临时
+// 换掉 magic home 后写一份新 config.json（TTL 内仍读到上一份，于是用例之间互相
+// 污染、时绿时红）。所以真正的失效判据是配置文件本身的 mtime+size：
+// stat 一次是微秒级，比"读文件 + 反序列化"便宜两个数量级，也足够准确。
+type voiceConfigCacheT struct {
+	mu    sync.RWMutex
+	valid bool
+	at    time.Time
+	stamp string
+	cfg   *voice.VoiceConfig
+}
+
+var voiceConfigCache voiceConfigCacheT
+
+// voiceConfigStamp 返回语音配置文件的指纹（路径 + mtime + size；缺失时记 missing）。
+//
+// 文件不存在也要有稳定指纹：否则"没有 config.json"的机器每次都会判定变化、
+// 每次都去读盘，缓存等于没做。
+func voiceConfigStamp() string {
+	home := config.GetMagicHome()
+	if home == "" {
+		return "no-home"
+	}
+	path := filepath.Join(home, config.ConfigFileName)
+	st, err := os.Stat(path)
+	if err != nil {
+		return path + "|missing"
+	}
+	return fmt.Sprintf("%s|%d|%d", path, st.ModTime().UnixNano(), st.Size())
+}
+
 // loadVoiceConfig 读配置里的 voice 段（可能为 nil，调用方需容忍）。
 func loadVoiceConfig() *voice.VoiceConfig {
-	cfg, err := config.Load()
-	if err != nil || cfg == nil {
-		return nil
+	stamp := voiceConfigStamp()
+
+	voiceConfigCache.mu.RLock()
+	if voiceConfigCache.valid && voiceConfigCache.stamp == stamp && time.Since(voiceConfigCache.at) < voiceConfigCacheTTL {
+		cached := voiceConfigCache.cfg
+		voiceConfigCache.mu.RUnlock()
+		return cached
 	}
-	return cfg.Voice
+	voiceConfigCache.mu.RUnlock()
+
+	// 指纹变化后可能有多个 goroutine 同时读盘：不做 single-flight，
+	// 代价只是几次重复读，比引入全局锁阻塞工具列举划算。
+	var loaded *voice.VoiceConfig
+	if appCfg, err := config.Load(); err == nil && appCfg != nil {
+		loaded = appCfg.Voice
+	}
+
+	voiceConfigCache.mu.Lock()
+	voiceConfigCache.valid = true
+	voiceConfigCache.at = time.Now()
+	voiceConfigCache.stamp = stamp
+	voiceConfigCache.cfg = loaded
+	voiceConfigCache.mu.Unlock()
+	return loaded
+}
+
+// InvalidateVoiceConfigCache 立即丢弃缓存（设置页保存后由 ResetEnvProbes 调用）。
+func InvalidateVoiceConfigCache() {
+	voiceConfigCache.mu.Lock()
+	voiceConfigCache.valid = false
+	voiceConfigCache.cfg = nil
+	voiceConfigCache.mu.Unlock()
 }
 
 // LoadVoiceConfig 是 loadVoiceConfig 的导出版本（服务端设置页/诊断用）。

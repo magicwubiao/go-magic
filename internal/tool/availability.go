@@ -93,6 +93,9 @@ func ResetEnvProbes() {
 	voiceCfgOK = false
 	audioPlayerOnce = sync.Once{}
 	audioPlayerOK = false
+	// 语音配置本身也有一层 TTL 缓存（见 speech_backend.go）：不在这里失效，
+	// 设置页刚保存完的 key 仍会被 15 秒内的旧快照挡住。
+	InvalidateVoiceConfigCache()
 }
 
 // TTSTool：需要显式注入 voice manager、配置了语音 API Key，或注册表里有可用的

@@ -141,9 +141,18 @@ type VideoRequest struct {
 //
 // 这里刻意只给 URL：视频可能几十 MB，塞进内存不划算；内核的 downloadAndSaveVideo
 // 当场取回并 temp+rename 落盘，模型最终只看到本地路径。
+//
+// 后面四个字段是**实际生效的参数**，不是请求值：各厂商会把 duration 吸附到自己的
+// 档位、把 ratio 换成像素比、把 resolution 换成 "2K" 这类自家标识。工具层回显
+// 时优先用这里的值，否则用户会以为参数生效了（"我明明要 8 秒，结果 5 秒"）。
 type VideoResult struct {
 	URL    string
 	TaskID string
+
+	Duration   int
+	Ratio      string
+	Resolution string
+	Model      string
 }
 
 // VideoBackend 视频生成后端（异步任务型：提交 → 轮询 → 出片由后端内部完成）。
@@ -260,12 +269,22 @@ func UnregisterImageBackendsByOwner(owner string) int {
 	return removed
 }
 
-// LookupImageBackend 按名称查找图片后端。
+// LookupImageBackend 按名称查找图片后端。名字支持别名（dalle → dall-e，见 media_catalog.go）。
+//
+// 查找顺序是"原名优先，别名兜底"：内置别名表只覆盖常见手写变体，
+// 若某个插件恰好把后端命名为 alias 里的词，原名命中就不该被改写成别的 provider。
 func LookupImageBackend(name string) (ImageBackend, bool) {
+	key := normalizeBackendName(name)
 	imageBackendsMu.RLock()
 	defer imageBackendsMu.RUnlock()
-	entry, ok := imageBackends[normalizeBackendName(name)]
-	return entry.backend, ok
+	if entry, ok := imageBackends[key]; ok {
+		return entry.backend, true
+	}
+	if canonical := CanonicalProviderName(MediaKindImage, name); canonical != key {
+		entry, ok := imageBackends[canonical]
+		return entry.backend, ok
+	}
+	return nil, false
 }
 
 // RegisteredImageProviders 返回已注册的图片 provider 名称（升序，便于日志与测试断言）。
@@ -327,12 +346,19 @@ func UnregisterVideoBackendsByOwner(owner string) int {
 	return removed
 }
 
-// LookupVideoBackend 按名称查找视频后端。
+// LookupVideoBackend 按名称查找视频后端（支持 hailuo / seedance 这类别名）。
 func LookupVideoBackend(name string) (VideoBackend, bool) {
+	key := normalizeBackendName(name)
 	videoBackendsMu.RLock()
 	defer videoBackendsMu.RUnlock()
-	entry, ok := videoBackends[normalizeBackendName(name)]
-	return entry.backend, ok
+	if entry, ok := videoBackends[key]; ok {
+		return entry.backend, true
+	}
+	if canonical := CanonicalProviderName(MediaKindVideo, name); canonical != key {
+		entry, ok := videoBackends[canonical]
+		return entry.backend, ok
+	}
+	return nil, false
 }
 
 // RegisteredVideoProviders 返回已注册的视频 provider 名称（升序）。
@@ -549,11 +575,17 @@ func UnregisterSpeechBackendsByOwner(owner string) int {
 	return removed
 }
 
-// LookupTTSBackend 按名称查找合成后端。
+// LookupTTSBackend 按名称查找合成后端（支持 qwen-tts → cosyvoice 这类别名）。
 func LookupTTSBackend(name string) (TTSBackend, bool) {
+	key := normalizeBackendName(name)
 	speechBackendsMu.RLock()
-	defer speechBackendsMu.RUnlock()
-	entry, ok := speechTTSBackends[normalizeBackendName(name)]
+	entry, ok := speechTTSBackends[key]
+	if !ok {
+		if canonical := CanonicalProviderName(MediaKindSpeech, name); canonical != key {
+			entry, ok = speechTTSBackends[canonical]
+		}
+	}
+	speechBackendsMu.RUnlock()
 	if !ok {
 		return nil, false
 	}
@@ -563,9 +595,15 @@ func LookupTTSBackend(name string) (TTSBackend, bool) {
 
 // LookupASRBackend 按名称查找识别后端。
 func LookupASRBackend(name string) (ASRBackend, bool) {
+	key := normalizeBackendName(name)
 	speechBackendsMu.RLock()
-	defer speechBackendsMu.RUnlock()
-	entry, ok := speechASRBackends[normalizeBackendName(name)]
+	entry, ok := speechASRBackends[key]
+	if !ok {
+		if canonical := CanonicalProviderName(MediaKindSpeech, name); canonical != key {
+			entry, ok = speechASRBackends[canonical]
+		}
+	}
+	speechBackendsMu.RUnlock()
 	if !ok {
 		return nil, false
 	}
@@ -577,13 +615,16 @@ func LookupASRBackend(name string) (ASRBackend, bool) {
 // 返回的接口只用来问 Name/Available，具体能力请用 LookupTTSBackend / LookupASRBackend。
 func LookupSpeechBackend(name string) (SpeechBackend, bool) {
 	key := normalizeBackendName(name)
+	canonical := CanonicalProviderName(MediaKindSpeech, name)
 	speechBackendsMu.RLock()
 	defer speechBackendsMu.RUnlock()
-	if entry, ok := speechTTSBackends[key]; ok {
-		return entry.backend, true
-	}
-	if entry, ok := speechASRBackends[key]; ok {
-		return entry.backend, true
+	for _, k := range []string{key, canonical} {
+		if entry, ok := speechTTSBackends[k]; ok {
+			return entry.backend, true
+		}
+		if entry, ok := speechASRBackends[k]; ok {
+			return entry.backend, true
+		}
 	}
 	return nil, false
 }
