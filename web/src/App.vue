@@ -232,9 +232,6 @@ const menuOptions = computed(() => [
   // 自定义连接器（/mcp）已移到左下角"设置"下拉：它是低频的接入配置，
   // 与插件页的连接器目录功能重叠，不该在主导航里重复出现。
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
-  // 媒体能力（生图 / 生视频 / 语音）：工具页讲"有哪些工具"，这里讲"怎么让它们
-  // 真的能用"（密钥与默认参数）。紧挨工具，用户从工具页发现不可用时会往这看。
-  { label: t('nav.media'), key: '/media', icon: renderIcon(ImageOutline) },
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
   { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },
@@ -242,10 +239,15 @@ const menuOptions = computed(() => [
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
   { label: t('peers.title'), key: '/peers', icon: renderIcon(ShareSocialOutline) },
   { type: 'divider' as const },
-  // 资源与环境段放在最下面：模型与供应商、网关、文件、分身 —— 都是"跑一次任务
-  // 需要配齐的东西"（用哪个模型 / 从哪进来 / 数据放哪 / 以谁的身份），配置频次低，
+  // 资源与环境段放在最下面：供应商（模型 + 媒体）、网关、文件、分身 —— 都是"跑一次
+  // 任务需要配齐的东西"（用哪个模型 / 从哪进来 / 数据放哪 / 以谁的身份），配置频次低，
   // 沉到菜单底部不占视线。
+  //
+  // 媒体能力紧跟在模型与供应商下面：两者回答的是同一个问题 —— "任务跑起来要连哪些
+  // 外部厂商、凭据填在哪"。模型页管文本模型的 provider 与模型清单，媒体页管生图/
+  // 生视频/语音的 provider 与密钥，都是按厂商组织的接入配置，配完模型顺手就能配媒体。
   { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
+  { label: t('nav.media'), key: '/media', icon: renderIcon(ImageOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
