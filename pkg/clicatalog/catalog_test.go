@@ -160,6 +160,17 @@ func TestGHEntryIsReadOnlyWithRaw(t *testing.T) {
 	}
 }
 
+// raw 不变量：目录的每个条目都必须开启 Raw 逃生工具（见 catalog.go 包注释）。
+// 声明式工具只登记高频只读操作，CLI 的其余子命令面一律走 raw（恒审批）。
+// 新增条目忘开 raw 会让模型对长尾子命令完全失明，这里锁死。
+func TestCatalogEntriesShipRaw(t *testing.T) {
+	for _, e := range All() {
+		if !e.Connector.Raw {
+			t.Errorf("%s: catalog entries must enable Raw (declared tools cover the read-only surface, raw covers the rest)", e.ID)
+		}
+	}
+}
+
 func TestGetAndSort(t *testing.T) {
 	if _, ok := Get("jq"); !ok {
 		t.Fatal("jq entry not found")

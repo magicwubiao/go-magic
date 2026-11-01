@@ -9,6 +9,11 @@
 //   - **不内置任何凭据**：需要认证的条目用 Requires 描述要填什么，安装时由用户填；
 //   - 文案用英文（中文由前端 locale 提供）；
 //   - 目录只是模板，安装时展开成 cliconn.Connector，不引入新的运行时概念。
+//
+// raw 不变量：**每个条目都开启 Connector.Raw**。声明式工具只登记高频
+// 只读操作（免审批），CLI 的其余子命令面（写操作、长尾、新版本加的
+// 参数）一律走 raw 逃生工具——每次调用都要人工审批。目录条目因此
+// 不需要在"覆盖"和"信任"之间二选一。
 package clicatalog
 
 import (
@@ -177,6 +182,8 @@ var dockerEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "docker",
 		Description: "Docker engine CLI",
+		// compose / network / volume / stats 等长尾走 raw（恒审批）。
+		Raw: true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "ps",
@@ -189,6 +196,15 @@ var dockerEntry = Entry{
 				Description: "List local images.",
 				Args:        []string{"images"},
 				ReadOnly:    true,
+			},
+			{
+				Name:        "inspect",
+				Description: "Show detailed information about a container or image as JSON (env, mounts, ports, network).",
+				Args:        []string{"inspect", "{{target}}"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "target", Description: "container or image name / id", Required: true},
+				},
 			},
 			{
 				Name:        "logs",
@@ -216,9 +232,9 @@ var dockerEntry = Entry{
 
 // gitEntry 只暴露只读子命令：status / log / diff / show / branch。
 //
-// 不收录 commit / push / reset —— 目录条目的定位是"让模型看见仓库状态"，
-// 写操作要么交给用户，要么由用户自己手写连接器（那时 require_approval
-// 由他自己决定）。这条边界与 docker（只有 ps/images/logs）保持一致。
+// 不收录 commit / push / reset —— 声明式的免审批面必须保持纯只读
+// （目录条目的定位是"让模型看见仓库状态"）。写操作不靠用户手写连接器
+// 了：raw 逃生工具可以跑任意 git 子命令，但每次调用都要人工确认。
 //
 // 仓库位置走 -C {{repo}} 而不是 Connector.WorkingDir：同一个连接器要能查
 // 多个仓库，而 WorkingDir 是连接器级、改一次要重新保存配置。{{repo}} 为空时
@@ -236,6 +252,10 @@ var gitEntry = Entry{
 		// SSH agent / credential helper。这里写清楚是为了让模型不要建议
 		// 用户去"填 token"。
 		Description: "Git CLI (uses the credentials already configured on this machine: SSH agent or credential helper; local repositories need none)",
+		// 写操作（commit / push / reset……）走 raw，每次审批。
+		Raw: true,
+		// 大仓库的 log --stat / diff 很容易超过默认 32KB。
+		MaxOutputBytes: 64 << 10,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "status",
@@ -309,7 +329,22 @@ var kubectlEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "kubectl",
 		Description: "Kubernetes CLI",
+		// apply / rollout / scale 等写操作走 raw（恒审批）。
+		Raw: true,
+		// describe 与 get 的输出经常超过默认 32KB。
+		MaxOutputBytes: 64 << 10,
 		Tools: []cliconn.ToolSpec{
+			{
+				Name:        "get",
+				Description: "List resources of a kind (pods, deployments, services, nodes, ...).",
+				Args:        []string{"get", "{{kind}}", "-n", "{{namespace}}", "{{?all_namespaces}}--all-namespaces"},
+				ReadOnly:    true,
+				Params: []cliconn.ParamSpec{
+					{Name: "kind", Description: "resource kind, e.g. pods / deployments / services", Required: true},
+					{Name: "namespace", Default: "default"},
+					{Name: "all_namespaces", Type: "boolean", Description: "query every namespace"},
+				},
+			},
 			{
 				Name:        "get_pods",
 				Description: "List pods in a namespace (or all namespaces).",
@@ -365,6 +400,8 @@ var jqEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "jq",
 		Description: "jq JSON processor",
+		// -n / --slurpfile / @base64 等偏门用法走 raw。
+		Raw: true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "query",
@@ -408,6 +445,11 @@ var awsEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "aws",
 		Description: "AWS CLI (uses the credentials already configured with aws configure)",
+		// AWS API 面巨大：s3 cp / logs tail / cloudwatch get-metric-data 等
+		// 全走 raw（恒审批）。
+		Raw: true,
+		// describe-instances 的 JSON 可能很大。
+		MaxOutputBytes: 64 << 10,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "whoami",
@@ -463,6 +505,8 @@ var helmEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "helm",
 		Description: "Helm package manager for Kubernetes",
+		// install / upgrade / rollback 等写操作走 raw（恒审批）。
+		Raw: true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "list",
@@ -517,6 +561,7 @@ var yqEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "yq",
 		Description: "yq YAML/JSON processor (mikefarah)",
+		Raw:         true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "query",
@@ -560,6 +605,8 @@ var rgEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "rg",
 		Description: "ripgrep recursive search",
+		// -l / --json / -t <type> / --glob 等长尾 flag 走 raw。
+		Raw: true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "search",
@@ -603,6 +650,7 @@ var aliyunEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "aliyun",
 		Description: "Alibaba Cloud CLI (uses credentials from aliyun configure)",
+		Raw:         true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "whoami",
@@ -653,6 +701,7 @@ var tccliEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "tccli",
 		Description: "Tencent Cloud CLI (uses credentials from tccli configure)",
+		Raw:         true,
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "cvm_instances",
@@ -696,6 +745,7 @@ var wranglerEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "wrangler",
 		Description: "Cloudflare Workers CLI (uses credentials from wrangler login)",
+		Raw:         true, // deploy / kv put 等写操作走 raw（恒审批）
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "whoami",
@@ -743,6 +793,7 @@ var vercelEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "vercel",
 		Description: "Vercel CLI (uses credentials from vercel login)",
+		Raw:         true, // deploy / env 等写操作走 raw（恒审批）
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "whoami",
@@ -790,12 +841,14 @@ var ytdlpEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "yt-dlp",
 		Description: "yt-dlp video downloader",
+		Raw:         true, // 字幕 / 播放列表 / 格式过滤等长尾走 raw（恒审批）
 		Tools: []cliconn.ToolSpec{
 			{
-				Name:        "info",
-				Description: "Print title, duration and available formats of a video as JSON.",
-				Args:        []string{"-J", "--no-playlist", "{{url}}"},
-				ReadOnly:    true,
+				Name:           "info",
+				Description:    "Print title, duration and available formats of a video as JSON.",
+				Args:           []string{"-J", "--no-playlist", "{{url}}"},
+				ReadOnly:       true,
+				TimeoutSeconds: 120, // 抓取远端页面，慢站可能要几十秒
 				Params: []cliconn.ParamSpec{
 					{Name: "url", Description: "video page URL", Required: true},
 				},
@@ -831,6 +884,7 @@ var ffmpegEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "ffmpeg",
 		Description: "FFmpeg media converter",
+		Raw:         true, // 滤镜 / probe / 流操作等长尾走 raw（恒审批）
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:           "convert",
@@ -873,6 +927,7 @@ var supabaseEntry = Entry{
 	Connector: cliconn.Connector{
 		Command:     "supabase",
 		Description: "Supabase CLI (uses the access token from supabase login or SUPABASE_ACCESS_TOKEN)",
+		Raw:         true, // db push / link 等写操作走 raw（恒审批）
 		Tools: []cliconn.ToolSpec{
 			{
 				Name:        "projects",
