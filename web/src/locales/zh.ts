@@ -1902,7 +1902,7 @@ export default {
     deleted: '已删除',
   },
   mcp: {
-    title: '连接器',
+    title: '自定义连接器',
     subtitle: 'MCP 长连接与 CLI 子进程两类外部能力，接入后其工具可在对话中直接调用',
     addServer: '添加连接器',
     // --- 2026-10-27: 目录 / 认证头 / 状态机 / 工具级开关 ---

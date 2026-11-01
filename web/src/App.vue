@@ -219,35 +219,43 @@ function handleHeaderSelect(key: string) {
 }
 
 const menuOptions = computed(() => [
+  // 日常使用段：对话 → 看板 → 目标 → 定时任务。
+  // 定时任务紧跟在目标下面：目标是"要去哪"，定时任务是"按什么节拍跑"，两者连着看。
   { label: t('nav.chat'), key: '/chat', icon: renderIcon(ChatbubbleOutline) },
   { label: t('nav.kanban'), key: '/kanban', icon: renderIcon(GridOutline) },
   { label: t('goals.title'), key: '/goals', icon: renderIcon(FlagOutline) },
+  { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
   { type: 'divider' as const },
-  { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
-  // 工具 / 技能 / 连接器 / 插件收进同一段；插件页承载官方技能包
+  // 能力扩展段：工具 / 技能 / 插件收进同一段；插件页承载官方技能包
   // （"技能+连接器、一键安装即用"），是 CLI 能力的首选入口。
+  // 自定义连接器（/mcp）已移到左下角"设置"下拉：它是低频的接入配置，
+  // 与插件页的连接器目录功能重叠，不该在主导航里重复出现。
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
-  { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
   { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },
   // Bot Mode 组：本机机器人 + 跨机 peer，独立成组与其余导航区分
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
   { label: t('peers.title'), key: '/peers', icon: renderIcon(ShareSocialOutline) },
   { type: 'divider' as const },
-  { label: t('nav.cronJobs'), key: '/cron', icon: renderIcon(TimeOutline) },
+  // 资源与环境段放在最下面：模型与供应商、网关、文件、分身 —— 都是"跑一次任务
+  // 需要配齐的东西"（用哪个模型 / 从哪进来 / 数据放哪 / 以谁的身份），配置频次低，
+  // 沉到菜单底部不占视线。
+  { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
-  { type: 'divider' as const },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
 ])
 
-// 顶部"设置"下拉:管理类(审批/日志/用量) + 系统类(系统/配置) + 退出
+// 左下角"设置"上拉菜单:管理类(审批/日志/用量) + 接入与系统类(自定义连接器/系统/配置) + 退出
 const headerOptions = computed(() => [
   { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
   { label: t('nav.usage'), key: '/usage', icon: renderIcon(PieChartOutline) },
   { type: 'divider' as const },
+  // 自定义连接器（MCP / CLI）从主导航移到这里：属于"接外部软件"的配置动作，
+  // 低频且与系统/配置同类，不再占主菜单位置。
+  { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
   { label: t('nav.system'), key: 'system', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.config'), key: 'config', icon: renderIcon(SettingsOutline) },
   { type: 'divider' as const },

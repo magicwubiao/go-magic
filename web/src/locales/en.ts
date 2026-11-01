@@ -1898,7 +1898,7 @@ export default {
     deleted: 'Deleted',
   },
   mcp: {
-    title: 'Connectors',
+    title: 'Custom Connectors',
     subtitle: 'MCP servers (long-lived) or CLI programs (one-shot); their tools are callable in chat',
     addServer: 'Add Connector',
     // --- 2026-10-27: 目录 / 认证头 / 状态机 / 工具级开关 ---
