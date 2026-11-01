@@ -82,6 +82,15 @@ type Connector struct {
 	// OAuth 声明该连接器的 token 由本程序通过设备码流程（RFC 8628）取得，
 	// 执行前注入 TokenEnv 指向的环境变量。nil = 沿用 env 里的静态凭据。
 	OAuth *OAuthSpec `json:"oauth,omitempty"`
+	// Raw 开启后额外注册一个"自由命令"工具 cli_<connector>_raw：模型可以对该
+	// 连接器的二进制执行**任意**子命令（args 数组直传，不经 shell），用于覆盖
+	// 没有逐条声明的长尾命令——对齐 Claude Code 一类通用终端 agent 的能力，
+	// 但边界收在"这一个二进制"上。
+	//
+	// 安全语义与声明式工具不同：raw 工具**永远**需要人工审批（read_only 与
+	// require_approval 都不影响），因为"任意子命令"意味着没人能在事前断言它
+	// 只读。默认关闭：老配置没有该字段，语义必须是"照旧只跑声明的工具"。
+	Raw bool `json:"raw,omitempty"`
 	// Tools 是从该程序暴露出去的子命令。
 	Tools []ToolSpec `json:"tools,omitempty"`
 }
@@ -290,12 +299,23 @@ func (c Connector) Validate() error {
 			return fmt.Errorf("invalid env entry %q: expected KEY=VALUE", kv)
 		}
 	}
-	if len(c.Tools) == 0 {
+	// 至少要有一个声明工具；但 raw 开启时允许零声明——"只接二进制、子命令全
+	// 交给模型自由拼"是 raw 的合法用法（审批兜底）。
+	if len(c.Tools) == 0 && !c.Raw {
 		return fmt.Errorf("at least one tool is required")
 	}
 	if c.OAuth != nil {
 		if err := c.OAuth.Validate(); err != nil {
 			return err
+		}
+	}
+	// "raw" 是自由命令工具的保留名：声明工具占了这个名字，raw 开启后就会
+	// 出现两个同名工具（后注册的把先注册的顶掉），必须在保存时就拦下。
+	if c.Raw {
+		for _, spec := range c.Tools {
+			if spec.Name == RawToolName {
+				return fmt.Errorf("tool name %q is reserved for the raw escape-hatch tool (connector raw=true)", RawToolName)
+			}
 		}
 	}
 

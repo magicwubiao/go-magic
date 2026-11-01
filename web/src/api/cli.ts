@@ -51,6 +51,8 @@ export interface CLIConnector {
   require_approval?: boolean
   /** OAuth 设备码：由本程序取 token 并注入 token_env，执行前自动刷新 */
   oauth?: CLIOAuthSpec
+  /** 开启后额外注册 cli_<name>_raw：模型可对该命令执行任意子命令（每次都需人工确认） */
+  raw?: boolean
   tools: CLIToolSpec[]
 }
 

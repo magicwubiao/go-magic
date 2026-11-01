@@ -465,7 +465,7 @@ func TestManagerFiltersAndUpsert(t *testing.T) {
 	}
 }
 
-func names(tools []*Tool) []string {
+func names(tools []RegisteredTool) []string {
 	out := make([]string, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, t.Name())

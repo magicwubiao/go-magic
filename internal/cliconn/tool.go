@@ -122,7 +122,12 @@ func (t *Tool) Execute(ctx context.Context, params map[string]interface{}) (inte
 	if err != nil {
 		return nil, err
 	}
+	return resultOutput(res, timeout), nil
+}
 
+// resultOutput 把一次执行的 Result 映射成给模型看的结构化输出。
+// 声明式工具与 raw 工具共用同一形状，模型侧不需要为两种工具学两套返回格式。
+func resultOutput(res *Result, timeout time.Duration) map[string]interface{} {
 	out := map[string]interface{}{
 		// res.Argv 已在 Run 里按 env 凭据脱敏：这个字段会进模型上下文与会话历史，
 		// 展开后的 token 绝不能原样出现在这里。
@@ -153,7 +158,7 @@ func (t *Tool) Execute(ctx context.Context, params map[string]interface{}) (inte
 		out["auth_required"] = true
 		out["hint"] = "output looks like an authentication failure; ask the user to re-authenticate in a terminal (for example the CLI's login command such as \"gh auth login\"), or update the connector's env credentials, then retry"
 	}
-	return out, nil
+	return out
 }
 
 // RequiresApproval 实现 agent 侧的 approvalAware 接口（见下方 ApprovalSummary
@@ -273,15 +278,27 @@ func (m *Manager) Blocked() map[string]string {
 	return out
 }
 
+// RegisteredTool 是 Tool 与 RawTool 枚举时的公共视图：注册方（bridge）只需
+// 名字（注册/超时/注销）与 tool.Tool 隐式满足的四个执行方法。显式定义成
+// 接口而不是让 ToolsForProfile 返回 any 切片，是为了让"少了方法"在编译期
+// 而不是运行时暴露。
+type RegisteredTool interface {
+	Name() string
+	Description() string
+	Schema() map[string]interface{}
+	Execute(ctx context.Context, params map[string]interface{}) (interface{}, error)
+	Timeout() time.Duration
+}
+
 // ToolsForProfile 枚举在给定分身下应当注册的全部工具（已按 enabled / profiles 过滤）。
-func (m *Manager) ToolsForProfile(profile string) []*Tool {
+func (m *Manager) ToolsForProfile(profile string) []RegisteredTool {
 	if m == nil {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	out := make([]*Tool, 0, len(m.connectors))
+	out := make([]RegisteredTool, 0, len(m.connectors))
 	blocked := make(map[string]string)
 	for _, name := range sortedKeys(m.connectors) {
 		c := m.connectors[name]
@@ -296,6 +313,12 @@ func (m *Manager) ToolsForProfile(profile string) []*Tool {
 		}
 		for _, spec := range c.Tools {
 			out = append(out, NewTool(name, c, spec))
+		}
+		// raw 逃生工具：开启后每个连接器额外获得一个"任意子命令"入口。
+		// 永远带审批（见 RawTool.RequiresApproval），因此不会被准入策略之外的
+		// 路径静默放行。
+		if c.Raw {
+			out = append(out, NewRawTool(name, c))
 		}
 	}
 	m.blocked = blocked

@@ -1256,6 +1256,7 @@ magic acp disconnect helper
       "env": ["GH_TOKEN=ghp_xxx"],           // API 返回值一律掩码为 ***
       "timeout_seconds": 60,
       "require_approval": true,
+      "raw": false,                          // true = 额外注册 cli_gh_raw（任意子命令，见下）
       "tools": [{
         "name": "pr_list",
         "description": "List pull requests of a repository",
@@ -1314,6 +1315,13 @@ magic cli remove gh      # 删整个连接器（连同它下面的工具）
 **安全模型**：参数以 argv 数组直接交给 `exec`，**不经过 shell**，也不做分词——所以参数值里带 `;`、`|`、`$(...)` 不会被解释成命令。模板里出现的占位符必须先在 `params` 里声明，模型多给的键一律忽略。Windows 上 `.bat`/`.cmd` 会被拒绝（请指向 `.exe`，或显式写 `command: "cmd"` + `args: ["/c", ...]`）。
 
 **审批**：默认每次调用都要人工确认，只有声明了 `read_only: true` 的工具才免确认；连接器级 `require_approval` 优先于工具级声明（`false` 可整体放开，慎用）。
+
+**raw 逃生工具**：连接器加上 `"raw": true` 后，会额外注册一个 `cli_<连接器>_raw` 工具——模型可以对该命令执行**任意**未声明的子命令，覆盖目录和声明没管到的长尾（`gh api ...`、`kubectl describe ...`）。要点：
+
+- 参数是 argv 数组（`{"args": ["pr", "list", "--limit", "20"]}`，可选 `stdin` 传一段载荷），与声明式工具一样**不经 shell**，边界收在"这一个二进制"上；
+- raw 工具**永远**需要人工确认，`read_only` 与 `require_approval` 对它无效；
+- 允许只写 `"raw": true`、不声明任何 tools（纯 raw 接入）；
+- 参数个数上限 64、stdin 上限 1MB；凭据注入、argv 脱敏、32KB 截断与超时和声明式工具同一套链路。
 
 **结果**：非零退出码不算失败，工具返回 `{exit_code, stdout, stderr, duration_ms}` 交给模型判断；输出超过 32KB 会截断并提示收窄查询；真超时返回 `exit_code: 124` 加一句建议。
 

@@ -187,6 +187,45 @@ func (s *Server) handleCLITest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// raw 逃生工具：没有 ToolSpec 可查，直接构造 RawTool 按提交的参数跑。
+	if body.Tool == cliconn.RawToolName {
+		if !body.Connector.Raw {
+			jsonError(w, http.StatusBadRequest,
+				fmt.Sprintf("tool %q requires the connector's raw switch to be enabled", cliconn.RawToolName))
+			return
+		}
+		raw := cliconn.NewRawTool(strings.TrimSpace(body.Name), body.Connector)
+		timeout := raw.Timeout()
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		start := time.Now()
+		out, err := raw.Execute(ctx, body.Params)
+		elapsed := time.Since(start).Milliseconds()
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{
+				"ok":          false,
+				"error":       err.Error(),
+				"elapsed_ms":  elapsed,
+				"timeout_sec": int(timeout.Seconds()),
+			})
+			return
+		}
+		ok := true
+		if m, isMap := out.(map[string]interface{}); isMap {
+			if code, isInt := m["exit_code"].(int); isInt && code != 0 {
+				ok = false
+			}
+		}
+		jsonResponse(w, map[string]interface{}{
+			"ok":          ok,
+			"elapsed_ms":  elapsed,
+			"timeout_sec": int(timeout.Seconds()),
+			"result":      out,
+		})
+		return
+	}
+
 	var spec *cliconn.ToolSpec
 	for i := range body.Connector.Tools {
 		if body.Connector.Tools[i].Name == body.Tool {
@@ -401,6 +440,9 @@ func (s *Server) listCLIConnectors() []cliConnectorView {
 		toolNames := make([]string, 0, len(c.Tools))
 		for _, spec := range c.Tools {
 			toolNames = append(toolNames, cliconn.ToolName(name, spec.Name))
+		}
+		if c.Raw {
+			toolNames = append(toolNames, cliconn.ToolName(name, cliconn.RawToolName))
 		}
 		view := cliConnectorView{
 			Name:      name,

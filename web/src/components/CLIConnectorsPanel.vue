@@ -83,6 +83,9 @@
               <n-tag v-if="row.require_approval" size="tiny" :bordered="false" type="info">
                 {{ t('cli.approvalTag') }}
               </n-tag>
+              <n-tag v-if="row.raw" size="tiny" :bordered="false" type="warning">
+                {{ t('cli.rawTag') }}
+              </n-tag>
               <n-tag
                 v-if="row.oauth_configured"
                 size="tiny"
@@ -300,6 +303,11 @@
                   :options="approvalOptions"
                 />
               </n-space>
+              <n-space align="center" size="small">
+                <n-switch v-model:value="form.raw" size="small" />
+                <n-text style="font-size: 13px;">{{ t('cli.rawEnabled') }}</n-text>
+              </n-space>
+              <n-text depth="3" style="font-size: 12px;">{{ t('cli.rawHint') }}</n-text>
               <n-input v-model:value="form.profilesStr" size="small" :placeholder="t('cli.profilesPlaceholder')" />
             </n-space>
           </n-form-item>
@@ -596,6 +604,7 @@ const form = reactive({
   timeoutSeconds: 60 as number | null,
   enabled: true,
   approvalMode: 'inherit' as 'inherit' | 'always' | 'never',
+  raw: false,
   profilesStr: '',
   // OAuth 设备码（可选）：填了四个必填项才会写进配置
   oauthDeviceEndpoint: '',
@@ -693,9 +702,14 @@ const testParams = ref('{}')
 const testing = ref(false)
 const testResult = ref<CLITestResult | null>(null)
 
-const testToolOptions = computed(() =>
-  (testTarget.value?.tools || []).map((tool) => ({ label: tool.name, value: tool.name })),
-)
+const testToolOptions = computed(() => {
+  const opts = (testTarget.value?.tools || []).map((tool) => ({ label: tool.name, value: tool.name }))
+  // raw 逃生工具也能当场试跑（后端 /api/cli/test 支持 tool=raw）
+  if (testTarget.value?.raw) {
+    opts.push({ label: t('cli.rawToolLabel'), value: 'raw' })
+  }
+  return opts
+})
 
 async function handleRefresh() {
   loading.value = true
@@ -767,6 +781,7 @@ function resetForm() {
   form.timeoutSeconds = 60
   form.enabled = true
   form.approvalMode = 'inherit'
+  form.raw = false
   form.profilesStr = ''
   form.oauthDeviceEndpoint = ''
   form.oauthTokenEndpoint = ''
@@ -799,6 +814,7 @@ function openEdit(row: CLIConnectorView) {
   // undefined = 未设置（跟随工具声明）；显式 false/true 才是覆盖
   form.approvalMode =
     row.require_approval === undefined ? 'inherit' : row.require_approval ? 'always' : 'never'
+  form.raw = !!row.raw
   form.profilesStr = (row.profiles || []).join(', ')
   form.oauthDeviceEndpoint = row.oauth?.device_authorization_endpoint || ''
   form.oauthTokenEndpoint = row.oauth?.token_endpoint || ''
@@ -823,6 +839,7 @@ function openEdit(row: CLIConnectorView) {
     || row.working_dir
     || (row.profiles || []).length
     || row.require_approval !== undefined
+    || row.raw
   )
   expandedTool.value = null
   showForm.value = true
@@ -856,7 +873,11 @@ function fillExample() {
 }
 
 function buildConnector(): CLIConnector {
-  const tools = formTools.value.map((tool) => {
+  // 全空的工具槽（没名字也没参数模板）不提交：它只是表单的占位卡。
+  // raw 开启时允许零工具——"只接二进制、子命令全交给 raw"是合法用法。
+  const tools = formTools.value
+    .filter((tool) => tool.name.trim() || tool.argsStr.trim() || tool.paramsJson.trim())
+    .map((tool) => {
     let params: CLIConnector['tools'][number]['params']
     const raw = tool.paramsJson.trim()
     if (raw) {
@@ -892,6 +913,7 @@ function buildConnector(): CLIConnector {
     // inherit 显式传 undefined：JSON.stringify 会丢掉该字段，后端保持 nil
     require_approval:
       form.approvalMode === 'inherit' ? undefined : form.approvalMode === 'always',
+    raw: form.raw || undefined,
     oauth: buildOAuthSpec(),
     tools,
   }
@@ -929,7 +951,8 @@ async function handleSave() {
     message.warning(t('cli.commandRequired'))
     return
   }
-  if (!formTools.value.length) {
+  // raw 开启时允许零声明工具（子命令全部交给 cli_<name>_raw）
+  if (!formTools.value.some((tool) => tool.name.trim() || tool.argsStr.trim()) && !form.raw) {
     message.warning(t('cli.toolsRequired'))
     return
   }
@@ -977,7 +1000,7 @@ function openTest(row: CLIConnectorView) {
   // 试跑走未保存的改动：用户刚在表单里加的工具还没落盘也要能试
   const inForm = showForm.value && editingName.value === row.name
   testTarget.value = inForm ? ({ ...row, ...buildConnectorSafely() } as CLIConnectorView) : row
-  testTool.value = testTarget.value?.tools?.[0]?.name || null
+  testTool.value = testTarget.value?.tools?.[0]?.name || (testTarget.value?.raw ? 'raw' : null)
   testParams.value = '{}'
   testResult.value = null
   showTest.value = true

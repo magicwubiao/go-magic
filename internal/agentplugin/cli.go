@@ -125,6 +125,23 @@ func (t *cliPluginTool) ApprovalSummary() string {
 	return fmt.Sprintf("CLI %s (plugin %s) → %s", t.Tool.ConnectorName(), t.plugin, t.Tool.Spec().Name)
 }
 
+// cliPluginRawTool 是插件内 raw 逃生工具的适配器（与 cliPluginTool 同一套
+// 前缀与审批摘要纪律；RequiresApproval 由 RawTool 恒真提供）。
+type cliPluginRawTool struct {
+	*cliconn.RawTool
+	plugin string
+}
+
+// Name 返回 ap_<plugin>_cli_<connector>_raw。
+func (t *cliPluginRawTool) Name() string {
+	return fmt.Sprintf("ap_%s_%s", t.plugin, t.RawTool.Name())
+}
+
+// ApprovalSummary 在描述前补上插件名。
+func (t *cliPluginRawTool) ApprovalSummary() string {
+	return fmt.Sprintf("CLI %s (plugin %s) → arbitrary subcommand (raw)", t.RawTool.ConnectorName(), t.plugin)
+}
+
 // timeoutSetter 是 *tool.Registry 上设置单工具超时的方法。
 // 不直接依赖 internal/tool：本包已通过 tool.Tool 命名接口做到最薄耦合，
 // 超时注册也走可选接口，注册表不支持时静默跳过。
@@ -186,6 +203,14 @@ func RegisterCLIToolsWithOAuth(plugins map[string]*ManagedPlugin, reg ToolRegist
 					setter.SetTimeout(t.Name(), t.Timeout())
 				}
 			}
+			// raw 逃生工具与声明式工具同权注册：名称可完全由插件定义推导。
+			if conn.Raw {
+				t := &cliPluginRawTool{RawTool: cliconn.NewRawTool(st.Name, conn), plugin: pluginName}
+				reg.Register(t)
+				if setter != nil {
+					setter.SetTimeout(t.Name(), t.Timeout())
+				}
+			}
 		}
 	}
 }
@@ -212,6 +237,9 @@ func UnregisterCLITools(plugins map[string]*ManagedPlugin, reg ToolRegistrar) {
 			}
 			for _, spec := range st.Connector.Tools {
 				u.Unregister(fmt.Sprintf("ap_%s_%s", pluginName, cliconn.ToolName(st.Name, spec.Name)))
+			}
+			if st.Connector.Raw {
+				u.Unregister(fmt.Sprintf("ap_%s_%s", pluginName, cliconn.ToolName(st.Name, cliconn.RawToolName)))
 			}
 		}
 	}

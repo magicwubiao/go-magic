@@ -50,29 +50,9 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 		return nil, err
 	}
 
-	// 先展开 env（args 模板里的 {{env:NAME}} 引用它的最终值），再展开参数。
-	// 每次执行都展开一次，因此在 shell 里换了 token 不需要重启服务。
-	envList := conn.Env
-	if len(envList) > 0 {
-		var err error
-		envList, err = envref.ExpandList(conn.Env)
-		if err != nil {
-			return nil, fmt.Errorf("connector env: %w", err)
-		}
-	}
-	// OAuth 设备码取得的 token 最后覆盖：它是"当前这一秒"的最新凭据，
-	// 必须盖过 env 里可能残留的旧值（用户上次手填的、或上一枚已过期的）。
-	oauthToken := ""
-	if oauth := conn.OAuth; oauth != nil && oauth.TokenEnv != "" {
-		if oauth.Tokens == nil {
-			return nil, fmt.Errorf("connector %q uses OAuth but no token store is wired", conn.Command)
-		}
-		tok, err := oauth.Tokens.EnsureAccessToken()
-		if err != nil {
-			return nil, fmt.Errorf("oauth token unavailable: %w", err)
-		}
-		oauthToken = tok
-		envList = append(envList, oauth.TokenEnv+"="+tok)
+	envList, oauthToken, err := prepareEnv(conn)
+	if err != nil {
+		return nil, err
 	}
 	envMap := envMapFromList(envList)
 
@@ -81,7 +61,94 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 		return nil, err
 	}
 
-	timeout := time.Duration(conn.EffectiveTimeout(spec)) * time.Second
+	stdinPayload := ""
+	if spec.StdinParam != "" {
+		stdinPayload = resolved.str[spec.StdinParam]
+	}
+	return executeArgv(ctx, conn, envList, oauthToken, argv, stdinPayload)
+}
+
+// RawParamLimits 是 raw 工具的输入上限。
+const (
+	// MaxRawArgs 是单次调用允许的 argv 元素上限。正常 CLI 调用远用不到 64 个
+	// 参数，设上限是为了让"模型抽风输出几万个参数"变成一个明确的校验错误，
+	// 而不是一次失控的进程拉起。
+	MaxRawArgs = 64
+	// MaxRawStdinBytes 是 stdin 载荷上限。喂 diff / JSON 这类载荷通常几 KB；
+	// 真正的大文件应该走文件路径参数，而不是整份塞进 stdin。
+	MaxRawStdinBytes = 1 << 20
+)
+
+// RunRaw 执行"自由命令"：argv 由调用方（raw 工具）直接给出，不经模板展开，
+// 其余链路（env 展开、OAuth 注入、脱敏、截断、超时）与 Run 完全一致。
+//
+// argv 的每个元素原样成为一个参数——这里的输入来自模型而非配置作者，
+// 但不经 shell 这条底线不变：元素里的 `;` `&&` `|` 不会被解释。
+func RunRaw(ctx context.Context, conn Connector, argv []string, stdin string) (*Result, error) {
+	if strings.TrimSpace(conn.Command) == "" {
+		return nil, errors.New("connector has no command configured")
+	}
+	if len(argv) > MaxRawArgs {
+		return nil, fmt.Errorf("too many arguments (%d, max %d); chain multiple calls or write a script file and run it", len(argv), MaxRawArgs)
+	}
+	if len(stdin) > MaxRawStdinBytes {
+		return nil, fmt.Errorf("stdin payload too large (%d bytes, max %d); pass a file path instead", len(stdin), MaxRawStdinBytes)
+	}
+	envList, oauthToken, err := prepareEnv(conn)
+	if err != nil {
+		return nil, err
+	}
+	// 连接器级固定前缀（conn.Args）与声明式 Run 保持一致地拼在用户 argv 之前：
+	// 例如 `docker` 连接器配了 ["--context", "remote"]，raw 调用同样必须带上，
+	// 否则同一个连接器下声明工具与 raw 工具会打向不同的目标。
+	// 前缀只展开 {{env:NAME}}；raw 没有声明参数可填，残留的参数占位符直接报错，
+	// 而不是把模板字面量当参数塞给 CLI。
+	full := make([]string, 0, len(conn.Args)+len(argv))
+	envMap := envMapFromList(envList)
+	for _, tmpl := range conn.Args {
+		t, err := expandEnvRefs(tmpl, envMap)
+		if err != nil {
+			return nil, fmt.Errorf("connector args: %w", err)
+		}
+		if m := placeholderRe.FindString(t); m != "" {
+			return nil, fmt.Errorf("connector args contain parameter placeholder %s, which raw calls cannot fill; run it through a declared tool instead", m)
+		}
+		full = append(full, t)
+	}
+	full = append(full, argv...)
+	return executeArgv(ctx, conn, envList, oauthToken, full, stdin)
+}
+
+// prepareEnv 展开连接器 env 的 ${...} 引用，并取得 OAuth token（追加到 env 尾部，
+// 覆盖可能残留的旧值）。Run 与 RunRaw 共用。
+func prepareEnv(conn Connector) (envList []string, oauthToken string, err error) {
+	envList = conn.Env
+	if len(envList) > 0 {
+		envList, err = envref.ExpandList(conn.Env)
+		if err != nil {
+			return nil, "", fmt.Errorf("connector env: %w", err)
+		}
+	}
+	// OAuth 设备码取得的 token 最后覆盖：它是"当前这一秒"的最新凭据，
+	// 必须盖过 env 里可能残留的旧值（用户上次手填的、或上一枚已过期的）。
+	if oauth := conn.OAuth; oauth != nil && oauth.TokenEnv != "" {
+		if oauth.Tokens == nil {
+			return nil, "", fmt.Errorf("connector %q uses OAuth but no token store is wired", conn.Command)
+		}
+		tok, err := oauth.Tokens.EnsureAccessToken()
+		if err != nil {
+			return nil, "", fmt.Errorf("oauth token unavailable: %w", err)
+		}
+		oauthToken = tok
+		envList = append(envList, oauth.TokenEnv+"="+tok)
+	}
+	return envList, oauthToken, nil
+}
+
+// executeArgv 是执行尾巴：超时兜底、可执行检查、拉起子进程、收集与脱敏输出。
+// Run（模板展开后）与 RunRaw（argv 直传）在这里汇合。
+func executeArgv(ctx context.Context, conn Connector, envList []string, oauthToken string, argv []string, stdinPayload string) (*Result, error) {
+	timeout := time.Duration(conn.EffectiveTimeout(ToolSpec{})) * time.Second
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -96,7 +163,7 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	cmd.WaitDelay = 3 * time.Second // ctx 取消后给子进程收尸的宽限
 
 	if len(envList) > 0 {
-		// ${ENV} 引用已在上面展开过（{{env:NAME}} 与进程环境取同一份值）。
+		// ${ENV} 引用已在 prepareEnv 展开过（{{env:NAME}} 与进程环境取同一份值）。
 		cmd.Env = mergeEnv(os.Environ(), envList)
 	}
 	if dir := ExpandWorkingDir(conn.WorkingDir); dir != "" {
@@ -104,11 +171,9 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	}
 
 	stdinBytes := 0
-	if spec.StdinParam != "" {
-		if payload := resolved.str[spec.StdinParam]; payload != "" {
-			cmd.Stdin = strings.NewReader(payload)
-			stdinBytes = len(payload)
-		}
+	if stdinPayload != "" {
+		cmd.Stdin = strings.NewReader(stdinPayload)
+		stdinBytes = len(stdinPayload)
 	}
 
 	stdout := &cappedBuffer{limit: DefaultMaxOutputBytes}
@@ -125,8 +190,8 @@ func Run(ctx context.Context, conn Connector, spec ToolSpec, params map[string]a
 	res := &Result{
 		// 回显的 argv 必须脱敏：{{env:NAME}} 展开后就是明文凭据，而这条命令
 		// 会进模型上下文、会话历史和日志（Tool.Execute 的 "command" 字段）。
-		// 真实的 argv 只用于下面的 exec，不往外带。
-		Argv:       MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMap, oauthToken)),
+		// 真实的 argv 只用于上面的 exec，不往外带。
+		Argv:       MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMapFromList(envList), oauthToken)),
 		Stdout:     decodeOutput(stdout.Bytes()),
 		Stderr:     decodeOutput(stderr.Bytes()),
 		Duration:   elapsed,

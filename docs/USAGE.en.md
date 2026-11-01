@@ -1278,6 +1278,7 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
       "env": ["GH_TOKEN=ghp_xxx"],           // masked as *** in API responses
       "timeout_seconds": 60,
       "require_approval": true,
+      "raw": false,                          // true = also register cli_gh_raw (arbitrary subcommands, see below)
       "tools": [{
         "name": "pr_list",
         "description": "List pull requests of a repository",
@@ -1336,6 +1337,13 @@ Two template forms:
 **Security model**: arguments go straight to `exec` as an argv array — **no shell**, no word splitting — so values containing `;`, `|` or `$(...)` stay literal. Every placeholder must be declared in `params`; extra keys from the model are ignored. On Windows `.bat`/`.cmd` is rejected (point at the `.exe`, or use `command: "cmd"` with `args: ["/c", ...]`).
 
 **Approval**: every call asks for confirmation by default; only tools marked `read_only: true` skip it, and the connector-level `require_approval` wins over the per-tool flag (set it to `false` to disable globally for that connector — use with care).
+
+**The raw escape hatch**: set `"raw": true` on a connector and an extra `cli_<connector>_raw` tool is registered — the model can run **any** undeclared subcommand of that command, covering the long tail the catalog and your declarations do not spell out (`gh api ...`, `kubectl describe ...`). Key points:
+
+- Parameters are an argv array (`{"args": ["pr", "list", "--limit", "20"]}`, optional `stdin` payload) — like declared tools it **never goes through a shell**, and the blast radius is limited to this one binary;
+- The raw tool **always** requires user approval; `read_only` and `require_approval` do not apply to it;
+- `"raw": true` with no declared tools is valid (pure raw connector);
+- Limits: 64 args, 1 MB stdin; credential injection, argv masking, 32 KB output truncation and timeouts are shared with declared tools.
 
 **Results**: a non-zero exit code is not a failure — the tool returns `{exit_code, stdout, stderr, duration_ms}` and lets the model judge. Output above 32KB is truncated with a hint; a real timeout returns `exit_code: 124` plus advice. Per-tool timeout is capped at 300s (matching `MaxTimeout` in the tool layer).
 
