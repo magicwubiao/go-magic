@@ -141,12 +141,12 @@ func TestInstallCatalogPackMCP(t *testing.T) {
 func TestInstallCatalogPackCLI(t *testing.T) {
 	isolatedHome(t)
 
-	dir, name, _, err := InstallCatalogPack(CatalogKindCLI, "jq", nil)
+	dir, name, _, err := InstallCatalogPack(CatalogKindCLI, "docker", nil)
 	if err != nil {
 		t.Fatalf("InstallCatalogPack: %v", err)
 	}
-	if name != "cli-jq" {
-		t.Fatalf("name = %q, want cli-jq", name)
+	if name != "cli-docker" {
+		t.Fatalf("name = %q, want cli-docker", name)
 	}
 	if _, err := os.Stat(filepath.Join(dir, cliConfigName)); err != nil {
 		t.Fatalf("cli.json missing: %v", err)
@@ -160,7 +160,7 @@ func TestInstallCatalogPackCLI(t *testing.T) {
 		t.Fatalf("cli connectors = %d, want 1", len(p.CLIConnectors))
 	}
 	conn := p.CLIConnectors[0]
-	if conn.Connector.Command != "jq" {
+	if conn.Connector.Command != "docker" {
 		t.Errorf("command = %q", conn.Connector.Command)
 	}
 	if keys := envPlaceholderKeys(conn.Connector.Env); len(keys) != 0 {
@@ -168,20 +168,20 @@ func TestInstallCatalogPackCLI(t *testing.T) {
 	}
 }
 
-// git 条目物化后要带上全部只读工具：目录里点"添加"就该能查仓库状态，
+// gh 条目物化后要带上全部只读工具：目录里点"添加"就该能查 PR/Issue，
 // 且 read_only 必须原样穿过 cli.json（丢了就会变成每次调用都要审批）。
-func TestInstallCatalogPackGit(t *testing.T) {
+func TestInstallCatalogPackGHTools(t *testing.T) {
 	isolatedHome(t)
 
-	dir, name, required, err := InstallCatalogPack(CatalogKindCLI, "git", nil)
+	dir, name, required, err := InstallCatalogPack(CatalogKindCLI, "gh", nil)
 	if err != nil {
 		t.Fatalf("InstallCatalogPack: %v", err)
 	}
-	if name != "cli-git" {
-		t.Fatalf("name = %q, want cli-git", name)
+	if name != "cli-gh" {
+		t.Fatalf("name = %q, want cli-gh", name)
 	}
-	if len(required) != 0 {
-		t.Errorf("git needs no credentials, got required=%v", required)
+	if len(required) != 1 || required[0] != "GH_TOKEN" {
+		t.Errorf("gh exposes GH_TOKEN as an optional requirement, got required=%v", required)
 	}
 
 	p := Load(dir, filepath.Join(dir, "data"))
@@ -192,11 +192,11 @@ func TestInstallCatalogPackGit(t *testing.T) {
 		t.Fatalf("cli connectors = %d, want 1", len(p.CLIConnectors))
 	}
 	conn := p.CLIConnectors[0]
-	if conn.Connector.Command != "git" {
-		t.Errorf("command = %q, want git", conn.Connector.Command)
+	if conn.Connector.Command != "gh" {
+		t.Errorf("command = %q, want gh", conn.Connector.Command)
 	}
 
-	wantTools := []string{"branches", "diff", "log", "show", "status"}
+	wantTools := []string{"issue_list", "pr_list", "repo_view", "run_list"}
 	var gotTools []string
 	for _, spec := range conn.Connector.Tools {
 		gotTools = append(gotTools, spec.Name)

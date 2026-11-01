@@ -1242,7 +1242,7 @@ magic acp disconnect helper
 
 ### 15.3 CLI 连接器
 
-很多软件只提供命令行，没有 MCP server（`gh`、`kubectl`、`ffmpeg`、内部运维脚本）。把它们声明成「CLI 连接器」后，每个子命令展开成一个工具 `cli_<连接器>_<工具>`，模型可以直接调用。
+很多软件只提供命令行，没有 MCP server（`gh`、`aws`、`ffmpeg`、内部运维脚本）。把它们声明成「CLI 连接器」后，每个子命令展开成一个工具 `cli_<连接器>_<工具>`，模型可以直接调用。相对内置 shell，它多三件事：**不给模型 shell**（argv 直传）、**只读调用免审批**、**凭据只进子进程环境**。
 
 配置写在 magicHome（默认 `~/.magic`）下的独立文件 `cli.json` 里（旧的 `config.json` 内联 `cli` 段仍然可读，首次保存时自动搬迁）。文件结构与旧内联段相同：
 
@@ -1275,17 +1275,19 @@ magic acp disconnect helper
 }
 ```
 
-**降低门槛的入口——「快速导入」**：在网页「连接器 → CLI」的新建弹窗里，直接粘贴一条完整命令（`gh pr list --repo owner/repo --limit 20 --json`），后端会解析成工具草稿——第一个词是命令、子命令拼成工具名（`pr_list`）、带值的选项变成参数（按示例值推断类型）、独立的开关选项变成 boolean 条件参数。草稿填进表单后确认或微调即可，不用手写模板。对应接口 `POST /api/cli/parse`（无状态，不落盘）。
+**网页里没有手写表单了**：连接器页只剩 MCP，CLI 应用统一在「插件」页装。自定义连接器走下面两条路之一——`magic cli add` 或直接编辑 `cli.json`。移除表单的理由：同一件事在「插件目录」和「手写表单」两处维护必然漂移，而愿意写参数模板的人本来就会用命令行。
 
-**更省事的是「应用目录」**：网页「连接器 → CLI → 应用目录」里内置了一批常用条目（docker、git、kubectl、helm、jq、yq、ripgrep、主流云厂商 CLI、ffmpeg 等，完整列表以界面为准）。卡片会实时检测本机是否已安装该命令（并读出版本，如 `git version 2.43.0`）——已安装的直接填 token（需要的话）点「添加并启用」；没安装的给出当前平台的安装命令（winget / brew / apt），复制执行后点「重新检测」即可。目录只做检测与展示，**服务端不会执行任何安装命令**。每个条目同时内置一个 raw 逃生工具（`cli_<名>_raw`）：声明式工具只覆盖高频只读操作（免审批），其余子命令（写操作、长尾）走 raw，每次调用都需要确认。
+**内置目录只留 8 条**：「插件 → CLI 应用」里的条目是 `docker`、`gh`、`aws`、`aliyun`、`tccli`、`wrangler`、`vercel`、`supabase`。收录标准只有一条：**凭据需要留在子进程环境里，或者服务本身只有 CLI**。`git`、`kubectl`、`helm`、`jq`、`yq`、`rg`、`ffmpeg`、`yt-dlp` 曾经在目录里，已经整体移除——模型用内置 shell 就能跑，而每装一条要往工具列表塞 2-5 个工具定义，直接吃上下文。卡片会实时检测本机是否已安装（并读出版本），没装的给出当前平台的安装命令（winget / brew / apt）；**服务端不会执行任何安装命令**。每个条目都内置 raw 逃生工具（`cli_<名>_raw`）：声明式工具只覆盖高频只读操作（免审批），其余子命令走 raw，每次调用都要确认。
 
-装完会**当场自检一次**：除了版本，还会跑该条目的就绪检查（`gh auth status`、`docker info`、`kubectl config current-context`、`aws sts get-caller-identity`），弹窗里直接显示「可用 / 未就绪 + 原因」。未就绪时同时给出登录命令（`gh auth login`、`aws configure`）——这类命令是交互式的（等浏览器回调、问 region、要 MFA），必须由用户在自己的终端执行，服务端只展示命令并提供「我已登录，复检」按钮。对应接口 `POST /api/cli/catalog/check`。
+**登录有两条路**：「一键登录」由服务端代跑该条目登记的登录命令（`wrangler login`、`vercel login`），跑完自动做一次就绪检查（`gh auth status`、`aws sts get-caller-identity`）并回显账号；没有登记可代跑命令的条目（`aws configure`、`gh auth login` 这类要等浏览器回调 / 问 region / 要 MFA 的），只展示命令，由你在自己的终端执行。只认环境变量 token 的 CLI 还可以走**设备码 OAuth**：token 由本程序申请、存进 `oauth_tokens.json`（0600），执行时注入 `token_env` 指向的变量，过期自动刷新，不写进 `config.json`。
 
 `env` 的值同样支持 `${ENV_NAME}` 引用（每次执行时展开，改了 shell 里的 token 不需要重启）：
 
 ```jsonc
 "env": ["GH_TOKEN=${GH_TOKEN}"]
 ```
+
+**手写的连接器不再有设备码授权入口**：`cli.json` 里的 `oauth` 段仍然生效——token 照样注入 `token_env`，过期照样静默刷新——但"发起授权"需要一个带登录按钮的界面，而那个界面（原来连接器页的 CLI 页签）已经随手写表单一起移除。已授权的存量连接器会一直工作到 `refresh_token` 失效为止，之后报错会直接指出迁移路径。新接入要走插件：`~/.magic/agent_plugins/cli-<名字>/` 下放一份 `plugin.json` + `cli.json`（`connectors` 结构与这里完全相同），插件页的凭据弹窗提供设备码登录、登出和"未登录"阻塞提示。
 
 命令行侧可以用 `magic cli list` 查看已配置的连接器与展开后的工具名（`cli_<connector>_<tool>`），排查"模型为什么看不到某个工具"时最直接。
 
@@ -1331,15 +1333,9 @@ magic cli remove gh      # 删整个连接器（连同它下面的工具）
 
 **结果**：非零退出码不算失败，工具返回 `{exit_code, stdout, stderr, duration_ms}` 交给模型判断；输出超过上限（默认 32KB，连接器 `max_output_bytes` 可覆盖，硬上限 1MB）会截断并提示收窄查询；真超时返回 `exit_code: 124` 加一句建议。
 
-单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。网页「连接器 → CLI」页签里可以增删改、点卡片试跑（试跑真的会拉起子进程，但不保存）。
+单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。`cli.json` 是唯一的手写入口（与 `config.json` 同级），改完重启服务端或运行 `magic` 重新加载；排查"模型为什么看不到某个工具"先跑 `magic cli list`。
 
-```
-GET    /api/cli/connectors          列出全部（env 掩码）
-POST   /api/cli/connectors          新增（body 带 name）
-PUT    /api/cli/connectors/{name}   修改
-DELETE /api/cli/connectors/{name}   删除
-POST   /api/cli/test                试跑一次（不保存）
-```
+> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/agent_plugins/cli-gh/` 之类），工具名带插件前缀 `ap_cli-gh_cli_gh_pr_list`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
 
 ### 15.4 插件（Agent Plugins）
 

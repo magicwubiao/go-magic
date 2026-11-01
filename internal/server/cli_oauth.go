@@ -11,10 +11,13 @@ package server
 //   - token 不落 config.json（那里只放端点与 client_id）；
 //   - 刷新在 EnsureAccessToken 里静默完成，CLI 侧无感。
 //
-// 请求：
-//   POST /api/cli/connectors/{name}/oauth/start    起设备码流程（幂等）
-//   GET  /api/cli/connectors/{name}/oauth/status   轮询状态（含短码/授权 URL）
-//   POST /api/cli/connectors/{name}/oauth/signout  登出（删 token）
+// 请求（只有插件内的 CLI 连接器暴露了这套接口）：
+//   POST /api/agent-plugins/{plugin}/cli/{name}/oauth/start    起设备码流程（幂等）
+//   GET  /api/agent-plugins/{plugin}/cli/{name}/oauth/status   轮询状态（含短码/授权 URL）
+//   POST /api/agent-plugins/{plugin}/cli/{name}/oauth/signout  登出（删 token）
+//
+// 手写的全局连接器（cli.json 的 oauth 段）已经没有 HTTP 入口：token 还能刷新
+// 就继续用，续不上时由 annotateCLIOAuthError 给出迁移指引。
 
 import (
 	"fmt"
@@ -24,7 +27,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/mcp"
-	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // cliOAuthKeyPrefix 是 CLI 连接器在共享 token 存储里的命名空间。
@@ -51,7 +53,29 @@ func (s cliOAuthSource) EnsureAccessToken() (string, error) {
 	if mgr == nil {
 		return "", fmt.Errorf("OAuth is not configured on this server")
 	}
-	return mgr.EnsureAccessToken(s.key)
+	token, err := mgr.EnsureAccessToken(s.key)
+	if err != nil {
+		return "", annotateCLIOAuthError(s.key, err)
+	}
+	return token, nil
+}
+
+// annotateCLIOAuthError 给"手写的全局连接器"的取 token 失败补上迁移指引。
+//
+// 背景：连接器页的 CLI 页签连同 /api/cli/connectors/{name}/oauth/* 一起移除了。
+// 手写连接器（cli.json 里的 oauth 段）在 token 还能刷新时照常工作，但一旦
+// 续不上，底层只会说"去 UI 里完成授权"——而那个入口已经不存在。这段文案
+// 是用户唯一能看到的线索，所以必须自己指出下一步。
+//
+// 插件内的连接器（键 cliconn:agentplugin/<plugin>/<connector>）有完整的
+// 凭据弹窗与"去登录"按钮，原样返回，不加噪音。
+func annotateCLIOAuthError(key string, err error) error {
+	if _, _, isPlugin := agentplugin.ParseCLIOAuthKey(key); isPlugin {
+		return err
+	}
+	return fmt.Errorf("%w; note: hand-written CLI connectors have no sign-in entry in the Web UI "+
+		"any more — either move this connector into an agent plugin (cli.json) and sign in from its "+
+		"credential dialog, or provide the token through the environment variable named by token_env", err)
 }
 
 // pluginCLITokenSource 是 agentplugin.CLITokenSourceFactory 的 server 侧实现。
@@ -88,24 +112,10 @@ func (s *Server) withCLIOAuthTokenSource(conns map[string]cliconn.Connector) {
 	}
 }
 
-// handleCLIConnectorOAuth 处理全局连接器级 OAuth 的三个动作。
-func (s *Server) handleCLIConnectorOAuth(w http.ResponseWriter, r *http.Request, name, action string) {
-	conn, ok := s.cliConnectorConfigs()[name]
-	if !ok {
-		jsonError(w, http.StatusNotFound, fmt.Sprintf("CLI connector %q not found", name))
-		return
-	}
-	s.serveCLIOAuth(w, r, cliOAuthKey(name), conn.OAuth, action, func() {
-		// 登出后立刻重同步：下次调用会拿到 auth 类错误，而不是带着旧 token 重试。
-		s.applyCLIConnectors()
-		log.Infof("[CLI] signed out OAuth token for %q", name)
-	})
-}
-
-// serveCLIOAuth 是设备码流程的唯一实现，全局连接器与插件内连接器共用。
+// serveCLIOAuth 是设备码流程的唯一实现，由插件的 OAuth handler 调用。
 //
 // key 决定 token 落在哪（命名空间由调用方拼好）；onSignout 用于登出后的
-// 宿主侧收尾（重同步连接器 / 刷新插件工具），nil 表示无需额外动作。
+// 宿主侧收尾（刷新插件工具），nil 表示无需额外动作。
 func (s *Server) serveCLIOAuth(w http.ResponseWriter, r *http.Request, key string, spec *cliconn.OAuthSpec, action string, onSignout func()) {
 	mgr := s.cliOAuthManager()
 	if mgr == nil {

@@ -480,6 +480,9 @@
           <span class="ap-section-title">{{ t('agentplugins.cliCatalogTitle') }}</span>
           <n-text depth="3" style="font-size: 12px;">{{ t('agentplugins.cliCatalogSubtitle') }}</n-text>
         </div>
+        <n-text depth="3" style="font-size: 12px; display: block; margin: 0 0 10px;">
+          {{ t('agentplugins.cliCatalogCustomHint') }}
+        </n-text>
         <CatalogPackCards kind="cli" @installed="onCatalogInstalled" />
       </div>
       <!-- 凭据授权弹窗 -->

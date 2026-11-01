@@ -1264,7 +1264,7 @@ magic acp disconnect helper
 
 ### 15.3 CLI Connectors
 
-Plenty of tools only ship a command line and no MCP server (`gh`, `kubectl`, `ffmpeg`, in-house ops scripts). Declare one as a "CLI connector" and each subcommand becomes a tool named `cli_<connector>_<tool>` the model can call.
+Plenty of tools only ship a command line and no MCP server (`gh`, `aws`, `ffmpeg`, in-house ops scripts). Declare one as a "CLI connector" and each subcommand becomes a tool named `cli_<connector>_<tool>` the model can call. Compared with the built-in shell it buys exactly three things: **the model never gets a shell** (argv is passed straight to exec), **read-only calls skip approval**, and **credentials only live in the child process environment**.
 
 Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). The legacy inline `cli` section in `config.json` is still read and migrated automatically on first save. The file keeps the same shape as that section:
 
@@ -1297,17 +1297,19 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
 }
 ```
 
-**The low-friction entry — "quick import"**: in the Connectors → CLI add dialog, paste a full command (`gh pr list --repo owner/repo --limit 20 --json`) and the backend turns it into a tool draft — first word is the command, subcommands form the tool name (`pr_list`), value-taking options become parameters (type inferred from the example value), standalone switch options become boolean conditional parameters. The draft lands in the form for review/tweaks; no need to write templates by hand. Backed by `POST /api/cli/parse` (stateless, nothing persisted).
+**There is no hand-written form in the Web UI any more**: the Connectors page is MCP-only and CLI apps are installed from the Plugins page. Custom connectors take one of two paths — `magic cli add`, or editing `cli.json` directly. The form was removed because maintaining the same thing in two places (plugin catalog vs. hand-written form) always drifts, and anyone willing to write argument templates is already comfortable in a terminal.
 
-**Even simpler: the app catalog.** Connectors → CLI → App catalog ships a set of curated entries (docker, git, kubectl, helm, jq, yq, ripgrep, the major cloud CLIs, ffmpeg, and more — the cards are the source of truth). Each card checks whether the command is already on this machine (and shows the version, e.g. `git version 2.43.0`): if it is, fill in the token (when required) and click "Add & enable"; if not, the card shows install commands for your platform (winget / brew / apt) — copy, run, then click "Re-check". The server never runs an installer itself. Every entry also ships a raw escape-hatch tool (`cli_<name>_raw`): declared tools cover the high-frequency read-only surface (approval-free), while everything else — write operations, long-tail subcommands — goes through raw with a confirmation on every call.
+**The catalog is deliberately short: eight entries.** Plugins → CLI Apps ships `docker`, `gh`, `aws`, `aliyun`, `tccli`, `wrangler`, `vercel` and `supabase`. The inclusion rule is one line: **the credential has to stay in the child process environment, or the service only exists as a CLI**. `git`, `kubectl`, `helm`, `jq`, `yq`, `rg`, `ffmpeg` and `yt-dlp` used to be listed and were removed wholesale — the model can already run them through the built-in shell, and each installed entry adds 2-5 tool definitions to the tool list, which costs context. Cards detect whether the command is already on this machine (and show its version) and print the platform install command when it is missing; **the server never runs an installer**. Every entry also ships a raw escape-hatch tool (`cli_<name>_raw`): declared tools cover the high-frequency read-only surface (approval-free), everything else goes through raw with a confirmation on every call.
 
-After installing, the entry is **self-checked on the spot**: besides the version, its readiness command runs (`gh auth status`, `docker info`, `kubectl config current-context`, `aws sts get-caller-identity`) and the dialog shows "Ready / Not ready + reason". When not ready it also shows the sign-in command (`gh auth login`, `aws configure`) — those are interactive (browser callback, region prompt, MFA) and must run in your own terminal; the server only displays the command and offers an "I have signed in, check again" button. Backed by `POST /api/cli/catalog/check`.
+**Two ways to sign in.** "One-click login" makes the server run the login command the entry declares (`wrangler login`, `vercel login`) and then performs a readiness check (`gh auth status`, `aws sts get-caller-identity`) to echo the account back. Entries without a runnable login command (`aws configure`, `gh auth login` — browser callback, region prompt, MFA) only display the command, for you to run in your own terminal. For CLIs that accept nothing but an environment-variable token there is also the **device-code OAuth** path: the token is requested by this program, stored in `oauth_tokens.json` (0600), injected into the variable named by `token_env` at execution time, refreshed silently, and never written to `config.json`.
 
 `env` values support `${ENV_NAME}` references too (expanded per execution, so rotating the token in your shell needs no restart):
 
 ```jsonc
 "env": ["GH_TOKEN=${GH_TOKEN}"]
 ```
+
+**Hand-written connectors no longer have a device-code sign-in entry.** The `oauth` block in `cli.json` still works — the token is still injected into `token_env` and still refreshed silently — but *starting* an authorization needs a screen with a sign-in button, and that screen (the old CLI tab on the Connectors page) was removed together with the form. Connectors that are already authorized keep working until their `refresh_token` expires; the error after that points at the migration path. New setups belong in a plugin: drop `plugin.json` + `cli.json` into `~/.magic/agent_plugins/cli-<name>/` (the `connectors` block is identical to the one here) and the plugin's credential dialog offers device-code sign-in, sign-out and a "not signed in" blocker.
 
 On the command line, `magic cli list` shows the configured connectors and the expanded tool names (`cli_<connector>_<tool>`) — the fastest way to answer "why can't the model see this tool".
 
@@ -1353,15 +1355,9 @@ Two template forms:
 
 **Results**: a non-zero exit code is not a failure — the tool returns `{exit_code, stdout, stderr, duration_ms}` and lets the model judge. Output above the limit (default 32KB, overridable via connector `max_output_bytes`, hard cap 1MB) is truncated with a hint; a real timeout returns `exit_code: 124` plus advice. Per-tool timeout is capped at 300s (matching `MaxTimeout` in the tool layer).
 
-The Connectors → CLI tab lets you add/edit/delete and run a dry run (it really spawns the process, but saves nothing).
+`cli.json` is the only hand-written entry point (next to `config.json`); restart the server or run `magic` to reload it, and start with `magic cli list` when debugging "why can't the model see this tool".
 
-```
-GET    /api/cli/connectors          list all (env masked)
-POST   /api/cli/connectors          create (body includes name)
-PUT    /api/cli/connectors/{name}   update
-DELETE /api/cli/connectors/{name}   delete
-POST   /api/cli/test                dry run (not saved)
-```
+> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/agent_plugins/cli-gh/` and friends). Their tools carry the plugin prefix — `ap_cli-gh_cli_gh_pr_list` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
 
 ### 15.4 Plugins (Agent Plugins)
 

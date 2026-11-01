@@ -49,69 +49,7 @@ func TestEntriesAreValidConnectors(t *testing.T) {
 	}
 }
 
-// git 条目只放只读子命令：目录里出现一条会改仓库状态的工具，用户点"添加"
-// 时是看不见的（它默认免审批，因为 read_only）。
-func TestGitEntryIsReadOnly(t *testing.T) {
-	e, ok := Get("git")
-	if !ok {
-		t.Fatal("git entry not found")
-	}
-	if e.Connector.Command != "git" {
-		t.Fatalf("command = %q, want git", e.Connector.Command)
-	}
-	for _, spec := range e.Connector.Tools {
-		if !spec.ReadOnly {
-			t.Errorf("git tool %q must stay read-only (write ops belong to the user's own connector)", spec.Name)
-		}
-	}
-}
-
-// 仓库位置写成可省略的 -C {{repo}}：{{repo}} 为空时整条占位符被省略，
-// 紧跟的 -C 由 ExpandArgs 的选项名回退一起收走，命令退化成"在当前目录执行"。
-// 这条断言保护的是"目录里的写法约定"和"展开语义"之间的耦合——悬空的 -C
-// 会让每一次 git 调用都直接报错。
-func TestGitRepoParamIsOptional(t *testing.T) {
-	e, ok := Get("git")
-	if !ok {
-		t.Fatal("git entry not found")
-	}
-	var status cliconn.ToolSpec
-	for _, spec := range e.Connector.Tools {
-		if spec.Name == "status" {
-			status = spec
-		}
-	}
-	if status.Name == "" {
-		t.Fatal("git status tool not found")
-	}
-
-	r, err := cliconn.ResolveParams(status, map[string]any{})
-	if err != nil {
-		t.Fatalf("ResolveParams: %v", err)
-	}
-	argv, err := cliconn.ExpandArgs(e.Connector.Args, status, r, nil)
-	if err != nil {
-		t.Fatalf("ExpandArgs: %v", err)
-	}
-	if got, want := strings.Join(argv, " "), "status --short --branch"; got != want {
-		t.Fatalf("argv = %q, want %q", got, want)
-	}
-
-	// 给了仓库路径时 -C 必须回到原位。
-	r2, err := cliconn.ResolveParams(status, map[string]any{"repo": "/srv/repo"})
-	if err != nil {
-		t.Fatalf("ResolveParams: %v", err)
-	}
-	argv2, err := cliconn.ExpandArgs(e.Connector.Args, status, r2, nil)
-	if err != nil {
-		t.Fatalf("ExpandArgs: %v", err)
-	}
-	if got, want := strings.Join(argv2, " "), "-C /srv/repo status --short --branch"; got != want {
-		t.Fatalf("argv = %q, want %q", got, want)
-	}
-}
-
-// gh 条目与 git 同一条纪律：目录里的声明式工具只放只读子命令；长尾走
+// gh 条目与目录里其他条目同一条纪律：声明式工具只放只读子命令；长尾走
 // Raw 逃生工具（恒审批），声明式免审批面不能被写操作污染。
 func TestGHEntryIsReadOnlyWithRaw(t *testing.T) {
 	e, ok := Get("gh")
@@ -172,8 +110,8 @@ func TestCatalogEntriesShipRaw(t *testing.T) {
 }
 
 func TestGetAndSort(t *testing.T) {
-	if _, ok := Get("jq"); !ok {
-		t.Fatal("jq entry not found")
+	if _, ok := Get("gh"); !ok {
+		t.Fatal("gh entry not found")
 	}
 	if _, ok := Get("nope"); ok {
 		t.Fatal("unknown id must not resolve")
@@ -185,6 +123,55 @@ func TestGetAndSort(t *testing.T) {
 		ci := categorySort(all[i].Category)
 		if pi > ci {
 			t.Fatalf("categories are not sorted: %s before %s", all[i-1].Category, all[i].Category)
+		}
+	}
+}
+
+// readOnlySnapshot 钉死目录里每一个工具的「只读 / 可写」声明。
+//
+// 存在的理由：ReadOnly 是唯一能把一个 CLI 工具变成**免审批**的开关
+// （internal/cliconn 的 ApprovalRequired 直接吃这个字段），而目录条目全是
+// 手写参数模板。谁给 docker 加一条 `exec` 又顺手抄了上面的 read_only: true，
+// 就得到一条静默免审批的任意命令——编译过得去，别的单测也不会响。
+// 把清单固化在这里，任何新增或翻转都得先改这个常量，也就必须在 review 里
+// 被看见。改它不是"修测试"，是"确认这个工具真的只读"。
+const readOnlySnapshot = `docker: ps=ro images=ro inspect=ro logs=ro
+gh: pr_list=ro issue_list=ro run_list=ro repo_view=ro
+aws: whoami=ro s3_ls=ro ec2_instances=ro
+aliyun: whoami=ro ecs_instances=ro oss_ls=ro
+wrangler: whoami=ro deployments=ro kv_namespaces=ro
+supabase: projects=ro orgs=ro db_diff=ro
+tccli: cvm_instances=ro cvm_zones=ro
+vercel: whoami=ro projects=ro deployments=ro`
+
+func TestReadOnlyToolSnapshot(t *testing.T) {
+	var lines []string
+	for _, e := range All() {
+		parts := make([]string, 0, len(e.Connector.Tools))
+		for _, sp := range e.Connector.Tools {
+			state := "rw"
+			if sp.ReadOnly {
+				state = "ro"
+			}
+			parts = append(parts, sp.Name+"="+state)
+		}
+		lines = append(lines, e.ID+": "+strings.Join(parts, " "))
+	}
+	got := strings.Join(lines, "\n")
+	if got != readOnlySnapshot {
+		t.Fatalf("目录的只读声明变了。\n"+
+			"ro = 免审批，rw = 每次审批。逐条确认新增/翻转的工具真的只读，\n"+
+			"确认后把 readOnlySnapshot 整体替换成下面的内容：\n\n%s", got)
+	}
+	// 写操作必须留在 raw（恒审批），不能靠 read_only 混进免审批面。
+	for _, e := range All() {
+		for _, sp := range e.Connector.Tools {
+			if sp.ReadOnly {
+				continue
+			}
+			if !e.Connector.Raw {
+				t.Errorf("%s/%s 是写操作，但连接器没开 Raw：它只能走审批，而目录条目必须留 raw 逃生口", e.ID, sp.Name)
+			}
 		}
 	}
 }

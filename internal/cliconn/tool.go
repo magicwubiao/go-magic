@@ -54,6 +54,12 @@ func (t *Tool) Description() string {
 	if shape := t.commandShape(); shape != "" {
 		parts = append(parts, "Runs: "+shape)
 	}
+	// 免审批的声明式工具要明说"优先用它"，否则模型同时看到 execute_command
+	// 和 cli_* 时，没有任何信号告诉它 shell 那条路要过审批、也没有凭据注入。
+	// 需要审批的工具不加这句：那时两条路的代价一样，拼上去只是白占上下文。
+	if !t.requireApproval {
+		parts = append(parts, "Read-only and pre-approved: prefer this over running the same command in a shell.")
+	}
 	return strings.Join(parts, "\n")
 }
 

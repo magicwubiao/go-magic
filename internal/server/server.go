@@ -1756,17 +1756,12 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/mcp/health", withCORS(requireAuth(s.handleMCPHealth)))
 	mux.HandleFunc("/api/mcp/catalog", withCORS(requireAuth(s.handleMCPCatalog)))
 
-	// CLI 连接器（把外部命令行程序暴露成工具）
-	mux.HandleFunc("/api/cli/connectors", withCORS(requireAuth(s.handleCLIConnectors)))
-	mux.HandleFunc("/api/cli/connectors/", withCORS(requireAuth(s.handleCLIConnectorByID)))
-	mux.HandleFunc("/api/cli/catalog", withCORS(requireAuth(s.handleCLICatalog)))
-	mux.HandleFunc("/api/cli/catalog/check", withCORS(requireAuth(s.handleCLICatalogCheck)))
-	mux.HandleFunc("/api/cli/catalog/install", withCORS(requireAuth(s.handleCLICatalogInstall)))
-	// 委托登录：服务端代跑 CLI 自己的 login 命令（只接受目录 id）。
+	// CLI 连接器：没有 HTTP 管理面了——新增/编辑走目录卡片（Agent Plugin）
+	// 或配置文件里的 cli 段，见 cli_config.go 的说明。
+	// 委托登录仍由面板外的"安装/登录"按钮触发：服务端代跑 CLI 自己的
+	// login 命令（只接受目录 id）。
 	mux.HandleFunc("/api/cli/catalog/login", withCORS(requireAuth(s.handleCLILoginStart)))
 	mux.HandleFunc("/api/cli/catalog/login/", withCORS(requireAuth(s.handleCLILoginByID)))
-	mux.HandleFunc("/api/cli/parse", withCORS(requireAuth(s.handleCLIParse)))
-	mux.HandleFunc("/api/cli/test", withCORS(requireAuth(s.handleCLITest)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))

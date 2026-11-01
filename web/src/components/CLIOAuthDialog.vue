@@ -59,11 +59,8 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NButton, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
-  getCLIConnectorOAuth,
   getPluginCLIOAuth,
-  signOutCLIConnectorOAuth,
   signOutPluginCLIOAuth,
-  startCLIConnectorOAuth,
   startPluginCLIOAuth,
   type CLIDeviceCode,
   type CLIOAuthStatus,
@@ -81,8 +78,8 @@ import {
 const props = defineProps<{
   show: boolean
   name: string
-  /** 归属插件名；空 = 全局连接器 */
-  plugin?: string
+  /** 归属插件名：token 按 cliconn:agentplugin/<plugin>/<connector> 分开存 */
+  plugin: string
   displayName?: string
   /** 展示用：token 将被注入哪个环境变量（来自连接器配置） */
   tokenEnv?: string
@@ -117,9 +114,7 @@ function startPolling() {
 
 async function poll() {
   try {
-    const res = props.plugin
-      ? await getPluginCLIOAuth(props.plugin, props.name)
-      : await getCLIConnectorOAuth(props.name)
+    const res = await getPluginCLIOAuth(props.plugin, props.name)
     status.value = res.status
     if (res.status.state === 'authorized') {
       stopTimer()
@@ -141,9 +136,7 @@ async function start() {
   status.value = null
   stopTimer()
   try {
-    const res = props.plugin
-      ? await startPluginCLIOAuth(props.plugin, props.name)
-      : await startCLIConnectorOAuth(props.name)
+    const res = await startPluginCLIOAuth(props.plugin, props.name)
     status.value = res.status
     if (res.already_authorized) {
       message.success(t('cli.oauthAuthorized'))
@@ -160,8 +153,7 @@ async function start() {
 
 async function signOut() {
   try {
-    if (props.plugin) await signOutPluginCLIOAuth(props.plugin, props.name)
-    else await signOutCLIConnectorOAuth(props.name)
+    await signOutPluginCLIOAuth(props.plugin, props.name)
     status.value = null
     message.success(t('cli.oauthSignedOut'))
     emit('done', { authorized: false })

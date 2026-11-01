@@ -1,8 +1,16 @@
-// Package clicatalog 是内置的「CLI 应用目录」—— 一组精选的常用命令行工具，
-// 供 Web UI 的「从目录添加」一键安装。
+// Package clicatalog 是内置的「CLI 应用目录」—— 一组精选的命令行工具，
+// 供 Web UI 的「CLI 应用」卡片一键安装成插件。
 //
 // 为什么要它：手写连接器要求用户知道可执行文件名、子命令、参数模板，
 // 而目录把这些知识固化下来。用户点一个卡片、填一个 token，就能在对话里用。
+//
+// **收录标准（重要，别再往里加"常用工具"）**：目录只放
+// `execute_command` 拿不到的东西——需要代管/隔离凭据的跨服务查询
+// （gh、aws、aliyun、tccli、wrangler、vercel、supabase），外加一个高频的
+// 本地容器视角（docker）。git、kubectl、helm、jq、yq、rg、ffmpeg、yt-dlp
+// 这类"本机只读工具"曾经在目录里，已整体移除：模型用内置 shell 就能跑，
+// 收进目录的代价是每装一条往工具列表塞 2-5 个定义，直接吃掉上下文。
+// 判断口诀：**凭据要不要留在进程环境里？不要 → 走 shell，不进目录。**
 //
 // 原则（与 pkg/connectors 保持一致）：
 //   - 只收录有稳定 CLI 的官方工具，命令与参数按各自文档写；
@@ -113,9 +121,7 @@ type Category struct {
 
 var categories = []Category{
 	{ID: "dev", Label: "Development", Sort: 1},
-	{ID: "data", Label: "Data", Sort: 2},
-	{ID: "cloud", Label: "Cloud", Sort: 3},
-	{ID: "media", Label: "Media", Sort: 4},
+	{ID: "cloud", Label: "Cloud", Sort: 2},
 }
 
 // Categories 返回全部分类。
@@ -123,19 +129,11 @@ func Categories() []Category { return categories }
 
 var entries = []Entry{
 	dockerEntry,
-	gitEntry,
-	kubectlEntry,
-	helmEntry,
-	jqEntry,
-	yqEntry,
-	rgEntry,
 	awsEntry,
 	aliyunEntry,
 	tccliEntry,
 	wranglerEntry,
 	vercelEntry,
-	ytdlpEntry,
-	ffmpegEntry,
 	supabaseEntry,
 	ghEntry,
 }
@@ -230,212 +228,6 @@ var dockerEntry = Entry{
 	Tags:    []string{"container"},
 }
 
-// gitEntry 只暴露只读子命令：status / log / diff / show / branch。
-//
-// 不收录 commit / push / reset —— 声明式的免审批面必须保持纯只读
-// （目录条目的定位是"让模型看见仓库状态"）。写操作不靠用户手写连接器
-// 了：raw 逃生工具可以跑任意 git 子命令，但每次调用都要人工确认。
-//
-// 仓库位置走 -C {{repo}} 而不是 Connector.WorkingDir：同一个连接器要能查
-// 多个仓库，而 WorkingDir 是连接器级、改一次要重新保存配置。{{repo}} 为空时
-// "{{repo}}" 整条被省略，紧跟的 -C 由 ExpandArgs 的选项名回退一起收走，
-// 命令退化成"在服务进程的当前目录里执行"。
-var gitEntry = Entry{
-	ID:          "git",
-	Name:        "Git",
-	Description: "Inspect a repository: working tree status, recent commits, diffs and branches.",
-	Category:    "dev",
-	DefaultName: "git",
-	Connector: cliconn.Connector{
-		Command: "git",
-		// 认证不在这个连接器里管：本地仓库不需要，远端仓库用机器上已有的
-		// SSH agent / credential helper。这里写清楚是为了让模型不要建议
-		// 用户去"填 token"。
-		Description: "Git CLI (uses the credentials already configured on this machine: SSH agent or credential helper; local repositories need none)",
-		// 写操作（commit / push / reset……）走 raw，每次审批。
-		Raw: true,
-		// 大仓库的 log --stat / diff 很容易超过默认 32KB。
-		MaxOutputBytes: 64 << 10,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "status",
-				Description: "Show the current branch and the list of changed, staged and untracked files.",
-				Args:        []string{"-C", "{{repo}}", "status", "--short", "--branch"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "repository directory; omit to use the current directory"},
-				},
-			},
-			{
-				Name:        "log",
-				Description: "List recent commits as 'hash date author subject', newest first.",
-				Args: []string{"-C", "{{repo}}", "log", "--max-count", "{{limit}}",
-					"--date=short", "--pretty=format:%h %ad %an %s", "{{rev}}"},
-				ReadOnly: true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "repository directory; omit to use the current directory"},
-					{Name: "limit", Type: "integer", Default: 20, Description: "how many commits to return"},
-					{Name: "rev", Default: "HEAD", Description: "branch, tag or commit to start from"},
-				},
-			},
-			{
-				Name:        "diff",
-				Description: "Show the unified diff of uncommitted changes, or between a revision and the working tree. Use status first to see which paths changed.",
-				Args:        []string{"-C", "{{repo}}", "diff", "{{rev}}", "--", "{{path}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "repository directory; omit to use the current directory"},
-					{Name: "rev", Description: "revision to diff against; omit to compare the index and working tree"},
-					{Name: "path", Description: "limit the diff to one file or directory"},
-				},
-			},
-			{
-				Name:        "show",
-				Description: "Show one commit: message, changed files and their diff.",
-				Args:        []string{"-C", "{{repo}}", "show", "--stat", "{{rev}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "repository directory; omit to use the current directory"},
-					{Name: "rev", Default: "HEAD", Description: "commit-ish to show"},
-				},
-			},
-			{
-				Name:        "branches",
-				Description: "List local and remote branches with their last commit.",
-				Args:        []string{"-C", "{{repo}}", "branch", "--all", "--no-color", "--verbose"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "repository directory; omit to use the current directory"},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id Git.Git -e"},
-		"darwin":  {"brew install git", "xcode-select --install"},
-		"linux":   {"sudo apt install git", "sudo dnf install git"},
-	},
-	Detect:  []string{"--version"},
-	DocsURL: "https://git-scm.com/docs",
-	Tags:    []string{"vcs", "diff", "commit"},
-}
-
-var kubectlEntry = Entry{
-	ID:          "kubectl",
-	Name:        "kubectl",
-	Description: "Query pods and read logs from a Kubernetes cluster.",
-	Category:    "dev",
-	DefaultName: "kubectl",
-	Connector: cliconn.Connector{
-		Command:     "kubectl",
-		Description: "Kubernetes CLI",
-		// apply / rollout / scale 等写操作走 raw（恒审批）。
-		Raw: true,
-		// describe 与 get 的输出经常超过默认 32KB。
-		MaxOutputBytes: 64 << 10,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "get",
-				Description: "List resources of a kind (pods, deployments, services, nodes, ...).",
-				Args:        []string{"get", "{{kind}}", "-n", "{{namespace}}", "{{?all_namespaces}}--all-namespaces"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "kind", Description: "resource kind, e.g. pods / deployments / services", Required: true},
-					{Name: "namespace", Default: "default"},
-					{Name: "all_namespaces", Type: "boolean", Description: "query every namespace"},
-				},
-			},
-			{
-				Name:        "get_pods",
-				Description: "List pods in a namespace (or all namespaces).",
-				Args:        []string{"get", "pods", "-n", "{{namespace}}", "{{?all_namespaces}}--all-namespaces"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "namespace", Default: "default"},
-					{Name: "all_namespaces", Type: "boolean", Description: "query every namespace"},
-				},
-			},
-			{
-				Name:        "describe",
-				Description: "Describe one resource: events, status, container states.",
-				Args:        []string{"describe", "{{kind}}", "{{name}}", "-n", "{{namespace}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "kind", Description: "pod / deployment / service", Required: true},
-					{Name: "name", Required: true},
-					{Name: "namespace", Default: "default"},
-				},
-			},
-			{
-				Name:        "logs",
-				Description: "Read recent logs of a pod.",
-				Args:        []string{"logs", "{{pod}}", "-n", "{{namespace}}", "--tail", "{{tail}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "pod", Required: true},
-					{Name: "namespace", Default: "default"},
-					{Name: "tail", Type: "integer", Default: 200},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id Kubernetes.kubectl -e"},
-		"darwin":  {"brew install kubectl"},
-		"linux":   {"sudo snap install kubectl --classic"},
-	},
-	Detect: []string{"version", "--client"},
-	// 有 context 才说明这台机器真的指向了某个集群（本地判断，不连网）。
-	Check:   []string{"config", "current-context"},
-	DocsURL: "https://kubernetes.io/docs/reference/kubectl/",
-	Tags:    []string{"k8s", "cluster"},
-}
-
-var jqEntry = Entry{
-	ID:          "jq",
-	Name:        "jq",
-	Description: "Filter and reshape JSON without writing code.",
-	Category:    "data",
-	DefaultName: "jq",
-	Connector: cliconn.Connector{
-		Command:     "jq",
-		Description: "jq JSON processor",
-		// -n / --slurpfile / @base64 等偏门用法走 raw。
-		Raw: true,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "query",
-				Description: "Apply a jq filter to a JSON document passed on stdin.",
-				Args:        []string{"{{filter}}"},
-				StdinParam:  "input",
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "filter", Description: "jq filter, e.g. .items[] | .name", Required: true},
-					{Name: "input", Description: "JSON document to process", Required: true},
-				},
-			},
-			{
-				Name:        "keys",
-				Description: "List the top-level keys of a JSON object.",
-				Args:        []string{"keys"},
-				StdinParam:  "input",
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "input", Description: "JSON document", Required: true},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id jqlang.jq -e"},
-		"darwin":  {"brew install jq"},
-		"linux":   {"sudo apt install jq", "sudo dnf install jq"},
-	},
-	Detect:  []string{"--version"},
-	DocsURL: "https://jqlang.github.io/jq/manual/",
-	Tags:    []string{"json"},
-}
-
 var awsEntry = Entry{
 	ID:          "aws",
 	Name:        "AWS CLI",
@@ -494,152 +286,8 @@ var awsEntry = Entry{
 	Tags:    []string{"s3", "ec2"},
 }
 
-// ===== 以下为扩充批次：海内外常用工具 =====
-
-var helmEntry = Entry{
-	ID:          "helm",
-	Name:        "Helm",
-	Description: "List releases and read their values and history on a Kubernetes cluster.",
-	Category:    "dev",
-	DefaultName: "helm",
-	Connector: cliconn.Connector{
-		Command:     "helm",
-		Description: "Helm package manager for Kubernetes",
-		// install / upgrade / rollback 等写操作走 raw（恒审批）。
-		Raw: true,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "list",
-				Description: "List releases in a namespace (or all namespaces).",
-				Args:        []string{"list", "-n", "{{namespace}}", "{{?all}}--all-namespaces"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "namespace", Default: "default"},
-					{Name: "all", Type: "boolean", Description: "list every namespace"},
-				},
-			},
-			{
-				Name:        "values",
-				Description: "Show the (user-supplied) values of a release.",
-				Args:        []string{"get", "values", "{{release}}", "-n", "{{namespace}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "release", Required: true},
-					{Name: "namespace", Default: "default"},
-				},
-			},
-			{
-				Name:        "history",
-				Description: "Show revision history of a release.",
-				Args:        []string{"history", "{{release}}", "-n", "{{namespace}}", "--max", "{{limit}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "release", Required: true},
-					{Name: "namespace", Default: "default"},
-					{Name: "limit", Type: "integer", Default: 10},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id Helm.Helm -e"},
-		"darwin":  {"brew install helm"},
-		"linux":   {"sudo snap install helm --classic"},
-	},
-	Detect:  []string{"version", "--short"},
-	Check:   []string{"list", "-A"},
-	DocsURL: "https://helm.sh/docs/",
-	Tags:    []string{"k8s", "charts"},
-}
-
-var yqEntry = Entry{
-	ID:          "yq",
-	Name:        "yq",
-	Description: "Filter and reshape YAML (and JSON) documents without writing code.",
-	Category:    "data",
-	DefaultName: "yq",
-	Connector: cliconn.Connector{
-		Command:     "yq",
-		Description: "yq YAML/JSON processor (mikefarah)",
-		Raw:         true,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "query",
-				Description: "Apply a yq expression to a YAML/JSON document passed on stdin.",
-				Args:        []string{"{{expression}}"},
-				StdinParam:  "input",
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "expression", Description: "yq expression, e.g. .items[].name", Required: true},
-					{Name: "input", Description: "YAML or JSON document", Required: true},
-				},
-			},
-			{
-				Name:        "to_json",
-				Description: "Convert a YAML document on stdin to JSON.",
-				Args:        []string{"-o=json"},
-				StdinParam:  "input",
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "input", Description: "YAML document", Required: true},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id MikeFarah.yq -e"},
-		"darwin":  {"brew install yq"},
-		"linux":   {"sudo snap install yq", "sudo apt install yq"},
-	},
-	Detect:  []string{"--version"},
-	DocsURL: "https://mikefarah.gitbook.io/yq/",
-	Tags:    []string{"yaml", "json"},
-}
-
-var rgEntry = Entry{
-	ID:          "rg",
-	Name:        "ripgrep",
-	Description: "Fast text search across files, respecting .gitignore.",
-	Category:    "data",
-	DefaultName: "rg",
-	Connector: cliconn.Connector{
-		Command:     "rg",
-		Description: "ripgrep recursive search",
-		// -l / --json / -t <type> / --glob 等长尾 flag 走 raw。
-		Raw: true,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "search",
-				Description: "Search a pattern under a directory; returns matching lines with numbers.",
-				Args:        []string{"-n", "--max-count", "{{max}}", "-e", "{{pattern}}", "{{path}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "pattern", Description: "regex to search", Required: true},
-					{Name: "path", Description: "file or directory; omit for current directory"},
-					{Name: "max", Type: "integer", Description: "max matches per file", Default: 20},
-				},
-			},
-			{
-				Name:        "count",
-				Description: "Count matches per file under a directory.",
-				Args:        []string{"--count-matches", "-e", "{{pattern}}", "{{path}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "pattern", Description: "regex to search", Required: true},
-					{Name: "path", Description: "file or directory; omit for current directory"},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id BurntSushi.ripgrep.MSVC -e"},
-		"darwin":  {"brew install ripgrep"},
-		"linux":   {"sudo apt install ripgrep", "sudo dnf install ripgrep"},
-	},
-	Detect:  []string{"--version"},
-	DocsURL: "https://github.com/BurntSushi/ripgrep",
-	Tags:    []string{"search", "grep"},
-}
+// ===== 云平台 CLI：本机已有凭据（aws configure / aliyun configure / tccli configure…），
+// 连接器只负责隔离调用，不代存 token =====
 
 var aliyunEntry = Entry{
 	ID:          "aliyun",
@@ -830,92 +478,6 @@ var vercelEntry = Entry{
 	Check:     []string{"whoami"},
 	DocsURL:   "https://vercel.com/docs/cli",
 	Tags:      []string{"deploy", "hosting"},
-}
-
-var ytdlpEntry = Entry{
-	ID:          "yt-dlp",
-	Name:        "yt-dlp",
-	Description: "Probe a video URL for formats and metadata, or download media.",
-	Category:    "media",
-	DefaultName: "yt-dlp",
-	Connector: cliconn.Connector{
-		Command:     "yt-dlp",
-		Description: "yt-dlp video downloader",
-		Raw:         true, // 字幕 / 播放列表 / 格式过滤等长尾走 raw（恒审批）
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:           "info",
-				Description:    "Print title, duration and available formats of a video as JSON.",
-				Args:           []string{"-J", "--no-playlist", "{{url}}"},
-				ReadOnly:       true,
-				TimeoutSeconds: 120, // 抓取远端页面，慢站可能要几十秒
-				Params: []cliconn.ParamSpec{
-					{Name: "url", Description: "video page URL", Required: true},
-				},
-			},
-			{
-				Name:           "download",
-				Description:    "Download a video to a directory. Requires approval because it writes files.",
-				Args:           []string{"--no-playlist", "-o", "{{output}}", "{{url}}"},
-				TimeoutSeconds: 300,
-				Params: []cliconn.ParamSpec{
-					{Name: "url", Description: "video page URL", Required: true},
-					{Name: "output", Description: "output path template, e.g. ~/Downloads/%(title)s.%(ext)s", Default: "%(title)s.%(ext)s"},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id yt-dlp.yt-dlp -e"},
-		"darwin":  {"brew install yt-dlp"},
-		"linux":   {"sudo apt install yt-dlp", "sudo pip install yt-dlp"},
-	},
-	Detect:  []string{"--version"},
-	DocsURL: "https://github.com/yt-dlp/yt-dlp",
-	Tags:    []string{"video", "download"},
-}
-
-var ffmpegEntry = Entry{
-	ID:          "ffmpeg",
-	Name:        "FFmpeg",
-	Description: "Convert media files and extract audio tracks locally.",
-	Category:    "media",
-	DefaultName: "ffmpeg",
-	Connector: cliconn.Connector{
-		Command:     "ffmpeg",
-		Description: "FFmpeg media converter",
-		Raw:         true, // 滤镜 / probe / 流操作等长尾走 raw（恒审批）
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:           "convert",
-				Description:    "Transcode a media file to another container/codec. Requires approval because it writes files.",
-				Args:           []string{"-y", "-i", "{{input}}", "{{output}}"},
-				TimeoutSeconds: 300,
-				Params: []cliconn.ParamSpec{
-					{Name: "input", Description: "source media file", Required: true},
-					{Name: "output", Description: "target file, e.g. out.mp4", Required: true},
-				},
-			},
-			{
-				Name:           "extract_audio",
-				Description:    "Extract the audio track of a media file into an MP3. Requires approval because it writes files.",
-				Args:           []string{"-y", "-i", "{{input}}", "-vn", "{{output}}"},
-				TimeoutSeconds: 300,
-				Params: []cliconn.ParamSpec{
-					{Name: "input", Description: "source media file", Required: true},
-					{Name: "output", Description: "target audio file, e.g. out.mp3", Required: true},
-				},
-			},
-		},
-	},
-	Install: InstallHints{
-		"windows": {"winget install --id Gyan.FFmpeg -e"},
-		"darwin":  {"brew install ffmpeg"},
-		"linux":   {"sudo apt install ffmpeg", "sudo dnf install ffmpeg"},
-	},
-	Detect:  []string{"-version"},
-	DocsURL: "https://ffmpeg.org/ffmpeg.html",
-	Tags:    []string{"audio", "video", "convert"},
 }
 
 var supabaseEntry = Entry{

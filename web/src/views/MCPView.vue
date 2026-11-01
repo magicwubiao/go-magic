@@ -1,46 +1,20 @@
 <template>
   <div>
     <!--
-      页面头：标题 + 两类连接器的切换。
+      页面头：只留 MCP。
 
-      MCP 与 CLI 的运行时机制完全不同（长连接 JSON-RPC vs 一次性子进程），
-      但对用户来说是同一件事——"把我外部的软件接进来"。分成两个页面会让
-      "连接器"这个概念在导航里出现两次，所以合成一页两个页签，各自保留
-      自己的工具栏、列表形态与弹窗。
+      CLI 连接器原来在这里有个页签（手写命令 + 参数模板），已移除：CLI 应用
+      统一走"插件"页的目录卡片，装上是插件、卸载是插件，和 MCP 连接器一样
+      走同一套生命周期，不再需要一套独立的手写表单。
     -->
     <div class="mcp-page-head">
       <div class="mcp-page-title">
         <h2>{{ t('mcp.title') }}</h2>
         <span class="mcp-page-subtitle">{{ t('mcp.subtitle') }}</span>
       </div>
-      <n-tabs
-        v-model:value="activeTab"
-        type="segment"
-        size="small"
-        class="mcp-page-tabs"
-      >
-        <n-tab name="mcp">
-          <span class="mcp-tab-label">
-            MCP
-            <n-tag size="tiny" :bordered="false" round>{{ mcpStore.servers.length }}</n-tag>
-          </span>
-        </n-tab>
-        <n-tab name="cli">
-          <span class="mcp-tab-label">
-            CLI
-            <n-tag size="tiny" :bordered="false" round>{{ cliCount }}</n-tag>
-          </span>
-        </n-tab>
-      </n-tabs>
     </div>
 
-    <!--
-      两个页签都用 v-show 而不是 v-if：
-       1. CLI 面板要在首屏就把连接器数量报给页签徽标（v-if 下徽标一直是 0，
-          直到用户点进 CLI 页签）；
-       2. 切页签时保留各自的搜索词/筛选态，回来不用重设。
-    -->
-    <div v-show="activeTab === 'mcp'">
+    <div>
     <n-spin v-if="mcpStore.loading && !mcpStore.servers.length" />
     <template v-else>
       <!--
@@ -188,9 +162,6 @@
       </n-empty>
     </template>
     </div>
-
-    <!-- CLI 页签：面板自成一体（自己的数据、自己的弹窗），父组件只收一个计数。 -->
-    <CLIConnectorsPanel v-show="activeTab === 'cli'" @count="cliCount = $event" />
 
     <!-- 详情抽屉：卡片承载"概览"，细节（工具清单/开关/调用统计）放这里，
          不再让每一行在列表里向下撑开——卡片网格一旦有行被撑高，整片就歪了。 -->
@@ -408,7 +379,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch, h } from 'vue'
 import { useMessage } from 'naive-ui'
-import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDrawer, NDrawerContent, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NSwitch, NTab, NTabs, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NDrawer, NDrawerContent, NDropdown, NEmpty, NFormItem, NIcon, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSpin, NSwitch, NTag, NText } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   AddOutline,
@@ -418,7 +389,6 @@ import {
   CopyOutline,
   LayersOutline,
 } from '@vicons/ionicons5'
-import CLIConnectorsPanel from '@/components/CLIConnectorsPanel.vue'
 import { useMCPStore } from '@/stores/mcp'
 import { getMCPOAuthStatus, getMCPToolStats, mcpErrorMessage, serverConfigToJSON, setMCPToolEnabled, signOutMCPOAuth, startMCPOAuth, testMCPServer } from '@/api/mcp'
 import type { MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
@@ -426,11 +396,6 @@ import type { MCPConfig, MCPServer, MCPToolStat } from '@/api/mcp'
 const { t } = useI18n()
 const message = useMessage()
 const mcpStore = useMCPStore()
-
-/** 页签：mcp（长连接 JSON-RPC）/ cli（一次性子进程）。 */
-const activeTab = ref<'mcp' | 'cli'>('mcp')
-/** CLI 页签的连接器数量，由面板上报（面板自己管数据，父组件不做二次拉取）。 */
-const cliCount = ref(0)
 
 const showAddModal = ref(false)
 const isEditing = ref(false)
@@ -1395,16 +1360,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.mcp-page-tabs {
-  min-width: 180px;
-}
-
-.mcp-tab-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .mcp-page-title h2 {

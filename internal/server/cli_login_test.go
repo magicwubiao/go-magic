@@ -44,13 +44,6 @@ func TestCLILoginRoutes(t *testing.T) {
 		t.Fatalf("unknown session code = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// 连接器 OAuth 子路由：未知连接器 404（说明没被当成连接器名里的斜杠）。
-	rec = httptest.NewRecorder()
-	s.handleCLIConnectorByID(rec, httptest.NewRequest(http.MethodGet,
-		"/api/cli/connectors/demo/oauth/status", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("connector oauth route code = %d body=%s", rec.Code, rec.Body.String())
-	}
 }
 
 // TestCatalogLoginExecCoverage：登记了 LoginExec 的条目必须同时有展示用的
