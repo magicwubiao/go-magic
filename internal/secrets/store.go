@@ -42,10 +42,22 @@ func NewStore(dataDir string) (*Store, error) {
 		return nil, err
 	}
 
-	// 加载现有密钥
+	// 加载现有密钥。读不懂就报错，不要用空表覆盖它（那是数据丢失）。
 	if err := s.load(); err != nil {
-		// 首次使用，生成新密钥
+		return nil, fmt.Errorf("load secrets: %w", err)
+	}
+
+	// 主密钥与 secrets.enc 分开存放。缺失时必须立刻生成并落盘：
+	// 早先的实现把"生成"推迟到 deriveKey，而 deriveKey 在文件不存在时段
+	// 直接对 nil 做 sha256 —— 所有安装共用同一个密钥，等于没加密。
+	if err := s.loadMasterKey(); err != nil {
+		return nil, fmt.Errorf("load master key: %w", err)
+	}
+	if len(s.masterKey) == 0 {
 		s.masterKey = s.generateMasterKey()
+		if err := s.saveMasterKey(); err != nil {
+			return nil, fmt.Errorf("save master key: %w", err)
+		}
 	}
 
 	return s, nil

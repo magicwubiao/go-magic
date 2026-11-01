@@ -9,17 +9,45 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/pkg/clicatalog"
 	"github.com/magicwubiao/go-magic/pkg/config"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // ManagedPlugin 封装一个已加载插件及其运行时(若有 MCP)。
 type ManagedPlugin struct {
-	Plugin   *Plugin
-	Runtime  *Runtime // MCP 运行时;无 MCP 或被禁用时为 nil
-	Disabled bool     // 是否被显式禁用(禁用时不启动 MCP、不注入 skills/tools)
+	Plugin  *Plugin
+	Runtime *Runtime // MCP 运行时;无 MCP、被禁用或清单被拒时为 nil
+	// Disabled 表示被用户显式禁用（禁用时不启动 MCP、不注入 skills/tools）。
+	Disabled bool
+
+	// DirName 是插件在扫描目录下的目录名。
+	//
+	// 规范允许目录名与 manifest.name 不同，而两类操作用的是不同的"名字"：
+	//   - 目录操作（卸载、InstalledDir、PLUGIN_DATA）只能按**目录名**；
+	//   - 状态/凭据/OAuth token/禁用列表只能按 **manifest.name**。
+	// 两个名字都显式记下来，任何一处需要另一个时不必再从 Root 反推
+	// （反推失败过一次：清单被拒的插件 Root 为空，卸载直接 404）。
+	DirName string
+
+	// Rejected 表示清单致命失败：插件不可用，但必须在列表里可见、可卸载。
+	// 早先这类插件被 LoadAll 直接丢弃，用户看到的是"装不上（already exists）、
+	// 列表里没有、也点不到卸载"的死锁。
+	Rejected bool
+	// LoadError 是连目录都读不了时的错误（Root 都解析不出来）。
+	LoadError string
+}
+
+// Name 返回插件的稳定标识：优先 manifest.name，缺失时退回目录名。
+func (mp *ManagedPlugin) Name() string {
+	if mp == nil {
+		return ""
+	}
+	if mp.Plugin != nil && mp.Plugin.Manifest != nil && mp.Plugin.Manifest.Name != "" {
+		return mp.Plugin.Manifest.Name
+	}
+	return mp.DirName
 }
 
 // NewManager 创建一个扫描指定根目录列表的 Manager。
@@ -47,6 +75,9 @@ func EnsureDefaultScanDir() error {
 // 发现规则:每个扫描根的直接子目录,若含常规 plugin.json 则视为一个插件。
 // 被禁用的插件仍会被加载(以便在 UI 中展示),但其 Runtime 为 nil,
 // 调用方应据此跳过 StartAll / skills 注入 / tools 注入。
+// 清单致命失败的插件**同样保留**在结果里（Rejected=true）：不保留的话
+// 用户在列表里看不到它，也就没有卸载入口，而目录还占着名字，重装只会
+// 得到 "already exists" —— 一个无法自解的死锁。
 // 单个插件致命失败不阻塞其他插件(插件级失败隔离)。
 func (m *Manager) LoadAll() map[string]*ManagedPlugin {
 	result := make(map[string]*ManagedPlugin)
@@ -62,22 +93,44 @@ func (m *Manager) LoadAll() map[string]*ManagedPlugin {
 			if !entry.IsDir() {
 				continue
 			}
+			// 以 "." 开头的目录是本包自己的内部目录（安装/升级的 staging、
+			// 旧版本备份），不是插件。跳过它们，否则安装过程中会有一个
+			// 半成品插件被加载进来，或者备份目录被当成重复插件。
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
 			pluginDir := filepath.Join(root, entry.Name())
 			if !hasManifest(pluginDir) {
 				continue
 			}
 			mp := loadManaged(pluginDir)
-			if mp.Plugin == nil || mp.Plugin.Manifest == nil {
-				continue // 致命失败已记录在 FatalError,跳过注册
+			name := mp.Name()
+			if name == "" {
+				continue
 			}
-			if m.disabled[mp.Plugin.Manifest.Name] {
+			if prev, dup := result[name]; dup {
+				// 同名插件出现在多个扫描根/多个目录：保留先加载的那个，
+				// 另一个只记日志（它在列表里没有名字可用，卸载要靠目录名）。
+				log.Warnf("[AgentPlugin] duplicate plugin name %q: %s ignored (already loaded from %s)",
+					name, pluginDir, prev.Plugin.Root)
+				continue
+			}
+			if m.disabled[name] {
 				mp.Disabled = true
 				mp.Runtime = nil // 禁用:不创建运行时
 			}
-			result[mp.Plugin.Manifest.Name] = mp
+			result[name] = mp
 		}
 	}
 	return result
+}
+
+// LoadDir 加载单个插件目录（安装/启用时的增量路径用）。
+//
+// 与 LoadAll 的差别只在"范围"：这里不扫描、不判重，调用方负责在写锁内
+// 决定是否插入/替换 map 条目。返回的 ManagedPlugin 一定非 nil。
+func LoadDir(pluginDir string) *ManagedPlugin {
+	return loadManaged(pluginDir)
 }
 
 // hasManifest 判断目录是否含常规 plugin.json(轻量探测,不解析)。
@@ -88,10 +141,23 @@ func hasManifest(dir string) bool {
 
 // loadManaged 加载单个插件并按需创建运行时。
 func loadManaged(pluginDir string) *ManagedPlugin {
-	name := filepath.Base(pluginDir)
-	dataDir := filepath.Join(config.GetMagicHome(), "agent-plugins-data", name)
+	dirName := filepath.Base(pluginDir)
+	dataDir := filepath.Join(config.GetMagicHome(), "agent-plugins-data", dirName)
 	p := Load(pluginDir, dataDir)
-	mp := &ManagedPlugin{Plugin: p}
+	mp := &ManagedPlugin{Plugin: p, DirName: dirName, Rejected: p.IsRejected()}
+	if mp.Name() == "" {
+		// 连 manifest.name 都没有（清单被拒/缺失）：用目录名兜底，保证这个
+		// 条目有键可索引、可卸载。
+		mp.DirName = dirName
+	}
+	// 目录名与 manifest.name 不一致时给出警告：后续所有"按名字"的操作
+	// （凭据、禁用、token）与"按目录"的操作（卸载、数据目录）会指向
+	// 不同的东西，用户需要知道。
+	if p.Manifest != nil && p.Manifest.Name != "" && p.Manifest.Name != dirName {
+		p.Warnings = append(p.Warnings, fmt.Sprintf(
+			"directory name %q differs from manifest.name %q; credentials and disable state are stored under the manifest name, data dir under the directory name",
+			dirName, p.Manifest.Name))
+	}
 	if !p.IsRejected() && !p.MCPDisabled && len(p.MCPServers) > 0 {
 		mp.Runtime = NewRuntime(p)
 	}
@@ -122,6 +188,22 @@ func StartAll(plugins map[string]*ManagedPlugin) {
 		}(mp.Runtime)
 	}
 	wg.Wait()
+}
+
+// StartPlugin 启动单个插件的运行时（增量安装/启用用）。
+func StartPlugin(mp *ManagedPlugin) {
+	if mp == nil || mp.Disabled || mp.Runtime == nil {
+		return
+	}
+	_ = mp.Runtime.Start()
+}
+
+// StopPlugin 停止单个插件的运行时（增量禁用/卸载用）。
+func StopPlugin(mp *ManagedPlugin) {
+	if mp == nil || mp.Runtime == nil {
+		return
+	}
+	mp.Runtime.Stop()
 }
 
 // StopAll 停止所有受管插件的 MCP 运行时。
@@ -187,8 +269,14 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 	out := make([]map[string]any, 0, len(plugins))
 	for name, mp := range plugins {
 		p := mp.Plugin
+		if p == nil {
+			continue
+		}
 		entry := map[string]any{
-			"name":         name,
+			"name": name,
+			// dir_name 是卸载/启用时要回传的目录名：规范允许它与 name 不同，
+			// 前端此前只能靠"再查一次 Root"来猜。
+			"dir_name":     mp.DirName,
 			"root":         p.Root,
 			"data_dir":     p.DataDir,
 			"version":      "",
@@ -237,6 +325,7 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 				"name":       ms.Name,
 				"type":       ms.Spec.Type,
 				"connected":  ms.Connected,
+				"deferred":   ms.Deferred,
 				"tools":      ms.ToolCount,
 				"error":      ms.Error,
 				"error_kind": ms.ErrorKind,
@@ -284,7 +373,7 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 		for _, cs := range p.CLIConnectors {
 			names := make([]string, 0, len(cs.Connector.Tools))
 			for _, spec := range cs.Connector.Tools {
-				names = append(names, fmt.Sprintf("ap_%s_%s", name, cliconn.ToolName(cs.Name, spec.Name)))
+				names = append(names, PluginCLIToolName(name, cs.Name, spec.Name))
 			}
 			sort.Strings(names)
 			cliEntry := map[string]any{

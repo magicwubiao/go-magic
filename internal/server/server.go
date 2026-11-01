@@ -235,6 +235,19 @@ type Server struct {
 	// 造成 MCP 子进程孤儿;先锁住整个流程再动 agentPlugins。
 	agentPluginsMu sync.Mutex
 
+	// pluginMCPMgr 是插件 MCP 条目专用的连接管理器。
+	//
+	// 为什么不复用 s.mcpMgr：后者的客户端表就是连接器配置（ConnectConfigured
+	// 会按 config.json 增删、健康巡检会遍历、工具缓存按连接器名裁剪），
+	// 把插件条目塞进同一张表会互相误删。但 OAuth 管理器必须是同一个实例
+	// （见 SetOAuthManager 的注释），工具缓存则各用各的文件。
+	pluginMCPMgr *mcp.Manager
+
+	// pluginCreds 是插件用户凭据的加密存储（AES-GCM，落盘 0600）。
+	// config.json 里不再保存明文凭据：那个文件用户会手工编辑/备份/分享，
+	// 与 OAuth token 不进 config.json 是同一条纪律。
+	pluginCreds *pluginCredentialStore
+
 	// Global in-process event bus for cross-cutting realtime notifications
 	// (todo updates, memory updates, etc.) that do not require a chat session.
 	globalBus *bus.EventBus
@@ -765,6 +778,24 @@ Your working directory is: %s
 			log.Infof("[MCP] %q connected after OAuth authorization", name)
 		})
 	}
+
+	// Agent Plugin 的 MCP 连接：独立的管理器 + 共享的 OAuth 管理器。
+	// 共享 token store 是"一次授权、处处可用"的前提；独立管理器则保证
+	// 连接器的 ConnectConfigured / 工具缓存裁剪不会碰插件条目。
+	s.pluginMCPMgr = mcp.NewManager()
+	if s.mcpMgr != nil {
+		s.pluginMCPMgr.SetOAuthManager(s.mcpMgr.OAuth())
+	}
+	if err := s.pluginMCPMgr.SetToolCachePath(filepath.Join(magicHome, "mcp", "plugin_tool_cache.json")); err != nil {
+		log.Warnf("[AgentPlugin] failed to init MCP tool cache: %v", err)
+	}
+	// 准入白名单：插件条目的 command/url 同样要过 CheckMCP。
+	// 这是 policy 的第二个（此前缺失的）生效点——装一个插件即可执行被禁
+	// 命令、连接被禁主机，正是 policy 开篇列出的威胁模型。
+	s.pluginMCPMgr.SetSecurityCheck(s.pluginMCPPolicy)
+	// 插件凭据的加密存储：与 OAuth token 一样不进 config.json。
+	s.pluginCreds = newPluginCredentialStore(filepath.Join(magicHome, "plugin_secrets"))
+	s.migrateLegacyPluginCredentials()
 
 	// 绑定全局 todo 变更通知，让 TodoTool 的任何改动都会广播到
 	// globalBus -> SSE 订阅者（前端侧边栏通过 /api/events 订阅）。

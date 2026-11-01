@@ -79,8 +79,13 @@ func applyCredentials(spec MCPServerSpec, creds map[string]string) (MCPServerSpe
 				missing = append(missing, miss...)
 			}
 		}
-		for k, v := range creds {
-			if strings.TrimSpace(v) == "" {
+		// 只覆盖条目自己声明过的 key（env 里留空的、或 args/headers/url 里
+		// 用 ${CRED:NAME} 引用过的）。凭据表单里多出来的键一律丢弃：
+		// 否则在凭据里写 PATH / NODE_OPTIONS / LD_PRELOAD 就能改写子进程的
+		// 运行时行为，而 CLI 侧早就明确"只覆盖已声明的 key"，两处纪律必须一致。
+		for _, k := range SpecCredentialKeys(spec) {
+			v, ok := creds[k]
+			if !ok || strings.TrimSpace(v) == "" {
 				continue
 			}
 			env[k] = v
@@ -150,6 +155,21 @@ func credRefsIn(s string) []string {
 	out := make([]string, 0, len(ms))
 	for _, m := range ms {
 		out = append(out, m[1])
+	}
+	return out
+}
+
+// missingEnvCreds 返回"mcp.json 里留空、合并后仍为空"的 env 凭据 key。
+//
+// 空值占位是"这个凭据要用户填"的约定（见 emptyEnvKeys）。凭据没填时不该
+// 把空字符串塞进子进程再让 server 用 401 告诉用户——那样既浪费一次冷启动，
+// 又把"缺凭据"表现成"认证失败"，用户只会以为 key 填错了。
+func missingEnvCreds(spec MCPServerSpec, merged map[string]string) []string {
+	var out []string
+	for _, k := range emptyEnvKeys(spec.Env) {
+		if strings.TrimSpace(merged[k]) == "" {
+			out = append(out, k)
+		}
 	}
 	return out
 }

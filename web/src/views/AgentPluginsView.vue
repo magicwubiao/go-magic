@@ -256,6 +256,14 @@
                     >
                       {{ t('agentplugins.unauthorized') }}
                     </n-tag>
+                    <n-tooltip v-else-if="m.deferred && !m.error" placement="bottom">
+                      <template #trigger>
+                        <n-tag size="tiny" :bordered="false" type="success">
+                          {{ t('agentplugins.entryDeferred') }}
+                        </n-tag>
+                      </template>
+                      {{ t('agentplugins.entryDeferredHint') }}
+                    </n-tooltip>
                     <n-tag
                       v-else
                       size="tiny"
@@ -296,7 +304,7 @@
                       {{ t('agentplugins.authorize') }}
                     </n-button>
                     <n-button
-                      v-else-if="m.error || !m.connected"
+                      v-else-if="m.error || (!m.connected && !m.deferred)"
                       size="tiny"
                       secondary
                       :loading="!!store.pending[plugin.name]"
@@ -826,7 +834,9 @@ async function handleInstall(file: File) {
   }
   try {
     const res = await store.install(file)
-    message.success(t('agentplugins.installed', { name: res.name }))
+    // 覆盖已安装的同名插件时后端回 upgrade=true：提示"升级"而不是"安装"，
+    // 让用户知道数据目录没被清掉。
+    message.success(t(res.upgrade ? 'agentplugins.upgraded' : 'agentplugins.installed', { name: res.name }))
     // 刚装的插件展开详情,方便确认装上了什么。
     expanded[res.name] = true
   } catch (e: any) {

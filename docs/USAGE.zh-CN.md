@@ -1287,7 +1287,7 @@ magic acp disconnect helper
 "env": ["GH_TOKEN=${GH_TOKEN}"]
 ```
 
-**手写的连接器不再有设备码授权入口**：`cli.json` 里的 `oauth` 段仍然生效——token 照样注入 `token_env`，过期照样静默刷新——但"发起授权"需要一个带登录按钮的界面，而那个界面（原来连接器页的 CLI 页签）已经随手写表单一起移除。已授权的存量连接器会一直工作到 `refresh_token` 失效为止，之后报错会直接指出迁移路径。新接入要走插件：`~/.magic/agent_plugins/cli-<名字>/` 下放一份 `plugin.json` + `cli.json`（`connectors` 结构与这里完全相同），插件页的凭据弹窗提供设备码登录、登出和"未登录"阻塞提示。
+**手写的连接器不再有设备码授权入口**：`cli.json` 里的 `oauth` 段仍然生效——token 照样注入 `token_env`，过期照样静默刷新——但"发起授权"需要一个带登录按钮的界面，而那个界面（原来连接器页的 CLI 页签）已经随手写表单一起移除。已授权的存量连接器会一直工作到 `refresh_token` 失效为止，之后报错会直接指出迁移路径。新接入要走插件：`~/.magic/agent-plugins/cli-<名字>/` 下放一份 `plugin.json` + `cli.json`（`connectors` 结构与这里完全相同），插件页的凭据弹窗提供设备码登录、登出和"未登录"阻塞提示。
 
 命令行侧可以用 `magic cli list` 查看已配置的连接器与展开后的工具名（`cli_<connector>_<tool>`），排查"模型为什么看不到某个工具"时最直接。
 
@@ -1335,7 +1335,7 @@ magic cli remove gh      # 删整个连接器（连同它下面的工具）
 
 单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。`cli.json` 是唯一的手写入口（与 `config.json` 同级），改完重启服务端或运行 `magic` 重新加载；排查"模型为什么看不到某个工具"先跑 `magic cli list`。
 
-> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/agent_plugins/cli-gh/` 之类），工具名带插件前缀 `ap_cli-gh_cli_gh_pr_list`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
+> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/agent-plugins/cli-gh/` 之类），工具名带插件前缀 `ap_cli-gh_cli_gh_pr_list`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
 
 ### 15.4 插件（Agent Plugins）
 
@@ -1384,10 +1384,15 @@ magic cli remove gh      # 删整个连接器（连同它下面的工具）
 magic plugin list                      # 名称/版本/状态/技能数/MCP/CLI
 magic plugin install ./my-plugin       # 目录（开发用）或 .zip（分发用）
 magic plugin install ./my-plugin.zip --name my-plugin
+magic plugin install ./my-plugin.zip   # 已装同名插件时 = 原地升级（原子替换，保留数据）
+magic plugin install ./my-plugin.zip --no-upgrade   # 已安装则报错
 magic plugin disable github-workflow   # 保留目录，不注入技能与工具
 magic plugin enable  github-workflow
-magic plugin remove  github-workflow   # 删目录 + 数据目录
+magic plugin remove  github-workflow   # 删目录（默认保留 PLUGIN_DATA）
+magic plugin remove  github-workflow --purge        # 连数据目录一起删
 ```
+
+升级语义：新版本先解压到扫描目录下的隐藏临时目录，校验清单通过后**整体换名**替换旧目录（失败时旧版本原样保留）；数据目录在 `agent-plugins-data/` 下，不在替换范围内，因此升级不丢 `PLUGIN_DATA`。卸载默认也保留数据，只有 `--purge` 才删除。
 
 网页「插件」页做同样的事：上传 zip、启用/禁用、卸载、填凭据、单独重连某个 MCP 条目。
 
@@ -1405,8 +1410,12 @@ POST   /api/agent-plugins/{name}/mcp/{server}/connect
 
 - **工具名带两段前缀**：MCP 是 `ap_<plugin>_<server>_<tool>`，CLI 是 `ap_<plugin>_cli_<connector>_<tool>`。同一台机器上既装全局 `gh` 连接器、又装带 `gh` 工具的插件时不会撞名。
 - **失败隔离**：单个 skill 不合规只跳过它；单个 MCP 条目连不上只标该条；`cli.json` 损坏只关 CLI 组件；只有 `plugin.json` 致命违反才拒绝整个插件。
-- **凭据不落盘**：`mcp.json` / `cli.json` 里值为空的 env key 就是"需要用户填"的占位，填完存进 `config.json` 的 `agent_plugins.credentials`，接口一律 `***` 回显。改完凭据 CLI 工具会立刻重注册（凭据在注册时被烘进工具）。
+- **凭据不进 config.json**：`mcp.json` / `cli.json` 里值为空的 env key 就是"需要用户填"的占位；填好的值用 AES-GCM 加密后存进 `<magicHome>/plugin_secrets/`（0600），`config.json` 里不出现明文（与 OAuth token 同一套纪律），接口一律 `***` 回显。凭据只会填进**条目声明过**的 key（`PATH` / `NODE_OPTIONS` / `LD_PRELOAD` 这类环境变量不会被注入）。改完凭据 CLI 工具会立刻重注册（凭据在注册时被烘进工具）。
 - **禁用即不注入**：禁用的插件仍会在列表里显示，但它的技能与工具既不会注册也不会出现。
+- **审批**：插件来源的 MCP 工具与 CLI 工具**一律逐次人工确认**。`annotations` 里的 `readOnlyHint` 是插件作者自声明的，不是信任根——把它当免审批依据等于让第三方插件自己给自己发通行证。
+- **准入策略同样生效**：`policy.enforce=true` 时，插件的 MCP 条目（command / url）走 `mcp_allowed_commands` / `mcp_allowed_hosts`，CLI 连接器走 `cli_allowed_commands`。被拒的连接器会在摘要里带上 `blocked by policy: …`，不会静默消失。
+- **清单被拒的插件仍可见**：`plugin.json` 致命违反的插件会出现在列表里（`rejected: true` + `fatal_error`），可以直接卸载——否则"装不上、列表里也没有、还占着目录名"就是一个自锁死局。
+- **身份两套名字**：目录名（`dir_name`）决定卸载与数据目录，`manifest.name` 决定凭据/禁用状态/OAuth token。两者不一致时握手告警，操作时前端按各自正确的那个来。
 - 不做远端 marketplace / 版本解析 / 签名校验：没有分发基建时做这些只会是半成品。
 
 ### 15.5 反向 MCP：把 magic 当工具用

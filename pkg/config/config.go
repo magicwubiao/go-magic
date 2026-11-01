@@ -403,9 +403,11 @@ type SkillsConfig struct {
 // 启用为默认状态,仅记录被显式禁用的插件名(即 plugin.json 的 name 字段)。
 type AgentPluginsConfig struct {
 	Disabled []string `json:"disabled"`
-	// Credentials 存插件连接器的用户凭据:插件名 → env key → 值。
-	// 与 mcp_servers 的 env 同一套约定:只落盘供连接时合并进子进程环境,
-	// API 层一律按 *** 掩码,*** 回传时还原为磁盘真值。
+	// Credentials 为历史遗留的明文凭据存储(插件名 → env key → 值)。
+	//
+	// Deprecated: 凭据已迁移到加密存储 <home>/plugin_secrets(secrets.Store)。
+	// 该字段仅在启动时由 migrateLegacyPluginCredentials 读取一次并立即清空,
+	// 新代码不得读写它。
 	Credentials map[string]map[string]string `json:"credentials,omitempty"`
 }
 

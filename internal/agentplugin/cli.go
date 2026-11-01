@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
+	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
 // cli.json 是本实现在 Agent Plugins 1.0.0 之外增加的可选组件。
@@ -113,11 +114,11 @@ type cliPluginTool struct {
 	plugin string
 }
 
-// Name 返回 ap_<plugin>_cli_<connector>_<tool>。
+// Name 返回 ap_<plugin>_cli_<connector>_<tool>（各段已清洗、超长带哈希后缀）。
 // 加 ap_ 前缀是为了和全局 cli.<connector> 的工具区分：同一台机器上完全可能
 // 既装了全局的 gh 连接器，又装了带 gh 工具的插件。
 func (t *cliPluginTool) Name() string {
-	return fmt.Sprintf("ap_%s_%s", t.plugin, t.Tool.Name())
+	return PluginCLIToolName(t.plugin, t.Tool.ConnectorName(), t.Tool.Spec().Name)
 }
 
 // RequiresApproval 覆盖内嵌类型提升的版本：插件来源的 cli.json 是第三方
@@ -141,7 +142,7 @@ type cliPluginRawTool struct {
 
 // Name 返回 ap_<plugin>_cli_<connector>_raw。
 func (t *cliPluginRawTool) Name() string {
-	return fmt.Sprintf("ap_%s_%s", t.plugin, t.RawTool.Name())
+	return PluginCLIToolName(t.plugin, t.RawTool.ConnectorName(), cliconn.RawToolName)
 }
 
 // ApprovalSummary 在描述前补上插件名。
@@ -167,19 +168,39 @@ type timeoutSetter interface {
 // 带 oauth 声明的连接器会在执行时明确报错，而不是静默不带 token 去跑。
 type CLITokenSourceFactory func(pluginName, connectorName string) cliconn.TokenSource
 
+// CLIRegisterOptions 是注册插件 CLI 工具的完整参数集。
+type CLIRegisterOptions struct {
+	// Creds 按插件名返回用户凭据（key → 值），用于填充 cli.json 里留空的 env 值。
+	Creds func(pluginName string) map[string]string
+	// TokenSources 为声明了 oauth 的连接器构造执行期 token 源（nil = 不支持）。
+	TokenSources CLITokenSourceFactory
+	// AllowCommand 是准入校验（policy.CheckCLI）。nil = 不校验。
+	//
+	// 为什么 CLI 必须在这里校验：插件是第三方内容，cli.json 里的 command
+	// 完全由作者决定；不校验就等于"装个插件即可运行本机任意程序"，
+	// 而 policy 开篇就把"装插件"列为威胁模型。返回错误时该连接器整体
+	// 不注册，并把它记进条目状态（UI 能看见，不是凭空消失）。
+	AllowCommand func(connectorName, command string) error
+}
+
 // RegisterCLITools 把插件声明的 CLI 工具注册到注册表（跳过被禁用的插件与校验失败的条目）。
-//
-// creds 按插件名返回用户凭据（key → 值），用于填充 cli.json 里留空的 env 值：
-// cli.json 中 `"env": ["GH_TOKEN="]` 是"需要用户填写的凭据"占位，与 mcp.json 同一套约定。
-// 只覆盖已声明的 key——不把凭据里多出来的键塞进子进程环境，
-// 否则用户在凭据表单里写什么就能给子进程注什么。
 func RegisterCLITools(plugins map[string]*ManagedPlugin, reg ToolRegistrar, creds func(pluginName string) map[string]string) {
-	RegisterCLIToolsWithOAuth(plugins, reg, creds, nil)
+	RegisterCLIToolsWithOptions(plugins, reg, CLIRegisterOptions{Creds: creds})
 }
 
 // RegisterCLIToolsWithOAuth 与 RegisterCLITools 相同，额外为声明了 oauth 的
 // 连接器挂上 token 源（nil = 不挂，等价于 RegisterCLITools）。
 func RegisterCLIToolsWithOAuth(plugins map[string]*ManagedPlugin, reg ToolRegistrar, creds func(pluginName string) map[string]string, tokenSources CLITokenSourceFactory) {
+	RegisterCLIToolsWithOptions(plugins, reg, CLIRegisterOptions{Creds: creds, TokenSources: tokenSources})
+}
+
+// RegisterCLIToolsWithOptions 是注册插件 CLI 工具的唯一实现。
+//
+// creds 按插件名返回用户凭据（key → 值），用于填充 cli.json 里留空的 env 值：
+// cli.json 中 `"env": ["GH_TOKEN="]` 是"需要用户填写的凭据"占位，与 mcp.json 同一套约定。
+// 只覆盖已声明的 key——不把凭据里多出来的键塞进子进程环境，
+// 否则用户在凭据表单里写什么就能给子进程注什么。
+func RegisterCLIToolsWithOptions(plugins map[string]*ManagedPlugin, reg ToolRegistrar, opts CLIRegisterOptions) {
 	if reg == nil {
 		return
 	}
@@ -192,15 +213,25 @@ func RegisterCLIToolsWithOAuth(plugins map[string]*ManagedPlugin, reg ToolRegist
 			continue
 		}
 		var pluginCreds map[string]string
-		if creds != nil {
-			pluginCreds = creds(pluginName)
+		if opts.Creds != nil {
+			pluginCreds = opts.Creds(pluginName)
 		}
-		for _, st := range mp.Plugin.CLIConnectors {
+		for i := range mp.Plugin.CLIConnectors {
+			st := mp.Plugin.CLIConnectors[i]
 			if st.Error != "" {
 				continue
 			}
+			if opts.AllowCommand != nil {
+				if err := opts.AllowCommand(st.Name, st.Connector.Command); err != nil {
+					// 写回条目状态，而不是静默跳过：工具"凭空消失"是这类
+					// 白名单最常见的可观测性问题（用户以为插件装坏了）。
+					mp.Plugin.CLIConnectors[i].Error = "blocked by policy: " + err.Error()
+					log.Warnf("[AgentPlugin] %s: cli connector %q blocked: %v", pluginName, st.Name, err)
+					continue
+				}
+			}
 			conn := withCLICredentials(st.Connector, pluginCreds)
-			conn = withCLITokenSource(conn, pluginName, st.Name, tokenSources)
+			conn = withCLITokenSource(conn, pluginName, st.Name, opts.TokenSources)
 			// 插件连接器同样在注册时固定 command 绝对路径（防 PATH 劫持；
 			// 二进制未安装时保留原名，由探测报错）。
 			conn = conn.PinCommandPath()
@@ -246,10 +277,10 @@ func UnregisterCLITools(plugins map[string]*ManagedPlugin, reg ToolRegistrar) {
 				continue
 			}
 			for _, spec := range st.Connector.Tools {
-				u.Unregister(fmt.Sprintf("ap_%s_%s", pluginName, cliconn.ToolName(st.Name, spec.Name)))
+				u.Unregister(PluginCLIToolName(pluginName, st.Name, spec.Name))
 			}
 			if st.Connector.Raw {
-				u.Unregister(fmt.Sprintf("ap_%s_%s", pluginName, cliconn.ToolName(st.Name, cliconn.RawToolName)))
+				u.Unregister(PluginCLIToolName(pluginName, st.Name, cliconn.RawToolName))
 			}
 		}
 	}

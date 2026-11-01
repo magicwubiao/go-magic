@@ -179,6 +179,11 @@ type ServerConfig struct {
 	// 与 Env 同一套约定。
 	Headers map[string]string `json:"headers,omitempty"`
 
+	// Cwd 是 stdio 子进程的工作目录（空 = 继承本进程）。
+	// Agent Plugin 的 stdio 条目默认把 cwd 固定为插件根目录：插件自带的
+	// 脚本/相对路径资源只有在那里才能找到。
+	Cwd string `json:"cwd,omitempty"`
+
 	// DisabledTools 屏蔽该 server 下的指定工具：不注册进工具注册表，模型
 	// 完全看不到。用于给工具爆炸的 server（上百个工具）瘦身。
 	DisabledTools []string `json:"disabled_tools,omitempty"`
@@ -369,6 +374,35 @@ func (m *Manager) OAuth() *OAuthManager {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.oauth
+}
+
+// SetOAuthManager 注入一个已存在的 OAuth 管理器（nil = 不启用）。
+//
+// 与 SetTokenStore 的区别：SetTokenStore 会**新建**一个管理器，而一个进程里
+// 往往有多个 Manager（连接器一份、Agent Plugin 一份），它们必须共用同一个
+// 管理器——否则 token 缓存、进行中的授权流程、onAuthorized 回调各是一份，
+// 用户在浏览器里授权完成后只有"发起方"那个 Manager 知道，另一侧永远停在
+// "等待授权"。因此调用方先给主 Manager 配 token store，再把它的 OAuth()
+// 注入给其余 Manager。
+func (m *Manager) SetOAuthManager(o *OAuthManager) {
+	m.mu.Lock()
+	m.oauth = o
+	m.mu.Unlock()
+}
+
+// IsConnected 报告某个 server 当前是否有活连接（懒连接未触发时为 false）。
+func (m *Manager) IsConnected(name string) bool {
+	return m.isConnected(name)
+}
+
+// FailureReason 返回某 server 最近一次失败的可行动分类与文本。
+// 没有失败记录（或已恢复正常）时返回 ("", ErrKindUnknown)。
+//
+// 之所以要导出：上层（Agent Plugin 的条目状态）需要把 "auth / network /
+// protocol" 这类分类透给 UI，让用户知道该去补凭据还是查网络。
+func (m *Manager) FailureReason(name string) (string, ErrorKind) {
+	rec := m.LastFailureInfo(name)
+	return rec.Message, rec.Kind
 }
 
 // LastFailure returns the most recent connection error recorded for a server
@@ -583,7 +617,7 @@ func (m *Manager) buildClient(name string, config ServerConfig) (*Client, error)
 		}
 	default:
 		kind = "stdio"
-		transport, err = NewStdioTransport(config.Command, config.Args, config.Env)
+		transport, err = NewStdioTransportWithDir(config.Command, config.Args, config.Env, config.Cwd)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create %s transport: %w", kind, err)

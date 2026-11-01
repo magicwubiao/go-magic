@@ -108,6 +108,52 @@ func (m *Manager) IsDeferred(name string) bool {
 	return ok
 }
 
+// DeferIfCached 在"声明了 lazy 且有工具缓存"时把 server 登记为懒连接，
+// 返回是否真的延后了。
+//
+// 这是给"不走 ConnectConfigured 的调用方"（Agent Plugin 运行时）准备的入口：
+// 它们自己决定什么时候连，但仍要享受同一套"有缓存就先不连、首次调用再连"
+// 的规则，以及同一个工具缓存文件。
+func (m *Manager) DeferIfCached(name string, cfg ServerConfig) bool {
+	if !m.shouldDefer(name, cfg) {
+		return false
+	}
+	m.deferServer(name, cfg)
+	return true
+}
+
+// Forget 彻底忘掉一个 server：摘掉连接（并关闭 transport）、懒登记、
+// 工具缓存与失败记录。
+//
+// 与 Disconnect 的区别：Disconnect 是"暂时断线"（缓存留着，下次启动还能
+// 用它注册影子工具）；Forget 是"这个 server 不存在了"（插件被卸载/条目被
+// 删掉），缓存必须一起清掉，否则下次启动会为一个已经不存在的 server
+// 注册一批点不动的影子工具。
+func (m *Manager) Forget(name string) {
+	m.mu.Lock()
+	client := m.clients[name]
+	delete(m.clients, name)
+	delete(m.deferred, name)
+	delete(m.failures, name)
+	_, hadCache := m.cached[name]
+	delete(m.cached, name)
+	path := m.toolCachePath
+	var snapshot toolCacheFile
+	if hadCache {
+		snapshot = m.snapshotCacheLocked()
+	}
+	m.mu.Unlock()
+
+	if client != nil {
+		_ = client.transport.Close()
+	}
+	if hadCache && path != "" {
+		if err := writeToolCache(path, snapshot); err != nil {
+			log.Warnf("[MCP] failed to rewrite tool cache after forgetting %q: %v", name, err)
+		}
+	}
+}
+
 // deferServer 把 server 登记为懒连接并清掉可能残留的活连接配置。
 func (m *Manager) deferServer(name string, cfg ServerConfig) {
 	m.mu.Lock()

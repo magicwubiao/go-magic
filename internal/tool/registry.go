@@ -397,6 +397,12 @@ func GetAllTools() []Tool {
 func (r *Registry) Register(t Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// 同名工具是静默覆盖（map 赋值），调用方完全看不到自己的工具被顶掉。
+	// 插件/连接器都可能拼出撞名（同一个 server 装两次、两个插件用同名工具），
+	// 至少留一行日志，让"工具行为突然变了"有据可查。
+	if prev, exists := r.tools[t.Name()]; exists {
+		log.Printf("[Tool] duplicate tool name %q: %T replaced by %T", t.Name(), prev, t)
+	}
 	r.tools[t.Name()] = t
 }
 

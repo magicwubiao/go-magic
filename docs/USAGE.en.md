@@ -1309,7 +1309,7 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
 "env": ["GH_TOKEN=${GH_TOKEN}"]
 ```
 
-**Hand-written connectors no longer have a device-code sign-in entry.** The `oauth` block in `cli.json` still works — the token is still injected into `token_env` and still refreshed silently — but *starting* an authorization needs a screen with a sign-in button, and that screen (the old CLI tab on the Connectors page) was removed together with the form. Connectors that are already authorized keep working until their `refresh_token` expires; the error after that points at the migration path. New setups belong in a plugin: drop `plugin.json` + `cli.json` into `~/.magic/agent_plugins/cli-<name>/` (the `connectors` block is identical to the one here) and the plugin's credential dialog offers device-code sign-in, sign-out and a "not signed in" blocker.
+**Hand-written connectors no longer have a device-code sign-in entry.** The `oauth` block in `cli.json` still works — the token is still injected into `token_env` and still refreshed silently — but *starting* an authorization needs a screen with a sign-in button, and that screen (the old CLI tab on the Connectors page) was removed together with the form. Connectors that are already authorized keep working until their `refresh_token` expires; the error after that points at the migration path. New setups belong in a plugin: drop `plugin.json` + `cli.json` into `~/.magic/agent-plugins/cli-<name>/` (the `connectors` block is identical to the one here) and the plugin's credential dialog offers device-code sign-in, sign-out and a "not signed in" blocker.
 
 On the command line, `magic cli list` shows the configured connectors and the expanded tool names (`cli_<connector>_<tool>`) — the fastest way to answer "why can't the model see this tool".
 
@@ -1357,7 +1357,7 @@ Two template forms:
 
 `cli.json` is the only hand-written entry point (next to `config.json`); restart the server or run `magic` to reload it, and start with `magic cli list` when debugging "why can't the model see this tool".
 
-> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/agent_plugins/cli-gh/` and friends). Their tools carry the plugin prefix — `ap_cli-gh_cli_gh_pr_list` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
+> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/agent-plugins/cli-gh/` and friends). Their tools carry the plugin prefix — `ap_cli-gh_cli_gh_pr_list` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
 
 ### 15.4 Plugins (Agent Plugins)
 
@@ -1406,10 +1406,15 @@ A plugin is not a new runtime concept: a plugin is a **directory** holding skill
 magic plugin list                      # name/version/status/skills/mcp/cli
 magic plugin install ./my-plugin       # a directory (dev) or a .zip (distribution)
 magic plugin install ./my-plugin.zip --name my-plugin
+magic plugin install ./my-plugin.zip   # already installed => in-place upgrade (atomic, data kept)
+magic plugin install ./my-plugin.zip --no-upgrade   # fail if already installed
 magic plugin disable github-workflow   # keep the directory, inject nothing
 magic plugin enable  github-workflow
-magic plugin remove  github-workflow   # directory + data dir
+magic plugin remove  github-workflow   # directory only (PLUGIN_DATA is kept)
+magic plugin remove  github-workflow --purge        # directory + data dir
 ```
+
+Upgrade semantics: the new version is unpacked into a hidden staging directory inside the scan dir, validated, then renamed into place (the old directory is moved aside first and restored if the swap fails). `PLUGIN_DATA` lives under `agent-plugins-data/`, outside the replaced tree, so upgrading never loses it. Uninstall keeps it too unless `--purge` is passed.
 
 The Plugins page does the same thing in the browser: upload a zip, enable/disable, uninstall, fill in credentials, reconnect a single MCP entry.
 
@@ -1427,8 +1432,12 @@ Conventions:
 
 - **Tool names carry two prefixes**: MCP is `ap_<plugin>_<server>_<tool>`, CLI is `ap_<plugin>_cli_<connector>_<tool>`. A global `gh` connector and a plugin that also ships a `gh` tool can coexist.
 - **Failure isolation**: a bad skill is skipped; an unreachable MCP entry is marked and the rest keeps working; a broken `cli.json` only disables the CLI component; only a fatal `plugin.json` violation rejects the whole plugin.
-- **Credentials never hit disk in plaintext**: an empty env value in `mcp.json` / `cli.json` marks "ask the user"; the value is stored in `agent_plugins.credentials` in `config.json` and echoed as `***` by every API. Saving credentials re-registers CLI tools immediately (credentials are baked in at registration time).
+- **Credentials never land in `config.json`**: an empty env value in `mcp.json` / `cli.json` marks "ask the user"; the value is stored AES-GCM-encrypted under `<magicHome>/plugin_secrets/` (0600) and echoed as `***` by every API (same rule as OAuth tokens). Credentials are only injected into **declared** keys — `PATH` / `NODE_OPTIONS` / `LD_PRELOAD` cannot be smuggled in. Saving credentials re-registers CLI tools immediately.
 - **Disabled means not injected**: a disabled plugin is still listed, but neither its skills nor its tools are registered.
+- **Approval is mandatory for plugin tools**: both MCP and CLI tools shipped by a plugin ask for confirmation on every call. `readOnlyHint` is a self-declaration by the plugin author, not a trust root.
+- **The admission policy applies here too**: with `policy.enforce=true`, plugin MCP entries (command / url) are checked against `mcp_allowed_commands` / `mcp_allowed_hosts` and CLI connectors against `cli_allowed_commands`. Rejected connectors show `blocked by policy: …` in the summary instead of silently disappearing.
+- **Rejected plugins stay visible**: a fatal `plugin.json` violation still lists the plugin (`rejected: true` + `fatal_error`) so it can be uninstalled — otherwise "cannot install, cannot see, but the directory still holds the name" is a self-locking dead end.
+- **Two names, two purposes**: the directory name (`dir_name`) drives uninstall and the data dir; `manifest.name` drives credentials, disable state and OAuth tokens. A mismatch is reported and each operation uses the correct one.
 - No remote marketplace / version resolution / signatures: without distribution infrastructure that would only be half a feature.
 
 ### 15.5 Reverse MCP: use magic as a tool

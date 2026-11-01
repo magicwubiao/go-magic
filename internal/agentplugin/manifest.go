@@ -1,8 +1,10 @@
 package agentplugin
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +29,15 @@ func loadManifest(pluginRoot string) (*Manifest, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s: %w", manifestName, err)
 	}
+	return loadManifestBytes(data)
+}
 
+// loadManifestBytes 解析并校验 plugin.json 内容。
+//
+// 单独抽出来是为了让"从 zip 里读清单"（安装前决定目录名）走**同一套**
+// 校验：安装前的名字推导与安装后的加载不能有两套规则，否则会出现
+// "安装时接受、加载时拒绝"的组合。
+func loadManifestBytes(data []byte) (*Manifest, []string, error) {
 	// 第一阶段:解析为原始 map,检测 unknown 顶层字段并捕获 extensions 原始类型。
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -118,6 +128,61 @@ func InspectManifest(pluginRoot string) (*Manifest, error) {
 		return nil, err
 	}
 	m, _, err := loadManifest(resolved)
+	return m, err
+}
+
+// InspectArchiveManifest 从"目录或 zip 包"读取并校验 plugin.json。
+//
+// 安装入口（Web 上传 / CLI install）都在**解压之前**需要 manifest.name：
+// 早先 CLI 对 zip 直接调 InspectManifest，必然报 "invalid plugin"，
+// Web 则退回用上传文件名当目录名——同一个包两条路径装出不同的目录名。
+// 这里统一成"先挑 manifest.json 再决定目录名"。
+func InspectArchiveManifest(target string) (*Manifest, error) {
+	info, err := os.Stat(target)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return InspectManifest(target)
+	}
+	r, err := zip.OpenReader(target)
+	if err != nil {
+		return nil, fmt.Errorf("open archive: %w", err)
+	}
+	defer r.Close()
+
+	// 取层级最浅的 plugin.json（根目录优先，其次一层子目录）。
+	var best *zip.File
+	bestDepth := 1 << 30
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		name := filepath.ToSlash(filepath.Clean(f.Name))
+		if filepath.Base(name) != manifestName {
+			continue
+		}
+		depth := strings.Count(name, "/")
+		if depth > 1 {
+			continue // 规范只允许根目录或一层包目录
+		}
+		if depth < bestDepth {
+			best, bestDepth = f, depth
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("%s not found in archive", manifestName)
+	}
+	rc, err := best.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", manifestName, err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", manifestName, err)
+	}
+	m, _, err := loadManifestBytes(data)
 	return m, err
 }
 

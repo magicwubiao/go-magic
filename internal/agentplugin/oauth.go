@@ -55,10 +55,19 @@ func ParseOAuthKey(key string) (pluginName, serverName string, ok bool) {
 
 // SetOAuth 注入 OAuth 管理器（nil = 禁用 OAuth，全部走凭据/静态 headers）。
 // 与 SetCredentials 一样由 server 层在加载后注入。
+//
+// 同时写进当前 mcp.Manager：连接（含 401 刷新、自动发起授权）走的是
+// Manager 里的那份引用，只设 Runtime.oauth 会让"手动登录"能用、实际连接
+// 却拿不到 token。server 侧的共享 Manager 本来就已经配好同一个实例，
+// 这里再设一次是无副作用的幂等操作。
 func (r *Runtime) SetOAuth(mgr *mcp.OAuthManager) {
 	r.mu.Lock()
 	r.oauth = mgr
+	cur := r.mgr
 	r.mu.Unlock()
+	if cur != nil {
+		cur.SetOAuthManager(mgr)
+	}
 }
 
 // oauthSnapshot 取管理器快照（连接在后台 goroutine 里跑）。

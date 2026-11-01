@@ -21,6 +21,8 @@ export interface AgentPluginMCPEntry {
   name: string
   type: string
   connected: boolean
+  /** 懒连接等待态：启动时不连，首次调用才建连（工具清单来自缓存）。 */
+  deferred?: boolean
   tools: number
   error?: string
   // 错误分类(auth/network/protocol/…),auth 时 UI 亮"授权"按钮。
@@ -152,6 +154,10 @@ export interface AgentPluginInstallResult {
   ok: boolean
   name: string
   dir: string
+  version?: string
+  /** true = 覆盖了已安装的同名插件（原地升级，PLUGIN_DATA 保留）。 */
+  upgrade?: boolean
+  warnings?: string[]
 }
 
 // 目录插件包：内置 MCP 连接器目录 / CLI 应用目录里的条目，安装后就是一个
@@ -226,10 +232,17 @@ export async function reloadAgentPlugins(): Promise<AgentPluginsReloadResult> {
 
 // 通过上传 zip 安装插件。file 为 zip 文件,name 为插件目录名(可选)。
 // 使用原生 fetch 上传 multipart(不走 request 封装,因后者会强制 JSON content-type)。
-export async function installAgentPlugin(file: File, name?: string): Promise<AgentPluginInstallResult> {
+export async function installAgentPlugin(
+  file: File,
+  name?: string,
+  upgrade = true,
+): Promise<AgentPluginInstallResult> {
   const form = new FormData()
   form.append('file', file)
   if (name) form.append('name', name)
+  // 默认允许原地升级：已装同名插件时不再要求"先卸载"（那会连带丢掉
+  // PLUGIN_DATA，让"升级"变成"重装并清空"）。
+  form.append('upgrade', upgrade ? '1' : '0')
 
   const headers: Record<string, string> = {}
   const token = getAuthToken()
@@ -247,9 +260,13 @@ export async function installAgentPlugin(file: File, name?: string): Promise<Age
   return resp.json()
 }
 
-// 卸载插件:删除插件目录并重新加载。
-export async function uninstallAgentPlugin(name: string): Promise<{ ok: boolean; name: string; dir: string }> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/uninstall`, { method: 'POST', timeoutMs: 120_000 })
+// 卸载插件:删除插件目录（默认保留 PLUGIN_DATA，purge=true 才连数据一起删）。
+export async function uninstallAgentPlugin(
+  name: string,
+  purge = false,
+): Promise<{ ok: boolean; name: string; dir: string; purged?: boolean; data_kept?: string }> {
+  const q = purge ? '?purge=1' : ''
+  return request(`/agent-plugins/${encodeURIComponent(name)}/uninstall${q}`, { method: 'POST', timeoutMs: 120_000 })
 }
 
 // 启用插件。未就绪(缺凭据 / 命令没装)时后端返回 409 + blockers,

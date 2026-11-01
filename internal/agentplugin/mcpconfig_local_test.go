@@ -215,7 +215,7 @@ func TestConnectEntryRejectsExpandedPublicHTTPURL(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer ${CRED:HASS_TOKEN}"},
 	}}
 
-	_, err := r.connectEntry(entry)
+	err := r.connectEntry(entry)
 	if err == nil || !strings.Contains(err.Error(), "must use https") {
 		t.Fatalf("err = %v, want https rejection", err)
 	}

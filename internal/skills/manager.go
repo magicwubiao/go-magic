@@ -28,11 +28,18 @@ import (
 
 // Manager manages skill loading and registration
 type Manager struct {
-	mu                sync.RWMutex
-	searchDirs        []string
-	builtinDir        string
-	toolNames         []string // 已注册工具名，用于校验技能声明的 tools（由调用方注入，缺失则跳过校验）
-	skills            map[string]*Skill
+	mu         sync.RWMutex
+	searchDirs []string
+	builtinDir string
+	toolNames  []string // 已注册工具名，用于校验技能声明的 tools（由调用方注入，缺失则跳过校验）
+	skills     map[string]*Skill
+	// shadowed 记录"被同名注册覆盖掉"的 skill（key = skill 名）。
+	//
+	// Agent Plugin 注入的 skill 与内置/用户 skill 同名时，早先是直接覆盖
+	// map 条目：卸载插件走 UnregisterSkillIfSource 只会 delete，内置那份
+	// 就永久消失了（要重启进程才回来）。这里保留被覆盖的旧条目，
+	// 注销时原样还原。
+	shadowed          map[string]*Skill
 	registryURL       string                // ClawHub or GitHub registry URL
 	hubLock           *HubLock              // Hub 安装跟踪 (.hub/lock.json)
 	bundledManifest   *BundledManifest      // 内置技能跟踪 (.bundled_manifest)
@@ -121,6 +128,7 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 		toolNames:         append([]string(nil), cfg.ToolNames...),
 		registryURL:       cfg.RegistryURL,
 		skills:            make(map[string]*Skill),
+		shadowed:          make(map[string]*Skill),
 		skillsDir:         skillsDir,
 		hubDir:            filepath.Join(skillsDir, ".hub"),
 		autoSkillsDir:     autoDir,
@@ -913,6 +921,17 @@ func (m *Manager) Add(skill *Skill) error {
 func (m *Manager) RegisterSkill(skill *Skill) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.skills == nil {
+		m.skills = make(map[string]*Skill)
+	}
+	if m.shadowed == nil {
+		m.shadowed = make(map[string]*Skill)
+	}
+	// 同名但来源不同 = 覆盖：把原来那份记下来，注销时还原。
+	// 来源相同（重复 reload 同一个插件）不记，否则栈会越堆越高。
+	if prev, ok := m.skills[skill.Name]; ok && prev != nil && prev.Source != skill.Source {
+		m.shadowed[skill.Name] = prev
+	}
 	m.skills[skill.Name] = skill
 }
 
@@ -926,6 +945,12 @@ func (m *Manager) UnregisterSkillIfSource(name string, source SkillSource) bool 
 	cur, ok := m.skills[name]
 	if !ok || cur.Source != source {
 		return false
+	}
+	// 注入时覆盖过别人的条目 → 还原；否则才是真删除。
+	if prev, hadPrev := m.shadowed[name]; hadPrev {
+		delete(m.shadowed, name)
+		m.skills[name] = prev
+		return true
 	}
 	delete(m.skills, name)
 	return true

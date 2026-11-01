@@ -1,9 +1,7 @@
 package agentplugin
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -109,72 +107,33 @@ func TestOAuthServerConfigMapsTransport(t *testing.T) {
 	}
 }
 
-// fakeTokenProvider 是 AuthTokenProvider 的内存实现。
-type fakeTokenProvider struct {
-	current string
-	refresh string
-}
-
-func (f *fakeTokenProvider) CurrentToken(context.Context) (string, error) {
-	return f.current, nil
-}
-
-func (f *fakeTokenProvider) RefreshToken(context.Context) (string, error) {
-	if f.refresh == "" {
-		return "", errors.New("no refresh token")
-	}
-	return f.refresh, nil
-}
-
-func TestHTTPTransportRefreshesOn401(t *testing.T) {
-	var calls int
-	var gotAuth []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
-		if r.Header.Get("Authorization") != "Bearer fresh" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
-	}))
-	defer srv.Close()
-
-	tr := newHTTPTransport(srv.URL, nil, false)
-	tr.SetAuthProvider(&fakeTokenProvider{current: "Bearer stale", refresh: "Bearer fresh"})
-	resp, err := tr.Send(context.Background(), &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "initialize", ID: 1})
-	if err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	if resp == nil {
-		t.Fatal("nil response")
-	}
-	if calls != 2 {
-		t.Fatalf("expected 2 attempts (401 then refresh), got %d", calls)
-	}
-	if len(gotAuth) != 2 || gotAuth[0] != "Bearer stale" || gotAuth[1] != "Bearer fresh" {
-		t.Fatalf("Authorization headers = %v", gotAuth)
-	}
-}
-
-func TestHTTPTransport401IsAuthKind(t *testing.T) {
+// 注：401 刷新重试的细节由 internal/mcp 的传输层测试覆盖；插件侧只关心
+// "401 必须被归到 auth 类"，见 TestRuntime401IsAuthKind。
+func TestRuntime401IsAuthKind(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 
-	tr := newHTTPTransport(srv.URL, nil, false)
-	_, err := tr.Send(context.Background(), &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "initialize", ID: 1})
-	if err == nil {
-		t.Fatal("expected error")
+	p := &Plugin{
+		Manifest: &Manifest{Name: "demo"},
+		MCPServers: []MCPEntryStatus{{
+			Name: "svc",
+			Spec: MCPServerSpec{Type: TransportStreamableHTTP, URL: srv.URL},
+		}},
 	}
-	if mcp.KindOf(err) != mcp.ErrKindAuth {
-		t.Fatalf("kind = %q, want auth", mcp.KindOf(err))
+	rt := NewRuntime(p)
+	if err := rt.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
 	}
-	var se *httpStatusError
-	if !errors.As(err, &se) || se.status != http.StatusUnauthorized {
-		t.Fatalf("status error not preserved: %v", err)
+	defer rt.Stop()
+
+	st, _ := rt.EntryStatus("svc")
+	if st.Connected {
+		t.Fatalf("entry should not be connected: %+v", st)
+	}
+	if st.ErrorKind != mcp.ErrKindAuth.String() {
+		t.Fatalf("error kind = %q, want auth (err=%q)", st.ErrorKind, st.Error)
 	}
 }
 

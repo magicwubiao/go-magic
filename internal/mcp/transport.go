@@ -67,8 +67,20 @@ func requestIDString(id interface{}) string {
 
 // NewStdioTransport creates a new stdio transport
 func NewStdioTransport(command string, args, env []string) (*StdioTransport, error) {
+	return NewStdioTransportWithDir(command, args, env, "")
+}
+
+// NewStdioTransportWithDir 与 NewStdioTransport 相同，额外指定子进程工作目录。
+//
+// 为什么需要：Agent Plugin 规范要求 stdio server 默认以插件根目录为 cwd
+// （插件自带的脚本、相对路径资源都依赖它）。目录不存在时交由 cmd.Start
+// 报错，不在这里静默回退到进程 cwd——那会让插件读到宿主目录里的文件。
+func NewStdioTransportWithDir(command string, args, env []string, dir string) (*StdioTransport, error) {
 	cmd := exec.Command(command, args...)
 	cmd.Env = append(os.Environ(), env...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
 
 	// Set platform-specific process attributes
 	setProcessAttrs(cmd)

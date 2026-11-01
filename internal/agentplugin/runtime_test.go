@@ -1,227 +1,297 @@
 package agentplugin
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/internal/tool"
 )
 
-// fakeMCPServer 在内存管道上驱动一个最小 MCP server 替身:
-//   - initialize:延迟 200ms 回复(用于验证按 id 匹配,而非按到达顺序);
-//   - 无 id 的通知:不回复;
-//   - tools/list:立即回复一个 echo 工具;
-//   - tools/call:fail → isError=true;其他 → 两段 text 内容。
+// fakePluginServer 模拟一台 Streamable HTTP MCP server：
+// initialize 回一个可用协议版本，tools/list 返回指定工具，
+// tools/call 把 arguments.text 原样回显。
 //
-// 用管道而不是子进程:测试二进制在部分环境(Windows AV/文件锁)下会被拒绝
-// fork/exec,管道同样覆盖协议分帧、id 匹配、通知不等响应这些被测逻辑。
-type fakeMCPServer struct {
-	tr *stdioPluginTransport
+// 用它而不是子进程：测试二进制在部分环境（Windows AV/文件锁）下会被拒绝
+// fork/exec，而 Runtime 现在走的是 mcp.Manager 的远程传输，HTTP 分支
+// 与真实 server 走的是同一条代码路径。
+func fakePluginServer(t *testing.T, toolNames ...string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req mcp.JSONRPCRequest
+		_ = json.Unmarshal(body, &req)
+
+		var result any
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{
+				"protocolVersion": "2025-06-18",
+				"serverInfo":      map[string]any{"name": "fake", "version": "1.0"},
+			}
+		case "tools/list":
+			tools := make([]map[string]any, 0, len(toolNames))
+			for _, n := range toolNames {
+				tools = append(tools, map[string]any{
+					"name":        n,
+					"description": "fake " + n,
+					"inputSchema": map[string]any{"type": "object"},
+				})
+			}
+			result = map[string]any{"tools": tools}
+		case "tools/call":
+			var p struct {
+				Arguments map[string]any `json:"arguments"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			text, _ := p.Arguments["text"].(string)
+			result = map[string]any{
+				"content": []map[string]any{{"type": "text", "text": text}},
+			}
+		default:
+			result = map[string]any{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result":  result,
+		})
+	}))
 }
 
-func newFakeTransport(t *testing.T) *fakeMCPServer {
+// newTestRuntime 构造一个只含远程条目的插件运行时。
+func newTestRuntime(t *testing.T, url string, serverNames ...string) *Runtime {
 	t.Helper()
-	clientToServerR, clientToServerW := io.Pipe() // transport stdin → server 读
-	serverToClientR, serverToClientW := io.Pipe() // server 写 → transport stdout
+	p := &Plugin{
+		Root:     t.TempDir(),
+		DataDir:  t.TempDir(),
+		Manifest: &Manifest{Name: "demo"},
+	}
+	for _, name := range serverNames {
+		p.MCPServers = append(p.MCPServers, MCPEntryStatus{
+			Name: name,
+			Spec: MCPServerSpec{Type: TransportStreamableHTTP, URL: url},
+		})
+	}
+	return NewRuntime(p)
+}
 
-	tr := newPipeTransport(serverToClientR, clientToServerW)
+// fakeRegistrar 记录注册/注销的工具名与实际对象。
+type fakeRegistrar struct {
+	mu         sync.Mutex
+	registered map[string]bool
+	tools      map[string]tool.Tool
+}
 
-	var writeMu sync.Mutex
-	go func() {
-		scanner := bufio.NewScanner(clientToServerR)
-		scanner.Buffer(make([]byte, 1<<20), 1<<20)
-		for scanner.Scan() {
-			var req struct {
-				JSONRPC string          `json:"jsonrpc"`
-				Method  string          `json:"method"`
-				ID      json.RawMessage `json:"id"`
-				Params  json.RawMessage `json:"params"`
-			}
-			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-				continue
-			}
-			if req.ID == nil || string(req.ID) == "null" {
-				continue // 通知:不回复
-			}
-			switch req.Method {
-			case "initialize":
-				go func(id json.RawMessage) {
-					time.Sleep(200 * time.Millisecond)
-					writeResponse(&writeMu, serverToClientW, id, `{"protocolVersion":"2024-11-05"}`)
-				}(req.ID)
-			case "tools/list":
-				writeResponse(&writeMu, serverToClientW, req.ID,
-					`{"tools":[{"name":"echo","description":"echo tool","inputSchema":{"type":"object"}}]}`)
-			case "tools/call":
-				var p struct {
-					Name string `json:"name"`
-				}
-				_ = json.Unmarshal(req.Params, &p)
-				if p.Name == "fail" {
-					writeResponse(&writeMu, serverToClientW, req.ID,
-						`{"isError":true,"content":[{"type":"text","text":"boom"}]}`)
-				} else {
-					writeResponse(&writeMu, serverToClientW, req.ID,
-						`{"content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}]}`)
-				}
-			default:
-				writeResponse(&writeMu, serverToClientW, req.ID, `{}`)
+func newFakeRegistrar() *fakeRegistrar {
+	return &fakeRegistrar{registered: map[string]bool{}, tools: map[string]tool.Tool{}}
+}
+
+func (f *fakeRegistrar) Register(t tool.Tool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.registered[t.Name()] = true
+	f.tools[t.Name()] = t
+}
+
+func (f *fakeRegistrar) Unregister(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.registered, name)
+	delete(f.tools, name)
+}
+
+func (f *fakeRegistrar) has(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.registered[name]
+}
+
+// TestRuntime_ConnectsThroughMCPManager 覆盖整条链路：
+// 连上（走 mcp.Manager 的版本协商/工具发现）→ 注册工具 → 调用工具 → Stop 断开。
+func TestRuntime_ConnectsThroughMCPManager(t *testing.T) {
+	srv := fakePluginServer(t, "echo", "whoami")
+	defer srv.Close()
+
+	r := newTestRuntime(t, srv.URL, "srv")
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer r.Stop()
+
+	st, ok := r.EntryStatus("srv")
+	if !ok {
+		t.Fatal("entry status missing")
+	}
+	if !st.Connected || st.ToolCount != 2 {
+		t.Fatalf("entry status = %+v, want connected with 2 tools", st)
+	}
+
+	reg := newFakeRegistrar()
+	r.RegisterTools(reg, "demo")
+	name := PluginToolName("demo", "srv", "echo")
+	if !reg.has(name) {
+		t.Fatalf("tool %q not registered: %v", name, reg.registered)
+	}
+	// 第三方插件的 MCP 工具必须走审批：annotations 是作者自声明的，不是信任根。
+	if aware, ok := reg.tools[name].(interface{ RequiresApproval() bool }); !ok || !aware.RequiresApproval() {
+		t.Fatalf("plugin MCP tool %q must require approval", name)
+	}
+	if sum, ok := reg.tools[name].(interface{ ApprovalSummary() string }); !ok || sum.ApprovalSummary() == "" {
+		t.Fatalf("plugin MCP tool %q must provide an approval summary", name)
+	}
+
+	out, err := r.CallTool(context.Background(), "srv", "echo", map[string]any{"text": "hi"})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if out != "hi" {
+		t.Fatalf("CallTool = %v, want hi", out)
+	}
+
+	// Stop 之后条目不可再调用（连接已拆）。
+	r.Stop()
+	if _, err := r.CallTool(context.Background(), "srv", "echo", nil); err == nil {
+		t.Fatal("CallTool should fail after Stop")
+	}
+}
+
+// TestRuntime_ReconnectEntryOnlyTouchesItsOwnTools 回归：单条目重连不得影响
+// 其它条目已注册的工具。
+//
+// 旧实现 ReconnectEntry 先 UnregisterTools（清空整个 runtime 的注册记录）
+// 再全量重注册，任意一个条目重连都会让别的条目的工具在注册表里消失。
+func TestRuntime_ReconnectEntryOnlyTouchesItsOwnTools(t *testing.T) {
+	srv := fakePluginServer(t, "echo")
+	defer srv.Close()
+
+	r := newTestRuntime(t, srv.URL, "a", "b")
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer r.Stop()
+
+	reg := newFakeRegistrar()
+	r.RegisterTools(reg, "demo")
+	aName := PluginToolName("demo", "a", "echo")
+	bName := PluginToolName("demo", "b", "echo")
+	if !reg.has(aName) || !reg.has(bName) {
+		t.Fatalf("both entries should be registered: %v", reg.registered)
+	}
+
+	if err := r.ReconnectEntry("a"); err != nil {
+		t.Fatalf("ReconnectEntry: %v", err)
+	}
+	if !reg.has(aName) {
+		t.Fatalf("reconnected entry lost its tool: %v", reg.registered)
+	}
+	if !reg.has(bName) {
+		t.Fatalf("other entry's tool was removed by reconnecting %q: %v", "a", reg.registered)
+	}
+}
+
+// TestRuntime_MissingCredentialsIsAuthError 缺凭据要归到 auth 类，
+// UI 才能亮"去授权"而不是让用户去查网络。
+func TestRuntime_MissingCredentialsIsAuthError(t *testing.T) {
+	p := &Plugin{
+		Root:     t.TempDir(),
+		Manifest: &Manifest{Name: "demo"},
+		MCPServers: []MCPEntryStatus{{
+			Name: "srv",
+			Spec: MCPServerSpec{
+				Type:    TransportStdio,
+				Command: "definitely-not-a-real-binary",
+				Cwd:     t.TempDir(),
+				Env:     map[string]string{"API_KEY": ""},
+			},
+		}},
+	}
+	r := NewRuntime(p)
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer r.Stop()
+
+	st, _ := r.EntryStatus("srv")
+	if st.ErrorKind != string(mcp.ErrKindAuth) {
+		t.Fatalf("error kind = %q, want auth (err=%q)", st.ErrorKind, st.Error)
+	}
+	if !strings.Contains(st.Error, "API_KEY") {
+		t.Fatalf("error should name the missing credential: %q", st.Error)
+	}
+}
+
+// TestApplyCredentials_IgnoresUndeclaredKeys 回归：凭据只能填进条目声明过的
+// key，不能变成"往子进程环境里注入任意变量"（PATH / LD_PRELOAD / NODE_OPTIONS）。
+func TestApplyCredentials_IgnoresUndeclaredKeys(t *testing.T) {
+	spec := MCPServerSpec{
+		Type:    TransportStdio,
+		Command: "srv",
+		Env: map[string]string{
+			"API_KEY": "",
+			"MODE":    "readonly",
+		},
+	}
+	creds := map[string]string{
+		"API_KEY":      "secret",
+		"LD_PRELOAD":   "/tmp/evil.so",
+		"NODE_OPTIONS": "--require /tmp/evil.js",
+	}
+	out, missing := applyCredentials(spec, creds)
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v, want none", missing)
+	}
+	if out.Env["API_KEY"] != "secret" {
+		t.Fatalf("declared key not filled: %v", out.Env)
+	}
+	if _, ok := out.Env["LD_PRELOAD"]; ok {
+		t.Fatalf("undeclared key must not be injected: %v", out.Env)
+	}
+	if _, ok := out.Env["NODE_OPTIONS"]; ok {
+		t.Fatalf("undeclared key must not be injected: %v", out.Env)
+	}
+	if out.Env["MODE"] != "readonly" {
+		t.Fatalf("declared literal must survive: %v", out.Env)
+	}
+}
+
+// TestPluginToolName_NoSegmentCollision 回归：不同切分不得拼出同一个工具名，
+// 且名字必须落在 provider 接受的字符集与长度内。
+func TestPluginToolName_NoSegmentCollision(t *testing.T) {
+	cases := [][3]string{
+		{"demo", "a_b", "c"},
+		{"demo", "a", "b_c"},
+		{"demo", "srv-1", "read file"},
+		{"demo", "srv 1", "read_file"},
+		{"具名", "服务器", "工具"},
+		{"demo", strings.Repeat("s", 40), strings.Repeat("t", 40)},
+	}
+	seen := map[string][3]string{}
+	for _, c := range cases {
+		name := PluginToolName(c[0], c[1], c[2])
+		if len(name) > maxToolNameLen {
+			t.Errorf("name %q exceeds %d chars", name, maxToolNameLen)
+		}
+		for _, r := range name {
+			ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '-' || r == '_'
+			if !ok {
+				t.Errorf("name %q contains illegal character %q", name, r)
+				break
 			}
 		}
-	}()
-
-	t.Cleanup(func() {
-		_ = tr.Close() // 关闭 stdin → scanner 结束 → 管道关闭 → readLoop 退出
-		_ = serverToClientW.Close()
-	})
-	return &fakeMCPServer{tr: tr}
-}
-
-func writeResponse(mu *sync.Mutex, w io.Writer, id json.RawMessage, result string) {
-	resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", id, result)
-	mu.Lock()
-	defer mu.Unlock()
-	_, _ = io.WriteString(w, resp)
-}
-
-// TestStdioTransport_NotificationAndSequentialRequests 回归:通知不得等待响应。
-// 旧实现把 notifications/initialized 也当请求等响应行,会阻塞抢占 tools/list
-// 的响应导致握手挂死;新实现通知只写不等。
-func TestStdioTransport_NotificationAndSequentialRequests(t *testing.T) {
-	f := newFakeTransport(t)
-	tr := f.tr
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if _, err := tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "initialize", ID: 1}); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-	// server 对通知不回复:若实现仍阻塞等待,这里会在 ctx 超时处失败。
-	if _, err := tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "notifications/initialized"}); err != nil {
-		t.Fatalf("notification should not wait for response: %v", err)
-	}
-	resp, err := tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "tools/list", ID: 2})
-	if err != nil {
-		t.Fatalf("tools/list: %v", err)
-	}
-	var res struct {
-		Tools []mcp.Tool `json:"tools"`
-	}
-	if err := json.Unmarshal(resp.Result, &res); err != nil {
-		t.Fatalf("parse tools: %v", err)
-	}
-	if len(res.Tools) != 1 || res.Tools[0].Name != "echo" {
-		t.Fatalf("tools = %+v, want [echo]", res.Tools)
-	}
-}
-
-// TestStdioTransport_ConcurrentRequestsMatchedByID 回归:响应必须按 id 匹配。
-// server 对 initialize 延迟 200ms、对 tools/list 立即回复;若按到达顺序匹配,
-// tools/list 会抢到 initialize 的响应,initialize 拿到 tools 列表。
-func TestStdioTransport_ConcurrentRequestsMatchedByID(t *testing.T) {
-	f := newFakeTransport(t)
-	tr := f.tr
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	type result struct {
-		resp *mcp.JSONRPCResponse
-		err  error
-	}
-	initCh := make(chan result, 1)
-	listCh := make(chan result, 1)
-	go func() {
-		r, e := tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "initialize", ID: 1})
-		initCh <- result{r, e}
-	}()
-	go func() {
-		r, e := tr.Send(ctx, &mcp.JSONRPCRequest{JSONRPC: mcp.JSONRPCVersion, Method: "tools/list", ID: 2})
-		listCh <- result{r, e}
-	}()
-
-	var initRes, listRes result
-	select {
-	case initRes = <-initCh:
-	case <-ctx.Done():
-		t.Fatal("initialize timed out")
-	}
-	select {
-	case listRes = <-listCh:
-	case <-ctx.Done():
-		t.Fatal("tools/list timed out")
-	}
-	if initRes.err != nil {
-		t.Fatalf("initialize: %v", initRes.err)
-	}
-	if listRes.err != nil {
-		t.Fatalf("tools/list: %v", listRes.err)
-	}
-	if !strings.Contains(string(initRes.resp.Result), "protocolVersion") {
-		t.Errorf("initialize got wrong response: %s", initRes.resp.Result)
-	}
-	if !strings.Contains(string(listRes.resp.Result), "tools") {
-		t.Errorf("tools/list got wrong response: %s", listRes.resp.Result)
-	}
-}
-
-// TestRuntimeCallTool_IsErrorAndMultiText 回归:isError 必须映射为错误,
-// 多段 text 内容须全部保留(旧实现只取第一段且忽略 isError)。
-func TestRuntimeCallTool_IsErrorAndMultiText(t *testing.T) {
-	f := newFakeTransport(t)
-	r := NewRuntime(&Plugin{})
-	r.conns["srv"] = &connection{transport: f.tr}
-
-	_, err := r.CallTool(context.Background(), "srv", "fail", nil)
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("expected tool error boom, got %v", err)
-	}
-
-	out, err := r.CallTool(context.Background(), "srv", "echo", nil)
-	if err != nil {
-		t.Fatalf("echo: %v", err)
-	}
-	if out != "hello\nworld" {
-		t.Fatalf("out = %v, want hello\\nworld", out)
-	}
-}
-
-// fakeRegistrar 记录注册/注销的工具名。
-type fakeRegistrar struct {
-	registered map[string]bool
-}
-
-func (f *fakeRegistrar) Register(t tool.Tool)   { f.registered[t.Name()] = true }
-func (f *fakeRegistrar) Unregister(name string) { delete(f.registered, name) }
-
-// TestRuntimeRegisterUnregisterTools 回归:reload/uninstall 时工具可被完整注销。
-func TestRuntimeRegisterUnregisterTools(t *testing.T) {
-	// 只验证注册表读写,不触发 transport。
-	r := NewRuntime(&Plugin{})
-	r.conns["srv"] = &connection{tools: []mcp.Tool{{Name: "echo"}}}
-
-	reg := &fakeRegistrar{registered: map[string]bool{}}
-	r.RegisterTools(reg, "demo")
-	if !reg.registered["ap_demo_srv_echo"] {
-		t.Fatalf("tool not registered: %v", reg.registered)
-	}
-	if len(r.registered) != 1 {
-		t.Fatalf("runtime should track 1 registered tool, got %v", r.registered)
-	}
-
-	r.UnregisterTools(reg)
-	if len(reg.registered) != 0 {
-		t.Fatalf("registry should be empty after unregister, got %v", reg.registered)
-	}
-	if len(r.registered) != 0 {
-		t.Fatalf("runtime tracking should be cleared, got %v", r.registered)
+		if prev, dup := seen[name]; dup {
+			t.Errorf("collision: %v and %v both map to %q", prev, c, name)
+		}
+		seen[name] = c
 	}
 }
 
@@ -238,10 +308,11 @@ func TestValidateEntryName(t *testing.T) {
 	}
 }
 
-// TestUninstall_RejectsUnsafeNames 回归:卸载只接受单级目录名,防路径穿越。
+// TestUninstall_RejectsUnsafeNames 回归:卸载只接受单级目录名,防路径穿越,
+// 并且不能删掉安装/升级自己用的隐藏目录。
 func TestUninstall_RejectsUnsafeNames(t *testing.T) {
-	for _, name := range []string{"", "..", ".", "a/b", "a\\b", "../../etc"} {
-		if _, err := Uninstall(name); err == nil {
+	for _, name := range []string{"", "..", ".", "a/b", "a\\b", "../../etc", ".staging-abc", ".backup-abc"} {
+		if _, err := Uninstall(name, false); err == nil {
 			t.Errorf("Uninstall(%q) should be rejected", name)
 		}
 	}

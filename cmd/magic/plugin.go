@@ -30,7 +30,9 @@ var pluginCmd = &cobra.Command{
 }
 
 var (
-	pluginInstallName string
+	pluginInstallName      string
+	pluginInstallNoUpgrade bool
+	pluginRemovePurge      bool
 
 	pluginListCmd = &cobra.Command{
 		Use:   "list",
@@ -71,6 +73,8 @@ func init() {
 	rootCmd.AddCommand(pluginCmd)
 	pluginCmd.AddCommand(pluginListCmd, pluginInstallCmd, pluginRemoveCmd, pluginEnableCmd, pluginDisableCmd)
 	pluginInstallCmd.Flags().StringVar(&pluginInstallName, "name", "", "directory name under the plugin scan dir (default: manifest name)")
+	pluginInstallCmd.Flags().BoolVar(&pluginInstallNoUpgrade, "no-upgrade", false, "refuse to replace an already installed plugin (default: install upgrades in place)")
+	pluginRemoveCmd.Flags().BoolVar(&pluginRemovePurge, "purge", false, "also delete the plugin data directory (PLUGIN_DATA)")
 }
 
 // loadAgentPluginsFromDisk 扫描默认目录，返回按名单索引的已加载插件。
@@ -160,30 +164,34 @@ func runPluginInstall(target string) error {
 		return fmt.Errorf("install source not found: %w", err)
 	}
 
-	// 目录名先按清单名推断，装完再把真实目录名报出来：
-	// 规范允许目录名与 manifest.name 不同，但默认保持一致最不容易搞混。
-	name := pluginInstallName
-	if name == "" {
-		manifest, err := agentplugin.InspectManifest(target)
-		if err != nil {
-			return fmt.Errorf("invalid plugin: %w", err)
-		}
-		name = manifest.Name
+	// 目录名按清单推断（目录或 zip 都支持）：规范允许目录名与 manifest.name
+	// 不同，但默认保持一致最不容易搞混。早先对 zip 直接调 InspectManifest，
+	// 必然报 "invalid plugin"——只能手工加 --name 才能装 zip。
+	opts := agentplugin.InstallOptions{Name: pluginInstallName, Upgrade: !pluginInstallNoUpgrade}
+	manifest, err := agentplugin.InspectArchiveManifest(target)
+	if err != nil {
+		return fmt.Errorf("invalid plugin: %w", err)
+	}
+	if opts.Name == "" {
+		opts.Name = manifest.Name
 	}
 
 	var dest string
 	var skipped []string
 	if info.IsDir() {
-		dest, skipped, err = agentplugin.InstallFromDir(target, name)
+		dest, _, skipped, err = agentplugin.InstallFromDir(target, opts)
 	} else {
-		dest, err = agentplugin.InstallFromZip(target, name)
+		dest, _, err = agentplugin.InstallFromZip(target, opts)
 	}
 	if err != nil {
+		if errors.Is(err, agentplugin.ErrPluginExists) {
+			return fmt.Errorf("plugin %q is already installed (re-run without --no-upgrade to upgrade it)", opts.Name)
+		}
 		return err
 	}
 
 	// 装完立刻自检：解压成功不等于插件可用（manifest 可能被拒、条目可能校验失败）。
-	plugin := agentplugin.Load(dest, filepath.Join(config.GetMagicHome(), "agent-plugins-data", name))
+	plugin := agentplugin.Load(dest, filepath.Join(config.GetMagicHome(), "agent-plugins-data", filepath.Base(dest)))
 	fmt.Printf("Installed into %s\n", dest)
 	if plugin.IsRejected() {
 		fmt.Fprintf(os.Stderr, "warning: plugin is rejected and will not load: %s\n", plugin.FatalError)
@@ -223,14 +231,22 @@ func runPluginRemove(name string) error {
 	if !ok {
 		return fmt.Errorf("plugin %q is not installed", name)
 	}
-	// Uninstall 按目录名删；目录名与 manifest.name 可能不同，从 Root 反推。
-	dirName := filepath.Base(mp.Plugin.Root)
-	removed, err := agentplugin.Uninstall(dirName)
+	// Uninstall 按目录名删；目录名与 manifest.name 可能不同，优先用
+	// ManagedPlugin.DirName（清单被拒时 Root 为空，反推会拿到空串）。
+	dirName := mp.DirName
+	if dirName == "" && mp.Plugin != nil && mp.Plugin.Root != "" {
+		dirName = filepath.Base(mp.Plugin.Root)
+	}
+	removed, err := agentplugin.Uninstall(dirName, pluginRemovePurge)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Removed %s\n", removed)
-	fmt.Printf("  data dir removed: %s\n", mp.Plugin.DataDir)
+	if pluginRemovePurge {
+		fmt.Printf("  data dir removed: %s\n", mp.Plugin.DataDir)
+	} else {
+		fmt.Printf("  data dir kept: %s (use --purge to delete it)\n", mp.Plugin.DataDir)
+	}
 	return nil
 }
 

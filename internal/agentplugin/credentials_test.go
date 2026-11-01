@@ -15,7 +15,7 @@ func TestApplyCredentials(t *testing.T) {
 	creds := map[string]string{
 		"DINGTALK_Client_ID":     "app-123",
 		"DINGTALK_Client_Secret": "sec-456",
-		"EXTRA":                  "1", // mcp.json 里没声明的 key 也要带上
+		"EXTRA":                  "1", // mcp.json 里没声明的 key 必须被丢弃
 	}
 
 	got, missing := applyCredentials(base, creds)
@@ -29,8 +29,10 @@ func TestApplyCredentials(t *testing.T) {
 	if got.Env["LOG_LEVEL"] != "debug" {
 		t.Errorf("non-credential env lost: %v", got.Env)
 	}
-	if got.Env["EXTRA"] != "1" {
-		t.Errorf("extra key dropped: %v", got.Env)
+	// 未声明的 key 不得进入子进程环境：否则在凭据里写 PATH /
+	// NODE_OPTIONS / LD_PRELOAD 就能改写子进程的运行时行为。
+	if _, ok := got.Env["EXTRA"]; ok {
+		t.Errorf("undeclared key must be dropped: %v", got.Env)
 	}
 	// 原 spec 不被改写:再次以空凭据展开应回到占位状态。
 	if base.Env["DINGTALK_Client_ID"] != "" {

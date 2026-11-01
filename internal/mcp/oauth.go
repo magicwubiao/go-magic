@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -211,6 +212,24 @@ func (s *OAuthTokenStore) Delete(name string) error {
 		return err
 	}
 	return os.Rename(tmp, s.path)
+}
+
+// Keys 返回存储里现有的全部键（不含 token 本身）。
+// 用于"卸载插件时清掉它名下所有授权"这类前缀匹配清理：只按已知条目名
+// 逐个删会漏掉那些已经从 mcp.json 里删掉的陈旧 token。
+func (s *OAuthTokenStore) Keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all, err := s.readAll()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(all))
+	for k := range all {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +508,11 @@ func (m *OAuthManager) SetOnFlowStarted(fn func(serverName, authorizeURL string)
 
 // Status 返回连接器的 OAuth 状态，供 UI 轮询。
 func (m *OAuthManager) Status(name string) OAuthFlowStatus {
+	// 没有 token store（未配置 OAuth）时一律视为 none：
+	// 早先这里直接解引用 store，任何"顺手查一下状态"的调用都会 panic。
+	if m == nil || m.store == nil {
+		return OAuthFlowStatus{State: "none"}
+	}
 	if tok, ok := m.store.Get(name); ok && tok.Valid() {
 		return OAuthFlowStatus{State: OAuthStateAuthorized}
 	}
@@ -1061,6 +1085,56 @@ func (m *OAuthManager) SignOut(serverName string) error {
 		return nil
 	}
 	return m.store.Delete(serverName)
+}
+
+// SignOutPrefix 删除所有以 prefix 开头的 token，并终止这些键上正在进行的流程。
+//
+// 用于"卸载插件 / 删除连接器"这类整体清理：调用方只知道命名空间前缀
+// （如 "agentplugin:<plugin>/"），并不知道历史上曾经授权过哪些条目名。
+// 返回实际删除的数量。
+func (m *OAuthManager) SignOutPrefix(prefix string) int {
+	if prefix == "" {
+		return 0
+	}
+	// 先按前缀把流程掐掉：正在等回调的流程会把 token 写回存储，
+	// 不先取消就是"刚删完又被写回来"。
+	m.mu.Lock()
+	var cancelled []string
+	for key, flow := range m.flows {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		flow.flowErr = fmt.Errorf("signed out")
+		m.closeFlowLocked(flow)
+		select {
+		case <-flow.done:
+		default:
+			close(flow.done)
+		}
+		cancelled = append(cancelled, key)
+	}
+	for _, key := range cancelled {
+		delete(m.flows, key)
+		delete(m.lastResult, key)
+	}
+	m.mu.Unlock()
+
+	if m.store == nil {
+		return 0
+	}
+	removed := 0
+	for _, key := range m.store.Keys() {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if err := m.store.Delete(key); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.Infof("[MCP] cleared %d stored OAuth token(s) under %q", removed, prefix)
+	}
+	return removed
 }
 
 // oauthProvider 是 AuthTokenProvider 的实现，绑定单个连接器。

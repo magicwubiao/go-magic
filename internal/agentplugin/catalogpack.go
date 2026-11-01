@@ -20,12 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/mcp"
@@ -153,19 +151,19 @@ func cliCatalogPacks() []CatalogPack {
 	for _, c := range clicatalog.Categories() {
 		labels[c.ID] = c.Label
 	}
-	// LookPath 在 Windows 上要扫完整条 PATH（找不到的命令最慢，每条几百毫秒），
-	// 串行跑 14 条就是好几秒——前端"CLI 应用渲染慢"就是它。并行探测取最慢一条。
-	found := make([]bool, len(entries))
-	var wg sync.WaitGroup
-	for i, e := range entries {
-		wg.Add(1)
-		go func(i int, bin string) {
-			defer wg.Done()
-			_, err := exec.LookPath(bin)
-			found[i] = err == nil
-		}(i, e.Connector.Command)
+	// 走 CommandAvailable（带 30 秒 TTL 缓存 + 并行预热）：LookPath 在 Windows 上
+	// 要扫完整条 PATH（找不到的命令最慢，每条几百毫秒），而插件页每刷新一次
+	// 就要为同一批命令再探一遍。这里直接复用专为此写的缓存，
+	// 顺带让"装完命令立刻失效缓存"的路径对目录页也生效。
+	commands := make([]string, 0, len(entries))
+	for _, e := range entries {
+		commands = append(commands, e.Connector.Command)
 	}
-	wg.Wait()
+	PrimeCommands(commands)
+	found := make([]bool, len(entries))
+	for i, e := range entries {
+		found[i] = CommandAvailable(e.Connector.Command)
+	}
 
 	out := make([]CatalogPack, 0, len(entries))
 	for i, e := range entries {

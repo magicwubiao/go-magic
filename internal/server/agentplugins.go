@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
+	"github.com/magicwubiao/go-magic/internal/mcp"
+	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -44,17 +46,10 @@ func (s *Server) loadAgentPluginsParsed() (*agentplugin.Manager, map[string]*age
 	mgr := agentplugin.NewManager([]string{agentplugin.DefaultScanDir()}, disabled)
 	plugins := mgr.LoadAll()
 
-	// 注入用户凭据(必须在 StartAll 之前:连接时要把凭据合并进子进程环境)。
-	// OAuth 管理器一并注入:远程条目才能"点一下登录"而不是手填 API key。
-	oauthMgr := s.oauthManagerForPlugins()
-	for name, mp := range plugins {
-		if mp.Runtime == nil {
-			continue
-		}
-		mp.Runtime.SetOAuth(oauthMgr)
-		if creds := s.agentPluginCredentials(name); len(creds) > 0 {
-			mp.Runtime.SetCredentials(creds)
-		}
+	// 注入 MCP 管理器 / 用户凭据 / OAuth（必须在 StartAll 之前：
+	// 连接时要把凭据合并进子进程环境，远程条目才能"点一下登录"）。
+	for _, mp := range plugins {
+		s.preparePluginRuntime(mp)
 	}
 
 	// 注入 skills 到 skills 管理器(禁用插件跳过)。
@@ -73,10 +68,48 @@ func (s *Server) loadAgentPluginsParsed() (*agentplugin.Manager, map[string]*age
 	// token source 工厂让 cli.json 里声明了 oauth 的连接器在每次执行前
 	// 拿到本程序换来的 token（键带插件命名空间，见 agentplugin.CLIOAuthKey）。
 	if s.toolReg != nil {
-		agentplugin.RegisterCLIToolsWithOAuth(plugins, s.toolReg, s.agentPluginCredentials, s.pluginCLITokenSource)
+		agentplugin.RegisterCLIToolsWithOptions(plugins, s.toolReg, s.cliRegisterOptions())
 	}
 
 	return mgr, plugins
+}
+
+// preparePluginRuntime 给单个插件的运行时注入共享依赖。
+//
+// 三样缺一不可：MCP 管理器（连接、工具发现、懒连接）、OAuth 管理器
+// （远程条目授权/刷新）、用户凭据（合并进子进程 env）。
+func (s *Server) preparePluginRuntime(mp *agentplugin.ManagedPlugin) {
+	if mp == nil || mp.Runtime == nil {
+		return
+	}
+	mp.Runtime.SetMCPManager(s.pluginMCPMgr)
+	mp.Runtime.SetOAuth(s.oauthManagerForPlugins())
+	if creds := s.agentPluginCredentials(mp.Name()); len(creds) > 0 {
+		mp.Runtime.SetCredentials(creds)
+	}
+}
+
+// pluginMCPPolicy 是插件 MCP 条目的准入校验，注入给 pluginMCPMgr。
+//
+// 抽成方法而不是内联闭包，是为了让"插件入口确实接了 policy"这件事可以被
+// 单测直接钉住（此前这个入口完全没有调用 CheckMCP，policy 只管连接器）。
+func (s *Server) pluginMCPPolicy(name string, cfg mcp.ServerConfig) error {
+	return s.policySnapshot().CheckMCP(name, cfg.Command, cfg.URL)
+}
+
+// cliRegisterOptions 组装插件 CLI 工具的注册参数（含准入校验）。
+//
+// policy 是"配置里写什么都不算数"的最后一道锁：插件是第三方内容，
+// cli.json 的 command 完全由作者决定，不校验就等于"装个插件即可运行
+// 本机任意程序"。
+func (s *Server) cliRegisterOptions() agentplugin.CLIRegisterOptions {
+	return agentplugin.CLIRegisterOptions{
+		Creds:        s.agentPluginCredentials,
+		TokenSources: s.pluginCLITokenSource,
+		AllowCommand: func(connectorName, command string) error {
+			return s.policySnapshot().CheckCLI(connectorName, command)
+		},
+	}
 }
 
 // startAgentPluginRuntimes 连接插件声明的 MCP server，并把发现的工具注册进
@@ -116,12 +149,24 @@ func (s *Server) disabledAgentPlugins() map[string]bool {
 
 // agentPluginCredentials 读取指定插件的用户凭据(env key → value)。
 // 只在连接路径使用,永远不要把返回值直接序列化给前端。
+//
+// 数据来自加密存储（见 agentplugin_creds.go），不再读 config.json。
 func (s *Server) agentPluginCredentials(name string) map[string]string {
-	cfg := s.cfgSnapshot()
-	if cfg == nil {
+	if s.pluginCreds == nil {
 		return nil
 	}
-	return cfg.AgentPlugins.Credentials[name]
+	return s.pluginCreds.Load(name)
+}
+
+// setPluginCredentials 把插件凭据写进加密存储。
+//
+// 不再写 config.json：那个文件用户会手工编辑/备份/分享，明文 key 一旦
+// 写进去就等于默认泄露（与 OAuth token 不进 config.json 是同一条纪律）。
+func (s *Server) setPluginCredentials(name string, creds map[string]string) error {
+	if s.pluginCreds == nil {
+		return fmt.Errorf("credential store is not available")
+	}
+	return s.pluginCreds.Save(name, creds)
 }
 
 // setPluginDisabled 更新配置中的禁用状态并持久化。
@@ -341,12 +386,213 @@ func (s *Server) reloadAgentPlugins(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// installAgentPlugin 接收 zip 上传并安装插件。
+// ---- 单个插件的增量生命周期 ----
+//
+// 早先 install/enable/disable/uninstall 全部走 swapAgentPlugins：注销**所有**
+// 插件注入 + StopAll + 重新 LoadAll + StartAll。装一个带 npx server 的插件，
+// 会把其它插件的所有 stdio 子进程一起杀掉（丢会话状态、npx 冷启动重来），
+// 而改凭据却做了精确的 ReconnectEntry——同一类操作两种成本。
+//
+// 现在只有用户显式"重新扫描"（reload）才全量重建；增删改单个插件只动它自己。
+
+// pluginListSnapshot 返回当前插件表的只读快照（copy-on-write 语义：
+// 表本身只在写锁内整体替换，读者拿到的 map 不会被后续写入改动）。
+func (s *Server) pluginListSnapshot() map[string]*agentplugin.ManagedPlugin {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	return s.agentPlugins
+}
+
+// pluginEntry 取单个插件。
+func (s *Server) pluginEntry(name string) (*agentplugin.ManagedPlugin, bool) {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	mp, ok := s.agentPlugins[name]
+	return mp, ok
+}
+
+// putPluginEntry 写入/替换单个插件条目（复制整表后替换指针，读者不受影响）。
+func (s *Server) putPluginEntry(name string, mp *agentplugin.ManagedPlugin) {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	next := make(map[string]*agentplugin.ManagedPlugin, len(s.agentPlugins)+1)
+	for k, v := range s.agentPlugins {
+		next[k] = v
+	}
+	next[name] = mp
+	s.agentPlugins = next
+}
+
+// dropPluginEntry 移除单个插件条目。
+func (s *Server) dropPluginEntry(name string) {
+	s.acquireServerMu("")
+	defer s.releaseServerMu()
+	if _, ok := s.agentPlugins[name]; !ok {
+		return
+	}
+	next := make(map[string]*agentplugin.ManagedPlugin, len(s.agentPlugins))
+	for k, v := range s.agentPlugins {
+		if k == name {
+			continue
+		}
+		next[k] = v
+	}
+	s.agentPlugins = next
+}
+
+// isPluginDisabled 报告插件是否在禁用列表里。
+func (s *Server) isPluginDisabled(name string) bool {
+	return s.disabledAgentPlugins()[name]
+}
+
+// findByDirName 按目录名查找已加载插件（目录名与 manifest.name 可能不同）。
+func (s *Server) findByDirName(dirName string) (string, *agentplugin.ManagedPlugin) {
+	for name, mp := range s.pluginListSnapshot() {
+		if mp != nil && mp.DirName == dirName {
+			return name, mp
+		}
+	}
+	return "", nil
+}
+
+// activatePlugin 让一个刚解析出来的插件生效：注入 skills、注册 CLI 工具、
+// 启动 MCP、注册 MCP 工具。只影响这一个插件。
+func (s *Server) activatePlugin(mp *agentplugin.ManagedPlugin) {
+	if mp == nil || mp.Plugin == nil {
+		return
+	}
+	s.preparePluginRuntime(mp)
+
+	if !mp.Disabled && s.skillMgr != nil {
+		for _, ref := range mp.Plugin.Skills {
+			if ref.Skill == nil {
+				continue
+			}
+			if ref.Skill.Source == "" {
+				ref.Skill.Source = agentplugin.SkillSourceAgentPlugin
+			}
+			s.skillMgr.RegisterSkill(ref.Skill)
+		}
+	}
+	if mp.Disabled {
+		return
+	}
+
+	one := map[string]*agentplugin.ManagedPlugin{mp.Name(): mp}
+	if s.toolReg != nil {
+		agentplugin.RegisterCLIToolsWithOptions(one, s.toolReg, s.cliRegisterOptions())
+	}
+	agentplugin.StartPlugin(mp)
+	if s.toolReg != nil && mp.Runtime != nil {
+		mp.Runtime.RegisterTools(s.toolReg, mp.Name())
+	}
+}
+
+// deactivatePlugin 反向操作：注销该插件注入的 tools/skills，停止它的运行时。
+// 其它插件的运行时与注册项不受影响。
+func (s *Server) deactivatePlugin(mp *agentplugin.ManagedPlugin) {
+	if mp == nil || mp.Plugin == nil {
+		return
+	}
+	one := map[string]*agentplugin.ManagedPlugin{mp.Name(): mp}
+	if s.toolReg != nil {
+		agentplugin.UnregisterAllTools(one, s.toolReg)
+		agentplugin.UnregisterCLITools(one, s.toolReg)
+	}
+	if s.skillMgr != nil {
+		for _, ref := range mp.Plugin.Skills {
+			if ref.Skill != nil {
+				s.skillMgr.UnregisterSkillIfSource(ref.Skill.Name, agentplugin.SkillSourceAgentPlugin)
+			}
+		}
+	}
+	agentplugin.StopPlugin(mp)
+}
+
+// cleanupPluginState 清掉插件名下的所有持久状态：凭据、MCP 条目的 OAuth
+// token、CLI 连接器的 OAuth token。
+//
+// 卸载不清这些会带来一个隐蔽问题：同名插件重新装回来时**静默继承**上一次
+// 的凭据与授权——用户以为"重装=干净"，实际拿到的是旧身份；token 也会一直
+// 留在磁盘上无人回收。
+func (s *Server) cleanupPluginState(name string) {
+	if name == "" {
+		return
+	}
+	if s.pluginCreds != nil {
+		s.pluginCreds.Delete(name)
+	}
+	if s.pluginMCPMgr != nil && s.pluginMCPMgr.OAuth() != nil {
+		oauthMgr := s.pluginMCPMgr.OAuth()
+		// MCP 条目：agentplugin:<plugin>/*
+		oauthMgr.SignOutPrefix("agentplugin:" + name + "/")
+		// CLI 连接器：cliconn:agentplugin/<plugin>/*
+		oauthMgr.SignOutPrefix("cliconn:agentplugin/" + name + "/")
+	}
+}
+
+// errPluginNotFound 表示插件目录不存在。
+var errPluginNotFound = errors.New("plugin not found")
+
+// removePlugin 卸载一个插件：停运行时 → 注销注入 → 删目录（可选清数据）→
+// 清凭据与 token → 从禁用表移除。成功返回被删目录。
+//
+// 调用方必须持有 agentPluginsMu（与并发 install/reload 互斥）。
+func (s *Server) removePlugin(name string, purge bool) (removedDir string, err error) {
+	mp, ok := s.pluginEntry(name)
+
+	dirName := name
+	if ok && mp != nil && mp.DirName != "" {
+		dirName = mp.DirName
+	}
+	if _, exists := agentplugin.InstalledDir(dirName); !exists {
+		return "", errPluginNotFound
+	}
+
+	// 先停运行时再删目录：stdio 子进程的 cwd 在插件根内，Windows 上会因
+	// 目录句柄占用导致 RemoveAll 失败。
+	if ok {
+		s.deactivatePlugin(mp)
+		s.dropPluginEntry(name)
+		// 工具缓存/懒连接登记也要清：否则下次启动会为一个已不存在的
+		// server 注册一批点不动的影子工具。
+		if s.pluginMCPMgr != nil && mp != nil && mp.Plugin != nil {
+			for _, ms := range mp.Plugin.MCPServers {
+				s.pluginMCPMgr.Forget(agentplugin.OAuthKey(name, ms.Name))
+			}
+		}
+	}
+	dir, rmErr := agentplugin.Uninstall(dirName, purge)
+	if rmErr != nil {
+		// 目录删不掉：把插件恢复回来，避免"运行时已停但列表还在"的半卸载态。
+		if ok {
+			s.putPluginEntry(name, mp)
+			s.activatePlugin(mp)
+		}
+		return "", rmErr
+	}
+
+	s.cleanupPluginState(name)
+	if dirName != name {
+		// 目录名与 manifest 名不同时，两套键历史上都可能被写过。
+		s.cleanupPluginState(dirName)
+	}
+	// 从禁用列表移除（禁用列表以 manifest.name 为键）。
+	s.setPluginDisabled(name, false)
+	return dir, nil
+}
+
+// installAgentPlugin 接收 zip 上传并安装（或升级）插件。
 //
 // 期望 multipart 表单:
 //
-//	file: 插件 zip 文件(必填)
-//	name: 插件目录名(可选;缺省时用 zip 文件名去掉 .zip 后缀)
+//	file:    插件 zip 文件(必填)
+//	name:    插件目录名(可选;缺省时取清单里的 manifest.name)
+//	upgrade: "0"/"false" 时禁止覆盖已安装的同名插件（默认允许，即升级）
+//
+// 升级是**原子替换**：新内容先解压到隐藏临时目录，校验通过后整体换名；
+// PLUGIN_DATA 在 agent-plugins-data/ 下，不在替换范围内，因此升级不丢数据
+// （这也正是"升级 = 卸载 + 重装"最不能接受的副作用）。
 func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 	// 32MB 内存缓冲,超出写临时文件。
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -359,19 +605,6 @@ func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		name = header.Filename
-		// 大小写不敏感地去掉 .zip 后缀。
-		if l := len(name); l > 4 && strings.EqualFold(name[l-4:], ".zip") {
-			name = name[:l-4]
-		}
-	}
-	if name == "" {
-		http.Error(w, "plugin name is empty", http.StatusBadRequest)
-		return
-	}
 
 	// 写到临时文件再交给 InstallFromZip(zip 需要 *os.File / path)。
 	tmp, err := os.CreateTemp("", "agent-plugin-*.zip")
@@ -388,28 +621,83 @@ func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	tmp.Close()
 
-	dir, err := agentplugin.InstallFromZip(tmpPath, name)
+	// 目录名：优先取表单，其次取清单（与 CLI 的 `--name` 默认行为一致）。
+	// 早先 Web 用上传文件名，于是 "My-Plugin.zip" 会因大写字母被
+	// validatePluginName 直接 400，而 CLI 装同一个包却成功。
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		m, merr := agentplugin.InspectArchiveManifest(tmpPath)
+		if merr != nil {
+			http.Error(w, "invalid plugin: "+merr.Error(), http.StatusBadRequest)
+			return
+		}
+		name = m.Name
+	}
+	if header != nil && header.Filename != "" {
+		log.Debugf("[AgentPlugin] installing %s as %q", header.Filename, name)
+	}
+
+	upgrade := true
+	switch strings.ToLower(strings.TrimSpace(r.FormValue("upgrade"))) {
+	case "0", "false", "no":
+		upgrade = false
+	}
+
+	// 生命周期串行：安装/升级与并发的 reload/uninstall 交错会产生孤儿进程。
+	s.agentPluginsMu.Lock()
+	defer s.agentPluginsMu.Unlock()
+
+	// 目标是"替换同名插件"时，先停掉旧运行时再动目录（见 removePlugin 注释）。
+	var previous *agentplugin.ManagedPlugin
+	var previousName string
+	if old, ok := s.pluginEntry(name); ok {
+		previous, previousName = old, name
+	} else if oldName, old := s.findByDirName(name); old != nil {
+		previous, previousName = old, oldName
+	}
+	if previous != nil {
+		s.deactivatePlugin(previous)
+		s.dropPluginEntry(previousName)
+	}
+
+	dir, manifest, err := agentplugin.InstallFromZip(tmpPath, agentplugin.InstallOptions{Name: name, Upgrade: upgrade})
 	if err != nil {
+		// 安装失败：把旧版本重新加载回来（如果刚才摘掉过）。
+		if previous != nil {
+			s.putPluginEntry(previousName, previous)
+			s.activatePlugin(previous)
+		}
+		if errors.Is(err, agentplugin.ErrPluginExists) {
+			jsonError(w, http.StatusConflict, "plugin already installed: pass upgrade=1 to replace it")
+			return
+		}
 		http.Error(w, "install failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// 一致性检查:目录名 ≠ manifest.name 时只告警不阻断(规范允许),
-	// 但后续卸载/启停均按 manifest.name 解析,用户应知晓。
-	var warnings []string
-	if m, merr := agentplugin.InspectManifest(dir); merr == nil && m != nil && m.Name != filepath.Base(dir) {
-		warnings = append(warnings, fmt.Sprintf(
-			"directory name %q differs from manifest.name %q; uninstall/enable/disable resolve by manifest.name",
-			filepath.Base(dir), m.Name))
+	reloaded := agentplugin.LoadDir(dir)
+	if s.isPluginDisabled(reloaded.Name()) {
+		reloaded.Disabled = true
+		reloaded.Runtime = nil
 	}
-
-	// 重新加载以激活新插件(串行化)。
-	s.swapAgentPlugins()
+	s.putPluginEntry(reloaded.Name(), reloaded)
+	s.activatePlugin(reloaded)
 
 	resp := map[string]any{
-		"ok":   true,
-		"name": name,
-		"dir":  dir,
+		"ok":      true,
+		"name":    reloaded.Name(),
+		"dir":     dir,
+		"version": manifest.Version,
+		"upgrade": previous != nil,
+	}
+	var warnings []string
+	if filepath.Base(dir) != manifest.Name {
+		warnings = append(warnings, fmt.Sprintf(
+			"directory name %q differs from manifest.name %q; credentials and disable state are stored under the manifest name",
+			filepath.Base(dir), manifest.Name))
+	}
+	if reloaded.Rejected {
+		warnings = append(warnings, "plugin manifest is invalid and the plugin will not load: "+reloaded.Plugin.FatalError)
 	}
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
@@ -417,76 +705,57 @@ func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, resp)
 }
 
-// uninstallAgentPlugin 卸载插件:按 manifest.name 定位已加载插件,解析出真实
-// 目录名后删除,再统一走串行 reload 清理注入并重载。
+// uninstallAgentPlugin 卸载插件：按名字取已加载插件，用它记录的目录名删目录
+// （规范允许目录名 ≠ manifest.name；靠 Root 反推在清单被拒时只能拿到空串），
+// 并清掉凭据与 OAuth token。
 //
-// 顺序上必须「先停运行时再删目录」:stdio MCP server 的默认 cwd 在插件根内,
-// 子进程存活时 Windows 会因目录句柄占用导致 RemoveAll 失败。
+//	POST /api/agent-plugins/{name}/uninstall?purge=1
 func (s *Server) uninstallAgentPlugin(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 整个卸载流程持有生命周期锁,避免与并发 reload/install 交错。
+	purge := false
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("purge"))) {
+	case "1", "true", "yes":
+		purge = true
+	}
+
 	s.agentPluginsMu.Lock()
 	defer s.agentPluginsMu.Unlock()
 
-	s.acquireServerMu("")
-	old := s.agentPlugins
-	s.releaseServerMu()
-
-	// plugins map 以 manifest.name 为键,目录名可能与之不同;从已加载插件的
-	// Root 推导真实目录名。清单致命被拒的插件不会出现在 map 中,此时退回
-	// 用请求里的名字当目录名(仍在 InstalledDir 做路径安全校验)。
-	dirName := name
-	if mp, ok := old[name]; ok && mp != nil && mp.Plugin != nil && mp.Plugin.Root != "" {
-		dirName = filepath.Base(mp.Plugin.Root)
-	}
-	if _, exists := agentplugin.InstalledDir(dirName); !exists {
-		http.Error(w, "plugin not found", http.StatusNotFound)
-		return
-	}
-
-	s.teardownAgentPluginsLocked()
-
-	dir, err := agentplugin.Uninstall(dirName)
+	dir, err := s.removePlugin(name, purge)
 	if err != nil {
-		// 目录删除失败:恢复加载状态,避免插件"半卸载"(运行时已停但仍在列表)。
-		s.loadAndSwapLocked()
+		if errors.Is(err, errPluginNotFound) {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "uninstall failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// 从禁用列表移除(禁用列表以 manifest.name 为键;已卸载的插件不应残留)。
-	s.setPluginDisabled(name, false)
-
-	s.loadAndSwapLocked()
-
-	jsonResponse(w, map[string]any{
-		"ok":   true,
-		"name": name,
-		"dir":  dir,
-	})
+	resp := map[string]any{"ok": true, "name": name, "dir": dir, "purged": purge}
+	if !purge {
+		// 明确告诉用户数据还在：默认保留 PLUGIN_DATA 是刻意的（重装/换版本
+		// 不该丢索引），但也必须让人知道它在哪、怎么清掉。
+		resp["data_kept"] = filepath.Join(config.GetMagicHome(), "agent-plugins-data")
+	}
+	jsonResponse(w, resp)
 }
 
-// toggleAgentPlugin 启用/禁用插件并重新加载。
-// disabled=true 表示禁用,false 表示启用。
+// toggleAgentPlugin 启用/禁用插件。
+//
+// 只重建这一个插件的运行时：禁用 = 注销注入 + 停运行时；启用 = 从磁盘重新
+// 解析（禁用期间文件可能被改过）后再注入。disabled=true 表示禁用。
 func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name string, disabled bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// 确认插件存在。
-	s.acquireServerMu("")
-	plugins := s.agentPlugins
-	s.releaseServerMu()
-	if plugins == nil {
-		http.Error(w, "plugins not loaded", http.StatusServiceUnavailable)
-		return
-	}
-	if _, ok := plugins[name]; !ok {
-		http.Error(w, errors.New("plugin not found").Error(), http.StatusNotFound)
+	mp, ok := s.pluginEntry(name)
+	if !ok || mp == nil {
+		http.Error(w, "plugin not found", http.StatusNotFound)
 		return
 	}
 
@@ -496,7 +765,7 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 	if !disabled {
 		force := r.URL.Query().Get("force")
 		if force != "1" && force != "true" {
-			if blockers := s.pluginBlockers(name, plugins[name]); len(blockers) > 0 {
+			if blockers := s.pluginBlockers(name, mp); len(blockers) > 0 {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
 				w.WriteHeader(http.StatusConflict)
 				_ = json.NewEncoder(w).Encode(map[string]any{
@@ -509,10 +778,34 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 		}
 	}
 
+	s.agentPluginsMu.Lock()
+	defer s.agentPluginsMu.Unlock()
+
 	s.setPluginDisabled(name, disabled)
 
-	// 串行化停旧运行时并重载(禁用/启用需重建运行时、清理注入)。
-	s.swapAgentPlugins()
+	if disabled {
+		s.deactivatePlugin(mp)
+		// 用一个新结构替换旧值，而不是原地改：其它 goroutine 可能正持有
+		// 旧指针读状态（原地改就是数据竞态）。
+		off := *mp
+		off.Disabled = true
+		off.Runtime = nil
+		s.putPluginEntry(name, &off)
+	} else {
+		dirName := mp.DirName
+		if dirName == "" && mp.Plugin != nil {
+			dirName = filepath.Base(mp.Plugin.Root)
+		}
+		dir, found := agentplugin.InstalledDir(dirName)
+		if !found {
+			http.Error(w, "plugin directory not found", http.StatusNotFound)
+			return
+		}
+		reloaded := agentplugin.LoadDir(dir)
+		reloaded.Disabled = false
+		s.putPluginEntry(name, reloaded)
+		s.activatePlugin(reloaded)
+	}
 
 	jsonResponse(w, map[string]any{
 		"ok":       true,
@@ -760,12 +1053,12 @@ func (s *Server) handlePluginCredentialsAuto(w http.ResponseWriter, r *http.Requ
 func (s *Server) credentialReuse(self string) func(key string) (string, string, bool) {
 	type hit struct{ plugin, value string }
 	pool := map[string]hit{}
-	if cfg := s.cfgSnapshot(); cfg != nil {
-		for pname, creds := range cfg.AgentPlugins.Credentials {
+	if s.pluginCreds != nil {
+		for _, pname := range s.pluginCreds.Plugins() {
 			if pname == self {
 				continue
 			}
-			for k, v := range creds {
+			for k, v := range s.pluginCreds.Load(pname) {
 				if strings.TrimSpace(v) == "" {
 					continue
 				}
@@ -803,24 +1096,6 @@ func (s *Server) handlePluginServerConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	jsonResponse(w, map[string]any{"ok": true, "plugin": name, "server": server})
-}
-
-// setPluginCredentials 把插件凭据写进配置并持久化。
-// 与 setPluginDisabled 相同的锁路径:全程 s.mu + cfgMu,原地改写 s.cfg。
-func (s *Server) setPluginCredentials(name string, creds map[string]string) error {
-	s.acquireServerMu("")
-	defer s.releaseServerMu()
-	s.lockCfgForWrite()
-	defer s.unlockCfgForWrite()
-	if s.cfg.AgentPlugins.Credentials == nil {
-		s.cfg.AgentPlugins.Credentials = map[string]map[string]string{}
-	}
-	if len(creds) == 0 {
-		delete(s.cfg.AgentPlugins.Credentials, name)
-	} else {
-		s.cfg.AgentPlugins.Credentials[name] = creds
-	}
-	return s.persistConfig(true)
 }
 
 // reconnectPluginEntries 重连插件的所有 MCP 条目,返回逐条目结果。
@@ -866,7 +1141,9 @@ func (s *Server) refreshPluginCLITools(pluginName string, mp *agentplugin.Manage
 	defer s.releaseServerMu()
 
 	agentplugin.UnregisterCLITools(one, s.toolReg)
-	agentplugin.RegisterCLIToolsWithOAuth(one, s.toolReg, func(string) map[string]string { return creds }, s.pluginCLITokenSource)
+	opts := s.cliRegisterOptions()
+	opts.Creds = func(string) map[string]string { return creds }
+	agentplugin.RegisterCLIToolsWithOptions(one, s.toolReg, opts)
 }
 
 // allowedIconExts 是可作插件图标的扩展名白名单:严格限定,防止借 icon 路径

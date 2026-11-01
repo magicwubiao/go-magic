@@ -1951,6 +1951,8 @@ export default {
     toolCount: '工具数',
     connected: '已连接',
     disconnected: '未连接',
+    entryDeferred: '按需连接',
+    entryDeferredHint: '首次调用时才建立连接（启动不拉起子进程）；工具清单来自上次缓存。',
     entryError: '条目错误',
     // 条目失败时先说"该做什么"，原始错误收进折叠区：只有一串英文/系统报错
     // 等于没给原因。
@@ -1972,11 +1974,12 @@ export default {
     zipOnly: '仅支持 .zip 文件',
     installing: '安装中…',
     installed: '插件 {name} 安装成功',
+    upgraded: '插件 {name} 已原地升级（数据目录保留）',
     installFailed: '安装失败',
     uninstall: '卸载',
     uninstalled: '插件 {name} 已卸载',
     uninstallFailed: '卸载失败',
-    confirmUninstall: '确定卸载插件 {name}?该插件目录及数据将被删除,此操作不可撤销。',
+    confirmUninstall: '确定卸载插件 {name}?插件目录会被删除（数据目录默认保留，可在 CLI 用 --purge 清除），此操作不可撤销。',
     clickToEnable: '点击启用',
     clickToDisable: '点击禁用',
     enabled: '插件 {name} 已启用',

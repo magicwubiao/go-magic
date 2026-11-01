@@ -106,7 +106,11 @@ type MCPEntryStatus struct {
 	Spec      MCPServerSpec // 原始配置(占位符已展开)
 	Connected bool          // 是否已连接
 	ToolCount int           // 已发现的工具数
-	Error     string        // 连接/校验失败原因(空表示成功)
+	// Deferred 表示该条目处于"懒连接等待态"：启动时没有拉起子进程/建连，
+	// 工具面来自上一次的工具缓存，首次调用才会真正连接。UI 据此显示
+	// "按需连接"而不是"未连接"（后者会让用户以为坏了）。
+	Deferred bool
+	Error    string // 连接/校验失败原因(空表示成功)
 	// ErrorKind 是错误的可行动分类(auth/network/protocol/…,见 mcp.ErrorKind)。
 	// UI 据此决定亮"去授权"还是"查网络";空 = 无错误或无法归类。
 	ErrorKind string
