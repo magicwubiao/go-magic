@@ -29,6 +29,7 @@ const ChatView = () => import('./views/ChatView.vue')
 const ConfigView = () => import('./views/ConfigView.vue')
 const ModelsProvidersView = () => import('./views/ModelsProvidersView.vue')
 const ToolsView = () => import('./views/ToolsView.vue')
+const MediaView = () => import('./views/MediaView.vue')
 const SkillsView = () => import('./views/SkillsView.vue')
 const LogsView = () => import('./views/LogsView.vue')
 const SystemView = () => import('./views/SystemView.vue')
@@ -59,6 +60,9 @@ const router = createRouter({
     { path: '/config', component: ConfigView },
     { path: '/models-providers', component: ModelsProvidersView },
     { path: '/tools', component: ToolsView },
+    // 媒体能力（生图 / 生视频 / 语音）的设置页。放在工具旁边：它是"让某类工具
+    // 真正可用"的前置配置，而不是系统级开关。
+    { path: '/media', component: MediaView },
     { path: '/skills', component: SkillsView },
     { path: '/cron', component: CronView },
     { path: '/gateway', component: GatewayView },

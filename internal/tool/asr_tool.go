@@ -96,7 +96,8 @@ func (t *ASRTool) ValidateParams(params map[string]interface{}) error {
 // Execute 执行 ASR
 func (t *ASRTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	// 获取参数
-	provider := "openai"
+	// provider 缺省值取 config.json 的 voice.provider（与 TTS 同一套语义）。
+	provider := voiceDefaultProvider()
 	if p, ok := params["provider"].(string); ok && p != "" {
 		provider = p
 	}
@@ -116,32 +117,8 @@ func (t *ASRTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		format = f
 	}
 
-	// 获取或创建 voice manager
-	manager := t.manager
-	if manager == nil {
-		// 尝试从配置加载
-		cfg, err := config.Load()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load config: %w", err)
-		}
-
-		voiceConfig := &voice.VoiceConfig{
-			Provider: provider,
-			Language: language,
-			Model:    model,
-		}
-
-		// 从配置中加载 API 密钥
-		if cfg.Voice != nil {
-			voiceConfig.APIKey = cfg.Voice.APIKey
-			voiceConfig.Region = cfg.Voice.Region
-			voiceConfig.Providers = cfg.Voice.Providers
-		}
-
-		manager = voice.NewManager(voiceConfig)
-	}
-
-	// 获取音频数据
+	// 获取音频数据（manager 留到真正走内置路径时再建：注册表后端不需要它，
+	// 而构造 manager 会额外读一次配置并建立 5 个 provider 实例）
 	var audioData []byte
 	var audioSource string
 	var err error
@@ -168,8 +145,8 @@ func (t *ASRTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		}
 		audioSource = "base64 data"
 	} else if audioURL, ok := params["audio_url"].(string); ok && audioURL != "" {
-		// 从 URL 下载
-		audioData, err = manager.DownloadAudio(ctx, audioURL)
+		// 从 URL 下载（包级函数，不依赖 manager）
+		audioData, err = voice.DownloadAudio(ctx, audioURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download audio: %w", err)
 		}
@@ -187,6 +164,38 @@ func (t *ASRTool) Execute(ctx context.Context, params map[string]interface{}) (i
 	detectedFormat := voice.DetectAudioFormat(audioData)
 	if detectedFormat == "unknown" && format != "auto" {
 		detectedFormat = format
+	}
+
+	// 注册表里的后端（插件贡献的）优先，命中就不建 manager。
+	if asr, ok := LookupASRBackend(provider); ok {
+		return t.transcribeWithBackend(ctx, asr, TranscriptionRequest{
+			Audio:    audioData,
+			FileName: filepath.Base(audioSource),
+			Language: language,
+			Model:    model,
+		}, provider, audioSource, detectedFormat, len(audioData))
+	}
+
+	// 回落到内置 voice.Manager
+	manager := t.manager
+	if manager == nil {
+		cfg, cerr := config.Load()
+		if cerr != nil {
+			return nil, fmt.Errorf("failed to load config: %w", cerr)
+		}
+
+		voiceConfig := &voice.VoiceConfig{
+			Provider: provider,
+			Language: language,
+			Model:    model,
+		}
+		if cfg.Voice != nil {
+			voiceConfig.APIKey = cfg.Voice.APIKey
+			voiceConfig.Region = cfg.Voice.Region
+			voiceConfig.Providers = cfg.Voice.Providers
+		}
+
+		manager = voice.NewManager(voiceConfig)
 	}
 
 	// 执行 ASR
@@ -277,10 +286,35 @@ func (t *ASRAvailableProvidersTool) Execute(ctx context.Context, params map[stri
 		providersInfo = append(providersInfo, info)
 	}
 
+	// 追加注册表后端（插件贡献的）：它们不在 voice.Manager 里，但模型需要知道
+	// 它们存在，否则只会看到 openai/azure 而永远选不到插件能力。
+	regCfg := loadVoiceConfig()
+	for _, name := range RegisteredSpeechProviders() {
+		b, ok := LookupSpeechBackend(name)
+		if !ok {
+			continue
+		}
+		hasTTS, hasASR := SpeechCapability(name)
+		providersInfo = append(providersInfo, map[string]interface{}{
+			"name":         name,
+			"available":    b.Available(regCfg),
+			"description":  "Plugin-provided speech backend",
+			"supports_tts": hasTTS,
+			"supports_asr": hasASR,
+		})
+	}
+
+	availableCount := 0
+	for _, info := range providersInfo {
+		if v, _ := info["available"].(bool); v {
+			availableCount++
+		}
+	}
+
 	return map[string]interface{}{
 		"providers":           providersInfo,
-		"available_count":     len(availableProviders),
-		"total_count":         len(allProviders),
+		"available_count":     availableCount,
+		"total_count":         len(providersInfo),
 		"active_provider":     voiceConfig.Provider,
 		"supported_languages": voice.GetSupportedLanguages(voiceConfig.Provider),
 	}, nil
@@ -368,13 +402,21 @@ func (t *TTSAvailableVoicesTool) Execute(ctx context.Context, params map[string]
 	voices := voice.GetAvailableVoices(provider, language)
 	supportedLanguages := voice.GetSupportedLanguages(provider)
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"provider":            provider,
 		"language":            language,
 		"voices":              voices,
 		"supported_languages": supportedLanguages,
 		"voice_count":         len(voices),
-	}, nil
+	}
+	// 注册表后端（插件）自报声音列表：内核不知道它有哪些声音，但必须说明
+	// "空列表 != 没有这个 provider"，否则模型会以为参数写错了。
+	if _, hasTTS := LookupTTSBackend(provider); hasTTS {
+		result["plugin_backend"] = true
+		result["note"] = "This provider is contributed by a plugin; use the voice IDs documented by that plugin. " +
+			"An empty voice list here does not mean the provider is unavailable."
+	}
+	return result, nil
 }
 
 // AudioPlayTool 播放音频工具

@@ -1839,6 +1839,10 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/config/raw", withCORS(requireAuth(s.handleConfigRaw)))
 	mux.HandleFunc("/api/config/schema", withCORS(requireAuth(s.handleConfigSchema)))
 
+	// Media capabilities (image_gen / video_gen / voice): the only write path
+	// the Web UI has for these three sections. GET never returns plaintext keys.
+	mux.HandleFunc("/api/media/config", withCORS(requireAuth(s.handleMediaConfig)))
+
 	// Cron - order matters: more specific paths first
 	mux.HandleFunc("/api/cron/jobs", withCORS(requireAuth(s.handleCronJobs)))
 	mux.HandleFunc("/api/cron/jobs/", withCORS(requireAuth(s.handleCronJobByID)))

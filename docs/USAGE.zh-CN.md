@@ -1418,6 +1418,58 @@ POST   /api/agent-plugins/{name}/mcp/{server}/connect
 - **身份两套名字**：目录名（`dir_name`）决定卸载与数据目录，`manifest.name` 决定凭据/禁用状态/OAuth token。两者不一致时握手告警，操作时前端按各自正确的那个来。
 - 不做远端 marketplace / 版本解析 / 签名校验：没有分发基建时做这些只会是半成品。
 
+#### 扩展：贡献媒体后端（生图 / 生视频 / 语音）
+
+插件可以往 `image_gen` / `image_edit` / `video_generate` / `tts` / `asr` 里"换一个后端"，而不是新增工具名。工具名、参数、schema、审批、落盘全部在内核，插件只负责把请求转成自己厂商的 API：
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "comfyui-provider",
+  "extensions": {
+    "io.github.magicwubiao.media-provider": {
+      "image":  [{"name": "comfyui",   "server": "comfy", "tool": "generate_image"}],
+      "video":  [{"name": "kling",     "server": "kling", "tool": "generate_video"}],
+      "speech": [{"name": "cosyvoice", "server": "tts",
+                  "tts_tool": "synthesize", "asr_tool": "transcribe"}]
+    }
+  }
+}
+```
+
+`server` 是 `mcp.json` 里的条目名，`tool` 是该 server 上负责生成的工具。语音用 `tts_tool` / `asr_tool` 分别绑定：只写其中一个就只提供该项能力（只声明 `tts_tool` 的 provider 不会出现在 `asr` 的候选里）。声明之后：
+
+1. 插件 MCP 条目连上，该 provider 就出现在对应能力的可选列表里；
+2. 在 `config.json` 写 `"image_gen": {"provider": "comfyui"}`（或环境变量 `IMAGE_GEN_PROVIDER=comfyui`）切过去——Web UI 里也可以直接切，见下条；
+3. 凭据仍走该插件自己的凭据表单（加密存 `plugin_secrets/`），不进 `config.json`。
+
+被调用的工具只需返回产物地址或字节：
+
+| 类型 | 可接受的返回 |
+|---|---|
+| 图片 | `{"url": "..."}` / `{"urls": [...]}` / `{"images": [{"url" 或 "b64": "...", "format": "png"}]}` / `{"b64": "..."}` / 纯文本 URL / data URI |
+| 视频 | `{"url": "..."}` / `{"video_url": "..."}` / `{"urls": [...]}` / 纯文本 URL |
+| 语音合成 | `{"url" 或 "audio_url": "..."}` / `{"b64" 或 "audio_b64": "..."}` / `{"audio": "data:audio/mpeg;base64,..."}` / 纯文本 URL 或 data URI；可带 `format` / `mime` |
+| 语音识别 | `{"text" 或 "transcript": "..."}` / 纯文本 |
+
+内核拿到地址后**当场下载落盘**（temp+rename），模型只看到本地路径——厂商直链普遍 24 小时过期，把 URL 直接交给模型等于让它拿到一个很快会失效的地址。空字节 + 成功状态会被当成失败：不然用户拿到的是一段放不出来的音频。
+
+四条约定：
+
+- **不要新增工具名**。`kling_generate` 这类名字会让模型在多个生图工具之间挑错；provider 只扩充"后端列表"，不扩充工具清单。
+- **声明写错不会让插件挂掉**。缺 `name` / `server` / `tool` 的条目会被跳过并记进插件 warnings，插件的技能与其他 MCP 条目照常加载。
+- **断开即摘除**。provider 跟着 MCP 条目走：条目断开或插件被禁用时，该 provider 自动判定不可用，对应工具直接不出现在工具清单里——而不是调用之后才报一句看不懂的错误。
+- **能力不靠猜**。图片编辑只有实现了编辑能力的后端才可用（内置只有 `dall-e`），其它 provider 下 `image_edit` 不会出现在工具清单里。
+
+#### 媒体能力的图形化配置
+
+`image_gen` / `video_gen` / `voice` 三段配置在 Web UI 的「设置 → 媒体」（`/#/media`）里维护：选服务商、填密钥、调默认尺寸/时长/画幅。保存后**立即生效**（配置写盘 + 注入运行中的工具实例 + 重置可用性缓存），不需要重启。
+
+- 密钥只进不出：接口返回 `api_key_set` 与掩码尾号，明文永不下发；输入框留空表示"保持不变"，点"清除已保存的密钥"再保存才是删除。
+- 环境变量优先于本页配置：`IMAGE_GEN_*` / `VIDEO_GEN_*` / `VOICE_API_KEY` 一旦设置，页面会明确提示"被环境变量覆盖"，避免出现"改了没生效"的反复排查。
+- 接口：`GET /api/media/config`（脱敏快照，含各 provider 的可用性与环境变量覆盖列表）、`PUT /api/media/config`（按段增量更新，服务端校验 provider 与时长/画幅/分辨率/语速区间）。
+
+
 ### 15.5 反向 MCP：把 magic 当工具用
 
 前面几节都是"magic 连别人"。反过来也可以——把本机 agent 暴露成一个 stdio MCP server，让别的客户端（Claude Desktop、IDE、另一个 go-magic）把整台机器的能力当成一个工具调用：

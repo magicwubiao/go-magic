@@ -125,6 +125,13 @@ func (r *Runtime) Start() error {
 	r.stopped = false
 	r.mu.Unlock()
 
+	// 媒体后端先挂上，再连 MCP 条目。
+	//
+	// 顺序反过来的话，插件没有 mcp.json（或 mcp.json 无效）时 Start 会提前返回，
+	// 声明写错的 warning 根本不会产生 —— 用户看到的是"provider 名字填了但没用"。
+	// 注册本身不依赖连接：可用性由 ServerConnected 动态判定，条目连上就自动可用。
+	r.RegisterMediaProviders()
+
 	if r.plugin.MCPDisabled || len(r.plugin.MCPServers) == 0 {
 		return nil
 	}
@@ -492,6 +499,10 @@ func (r *Runtime) connRegistry() (ToolRegistrar, string) {
 
 // Stop 关闭所有 MCP 连接。
 func (r *Runtime) Stop() {
+	// 先摘媒体后端：连接一断，这些 provider 就没有可调用的目标了，
+	// 留着会让 config 里指向它的 image_gen 变成"可用但必然失败"。
+	r.UnregisterMediaProviders()
+
 	mgr := r.manager()
 	r.mu.Lock()
 	r.stopped = true

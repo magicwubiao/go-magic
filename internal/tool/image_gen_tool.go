@@ -109,7 +109,11 @@ func NewImageGenerationTool(config *ImageGenConfig) *ImageGenerationTool {
 					"provider": map[string]interface{}{
 						"type":        "string",
 						"description": "Override default provider: dall-e, stable-diffusion, midjourney, together",
-						"enum":        []string{"dall-e", "stable-diffusion", "midjourney", "together"},
+						// 注意：这个 enum 是**内置后端**的快照，故意不跟注册表联动 ——
+						// 工具 schema 一旦随插件注册变化，模型看到的能力面就不可复现了。
+						// 插件贡献的 provider 走 config.json 的 image_gen.provider 指定
+						// （见 media_provider.go 的边界说明），不通过这个参数选择。
+						"enum": []string{"dall-e", "stable-diffusion", "midjourney", "together"},
 					},
 				},
 				"required": []string{"prompt"},
@@ -169,42 +173,45 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 		outputPath = op
 	}
 
-	// 检查是否指定了覆盖的提供商
-	provider := t.config.Provider
+	// 检查是否指定了覆盖的提供商。未指定时用 effectiveImageProvider 兜零值，
+	// 保证 &ImageGenConfig{APIKey: ...} 这种漏填 Provider 的配置也能正常工作。
+	provider := effectiveImageProvider(t.config)
 	if p, ok := params["provider"].(string); ok && p != "" {
 		provider = ImageProvider(p)
 	}
 
-	// 检查 API 密钥是否配置
-	if t.config.APIKey == "" {
+	// 先查后端：provider 拼错 / 插件已卸载要立刻报"不支持"，而不是误导性的"未配置"。
+	// 内置 4 个在 media_backend_builtin.go 里注册；插件贡献的后端实现同一接口后
+	// 就能在这里被查到，工具名、schema、落盘链路全都不动。
+	backend, ok := LookupImageBackend(string(provider))
+	if !ok {
+		return nil, fmt.Errorf("unsupported image provider: %s (available: %s)",
+			provider, strings.Join(RegisteredImageProviders(), ", "))
+	}
+
+	// 可用性由后端判定，不在工具层硬判断 APIKey：内置后端要求 key，插件后端可能
+	// 不需要（如本地 ComfyUI）。
+	if !backend.Available(t.config) {
 		return map[string]interface{}{
 			"status":             "not_configured",
+			"provider":           provider,
 			"prompt":             prompt,
 			"style":              style,
 			"size":               size,
 			"count":              count,
-			"message":            "Image generation API key not configured. Please set image_gen_api_key in your config.",
-			"configuration_help": "Add 'image_gen_api_key' and optionally 'image_gen_provider' to your config.json (the magic home directory)",
+			"message":            fmt.Sprintf("Image generation is not configured for provider %q.", provider),
+			"configuration_help": "Add an 'image_gen' section to config.json (api_key + provider), or set IMAGE_GEN_API_KEY.",
 		}, nil
 	}
 
-	// 根据提供商执行生成
-	var result *ImageGenerationResult
-	var err error
-
-	switch provider {
-	case ProviderDALLE:
-		result, err = t.generateWithDALLE(ctx, prompt, negativePrompt, style, size, count, seed)
-	case ProviderStableDiffusion:
-		result, err = t.generateWithStableDiffusion(ctx, prompt, negativePrompt, style, size, count, seed)
-	case ProviderMidjourney:
-		result, err = t.generateWithMidjourney(ctx, prompt, negativePrompt, style, size, count, seed)
-	case ProviderTogether:
-		result, err = t.generateWithTogether(ctx, prompt, negativePrompt, style, size, count, seed)
-	default:
-		return nil, fmt.Errorf("unsupported image provider: %s", provider)
-	}
-
+	result, err := backend.Generate(ctx, t.config, ImageRequest{
+		Prompt:         prompt,
+		NegativePrompt: negativePrompt,
+		Style:          style,
+		Size:           size,
+		Count:          count,
+		Seed:           seed,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("image generation failed: %w", err)
 	}
@@ -237,10 +244,17 @@ type ImageGenerationResult struct {
 }
 
 // ImageInfo 图片信息
+//
+// 三个取数通道优先级：Data > Base64Data > URL。内置后端沿用 URL/Base64Data，
+// 插件后端若已经把字节取回来，直接填 Data 即可，内核不再多一次下载。
 type ImageInfo struct {
 	URL        string
 	Base64Data string
 	Format     string
+	// Data 内联字节（插件后端直接回字节时用）。
+	Data []byte
+	// Mime 可选 MIME 类型（image/png 等），Format 为空时用于推断扩展名。
+	Mime string
 }
 
 // generateWithDALLE 使用 DALL-E 生成图片
@@ -674,19 +688,23 @@ func (t *ImageGenerationTool) downloadAndSaveImages(ctx context.Context, images 
 		var data []byte
 		var err error
 
-		if img.Base64Data != "" {
+		switch {
+		case len(img.Data) > 0:
+			// 插件后端已经取回字节，内核只管落盘
+			data = img.Data
+		case img.Base64Data != "":
 			// 解码 base64 数据
 			data, err = base64.StdEncoding.DecodeString(img.Base64Data)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decode base64 image %d: %w", i, err)
 			}
-		} else if img.URL != "" {
+		case img.URL != "":
 			// 下载图片
 			data, err = t.downloadImage(ctx, img.URL)
 			if err != nil {
 				return nil, fmt.Errorf("failed to download image %d: %w", i, err)
 			}
-		} else {
+		default:
 			continue
 		}
 
@@ -695,11 +713,15 @@ func (t *ImageGenerationTool) downloadAndSaveImages(ctx context.Context, images 
 		if customPath != "" && i == 0 {
 			filePath = customPath
 		} else {
-			timestamp := time.Now().Format("20060102_150405")
-			filename := fmt.Sprintf("generated_%s_%d.%s", timestamp, i, img.Format)
-			if img.Format == "" {
-				filename = fmt.Sprintf("generated_%s_%d.png", timestamp, i)
+			ext := img.Format
+			if ext == "" {
+				ext = extensionFromMime(img.Mime)
 			}
+			if ext == "" {
+				ext = "png"
+			}
+			timestamp := time.Now().Format("20060102_150405")
+			filename := fmt.Sprintf("generated_%s_%d.%s", timestamp, i, ext)
 			filePath = filepath.Join(outputDir, filename)
 		}
 
@@ -714,25 +736,19 @@ func (t *ImageGenerationTool) downloadAndSaveImages(ctx context.Context, images 
 	return savedPaths, nil
 }
 
+// maxImageDownloadBytes 单张图片的下载上限。
+//
+// 后端把 URL 交给内核下载，等于让第三方/插件决定我们要拉多大的东西。
+// 没有上限时一个坏地址（指向大文件、或 Content-Length 撒谎）就能把内存打满。
+// 32MB 对 4K PNG 都绰绰有余，超过基本可以判定不是图片。
+const maxImageDownloadBytes = 32 << 20
+
 // downloadImage 下载图片
 func (t *ImageGenerationTool) downloadImage(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
+	if url == "" {
+		return nil, fmt.Errorf("empty image url")
 	}
-
-	client := util.GetHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
+	return DownloadMediaBytes(ctx, url, maxImageDownloadBytes)
 }
 
 // SetConfig 设置图片生成配置
@@ -812,6 +828,18 @@ func (t *ImageEditTool) ValidateParams(params map[string]interface{}) error {
 	return ValidateParams(t.Schema(), params)
 }
 
+// SetConfig 设置图片编辑配置（与 ImageGenerationTool 共用 image_gen 段）。
+// 设置页保存后由服务端注入，避免"改了配置但编辑还在用旧 provider/key"。
+func (t *ImageEditTool) SetConfig(config *ImageGenConfig) {
+	if config == nil {
+		return
+	}
+	t.config = config
+}
+
+// GetConfig 获取当前配置（与 ImageGenerationTool 对称，便于排查"改了没生效"）。
+func (t *ImageEditTool) GetConfig() *ImageGenConfig { return t.config }
+
 // Execute 执行图片编辑
 func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	imagePath, _ := params["image_path"].(string)
@@ -855,12 +883,32 @@ func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface
 		outputPath = op
 	}
 
-	// 检查 API 密钥
-	if t.config.APIKey == "" {
+	// 编辑能力已归后端：先在注册表里找"当前 provider"，再判断它是否实现
+	// ImageEditor。两步顺序不能反——provider 拼错时要报“不支持这个 provider”，
+	// 而不是把用户带去查 key（与 image_gen 同一条教训）。
+	provider := effectiveImageProvider(t.config)
+	backend, ok := LookupImageBackend(string(provider))
+	if !ok {
+		return nil, fmt.Errorf("unsupported image provider: %s (available: %s)",
+			provider, strings.Join(RegisteredImageProviders(), ", "))
+	}
+
+	if !backend.Available(t.config) {
 		return map[string]interface{}{
-			"status":  "not_configured",
-			"message": "Image editing API key not configured",
+			"status":   "not_configured",
+			"provider": provider,
+			"message":  fmt.Sprintf("Image editing is not configured for provider %q.", provider),
+			"configuration_help": "Add an 'image_gen' section to config.json (api_key + provider), " +
+				"or set IMAGE_GEN_API_KEY. Providers that support editing: " +
+				strings.Join(RegisteredImageEditors(), ", "),
 		}, nil
+	}
+
+	editor, ok := backend.(ImageEditor)
+	if !ok {
+		return nil, fmt.Errorf(
+			"image editing not supported for provider: %s (editing providers: %s)",
+			provider, strings.Join(RegisteredImageEditors(), ", "))
 	}
 
 	// 读取源图片（相对路径按会话工作目录解析，与文件工具一致——附件被
@@ -874,15 +922,21 @@ func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface
 		return nil, fmt.Errorf("failed to read image file: %w", err)
 	}
 
-	var result *ImageGenerationResult
-
-	switch t.config.Provider {
-	case ProviderDALLE:
-		result, err = t.editWithDALLE(ctx, imageData, prompt, maskPath, size, count, editType)
-	default:
-		return nil, fmt.Errorf("image editing not supported for provider: %s", t.config.Provider)
+	// 遮罩同样按会话工作目录解析：模型给的相对路径不会因为进程 cwd 变化而失效。
+	if maskPath != "" {
+		if resolvedMask, merr := resolveLocalMedia(ctx, maskPath); merr == nil {
+			maskPath = resolvedMask
+		}
 	}
 
+	result, err := editor.Edit(ctx, t.config, ImageEditRequest{
+		Prompt:   prompt,
+		EditType: editType,
+		Size:     size,
+		Count:    count,
+		Image:    imageData,
+		MaskPath: maskPath,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("image editing failed: %w", err)
 	}
@@ -903,9 +957,13 @@ func (t *ImageEditTool) Execute(ctx context.Context, params map[string]interface
 	}, nil
 }
 
-// editWithDALLE 使用 DALL-E 编辑图片
-func (t *ImageEditTool) editWithDALLE(ctx context.Context, imageData []byte, prompt, maskPath, size string, count int, editType string) (*ImageGenerationResult, error) {
-	baseURL := t.config.BaseURL
+// editImageWithDALLE 使用 DALL-E 编辑图片（包级函数：后端适配器与工具层共用，
+// 不再挂在 ImageEditTool 上——编辑能力已归后端，工具只负责参数搬运与落盘）。
+func editImageWithDALLE(ctx context.Context, cfg *ImageGenConfig, imageData []byte, prompt, maskPath, size string, count int, editType string) (*ImageGenerationResult, error) {
+	baseURL := ""
+	if cfg != nil {
+		baseURL = cfg.BaseURL
+	}
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
@@ -961,11 +1019,15 @@ func (t *ImageEditTool) editWithDALLE(ctx context.Context, imageData []byte, pro
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+t.config.APIKey)
+	apiKey := ""
+	if cfg != nil {
+		apiKey = cfg.APIKey
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	client := util.GetHTTPClient()
-	if t.config.Timeout > 0 {
-		client = &http.Client{Timeout: t.config.Timeout}
+	if cfg != nil && cfg.Timeout > 0 {
+		client = &http.Client{Timeout: cfg.Timeout}
 	}
 
 	resp, err := client.Do(req)

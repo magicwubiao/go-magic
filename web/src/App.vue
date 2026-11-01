@@ -114,6 +114,7 @@ import {
   SettingsOutline,
   CubeOutline,
   HammerOutline,
+  ImageOutline,
   StarOutline,
   DocumentTextOutline,
   HardwareChipOutline,
@@ -231,6 +232,9 @@ const menuOptions = computed(() => [
   // 自定义连接器（/mcp）已移到左下角"设置"下拉：它是低频的接入配置，
   // 与插件页的连接器目录功能重叠，不该在主导航里重复出现。
   { label: t('nav.tools'), key: '/tools', icon: renderIcon(HammerOutline) },
+  // 媒体能力（生图 / 生视频 / 语音）：工具页讲"有哪些工具"，这里讲"怎么让它们
+  // 真的能用"（密钥与默认参数）。紧挨工具，用户从工具页发现不可用时会往这看。
+  { label: t('nav.media'), key: '/media', icon: renderIcon(ImageOutline) },
   { label: t('nav.skills'), key: '/skills', icon: renderIcon(StarOutline) },
   { label: t('nav.plugins'), key: '/plugins', icon: renderIcon(ExtensionPuzzleOutline) },
   { type: 'divider' as const },

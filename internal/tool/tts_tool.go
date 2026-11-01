@@ -109,7 +109,9 @@ func (t *TTSTool) Execute(ctx context.Context, params map[string]interface{}) (i
 	}
 
 	// 获取可选参数
-	provider := "openai"
+	// provider 缺省值取 config.json 的 voice.provider：设置页里配了 azure、
+	// 模型却没显式传 provider 时，不该静默回落到 openai（"填了没用"的典型形态）。
+	provider := voiceDefaultProvider()
 	if p, ok := params["provider"].(string); ok && p != "" {
 		provider = p
 	}
@@ -161,6 +163,48 @@ func (t *TTSTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		play = p
 	}
 
+	// 设置输出路径
+	outputPath := ""
+	if op, ok := params["output_path"].(string); ok && op != "" {
+		outputPath = op
+	} else {
+		home, _ := os.UserHomeDir()
+		timestamp := fmt.Sprintf("%d", time.Now().Unix())
+		outputPath = filepath.Join(home, fmt.Sprintf("tts_output_%s.%s", timestamp, format))
+	}
+
+	// 验证输出路径
+	absPath, err := filepath.Abs(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid output path: %w", err)
+	}
+
+	// 确保目录存在
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	call := speechCall{
+		provider: provider,
+		text:     text,
+		voice:    voiceName,
+		language: language,
+		model:    model,
+		format:   format,
+		speed:    speed,
+		pitch:    pitch,
+		play:     play,
+		outPath:  absPath,
+	}
+
+	// 注册表里有的名字（插件贡献的后端）优先；否则回落到内置 voice.Manager。
+	// 两个来源共用同一个 provider 名字空间：config.json 的 voice.provider 写
+	// 插件后端名就会走插件，写 openai/azure/... 就走内置。
+	if synth, ok := LookupTTSBackend(provider); ok {
+		return t.synthesizeWithBackend(ctx, synth, call)
+	}
+
 	// 获取或创建 voice manager
 	manager := t.manager
 	if manager == nil {
@@ -187,28 +231,6 @@ func (t *TTSTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		}
 
 		manager = voice.NewManager(voiceConfig)
-	}
-
-	// 设置输出路径
-	outputPath := ""
-	if op, ok := params["output_path"].(string); ok && op != "" {
-		outputPath = op
-	} else {
-		home, _ := os.UserHomeDir()
-		timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		outputPath = filepath.Join(home, fmt.Sprintf("tts_output_%s.%s", timestamp, format))
-	}
-
-	// 验证输出路径
-	absPath, err := filepath.Abs(outputPath)
-	if err != nil {
-		return nil, fmt.Errorf("invalid output path: %w", err)
-	}
-
-	// 确保目录存在
-	dir := filepath.Dir(absPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// 执行 TTS

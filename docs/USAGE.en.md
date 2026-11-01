@@ -1440,6 +1440,57 @@ Conventions:
 - **Two names, two purposes**: the directory name (`dir_name`) drives uninstall and the data dir; `manifest.name` drives credentials, disable state and OAuth tokens. A mismatch is reported and each operation uses the correct one.
 - No remote marketplace / version resolution / signatures: without distribution infrastructure that would only be half a feature.
 
+#### Extension: contribute a media backend (image / video / speech)
+
+A plugin can swap the **backend** behind `image_gen` / `image_edit` / `video_generate` / `tts` / `asr` instead of adding new tool names. Tool name, parameters, schema, approval and on-disk persistence all stay in the kernel; the plugin only translates the request into its vendor's API:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "comfyui-provider",
+  "extensions": {
+    "io.github.magicwubiao.media-provider": {
+      "image":  [{"name": "comfyui",   "server": "comfy", "tool": "generate_image"}],
+      "video":  [{"name": "kling",     "server": "kling", "tool": "generate_video"}],
+      "speech": [{"name": "cosyvoice", "server": "tts",
+                  "tts_tool": "synthesize", "asr_tool": "transcribe"}]
+    }
+  }
+}
+```
+
+`server` is an entry in `mcp.json`; `tool` is the generation tool on that server. Speech uses `tts_tool` / `asr_tool` separately: declare only one and the provider offers only that capability (a TTS-only provider never shows up as an ASR candidate). Once declared:
+
+1. the plugin's MCP entry connects, and the provider appears in that capability's list;
+2. point `config.json` at it — `"image_gen": {"provider": "comfyui"}` (or `IMAGE_GEN_PROVIDER=comfyui`). The Web UI can switch it too — see below;
+3. credentials keep flowing through the plugin's own credential form (encrypted in `plugin_secrets/`), never into `config.json`.
+
+The tool only has to return an asset location or bytes:
+
+| Kind | Accepted replies |
+|---|---|
+| image | `{"url": "..."}` / `{"urls": [...]}` / `{"images": [{"url" or "b64": "...", "format": "png"}]}` / `{"b64": "..."}` / plain URL / data URI |
+| video | `{"url": "..."}` / `{"video_url": "..."}` / `{"urls": [...]}` / plain URL |
+| speech (TTS) | `{"url" or "audio_url": "..."}` / `{"b64" or "audio_b64": "..."}` / `{"audio": "data:audio/mpeg;base64,..."}` / plain URL or data URI; optional `format` / `mime` |
+| speech (ASR) | `{"text" or "transcript": "..."}` / plain text |
+
+The kernel downloads it immediately and persists to disk (temp+rename); the model only ever sees a local path. Vendor links typically expire in 24 hours, so handing the URL to the model would mean handing it a dead reference. Empty bytes plus a success status count as a failure — otherwise the user ends up with an audio file that cannot be played.
+
+Four rules:
+
+- **Do not add new tool names.** Something like `kling_generate` makes the model pick the wrong generator among several; a provider extends the backend list, never the tool list.
+- **A broken declaration never breaks the plugin.** Entries missing required fields are skipped and recorded in plugin warnings; skills and other MCP entries keep loading.
+- **Disconnect detaches.** The provider follows its MCP entry: when the entry drops or the plugin is disabled, the provider becomes unavailable and the tool disappears from the tool list instead of failing later with an opaque error.
+- **Capability is not guessed.** Image editing is only available for backends that implement it (built-in: `dall-e` only); with any other provider `image_edit` never reaches the tool list.
+
+#### Configuring media capabilities in the UI
+
+The `image_gen` / `video_gen` / `voice` sections live under **Settings → Media** (`/#/media`) in the Web UI: pick a provider, paste a key, set default size / duration / aspect ratio. Saving takes effect **immediately** (config written, injected into the running tool instances, availability caches reset) — no restart.
+
+- Keys only go in, never out: the API returns `api_key_set` plus a masked tail; plaintext is never sent back. An empty input means "keep the current key"; clearing requires the explicit "Clear saved key" action.
+- Environment variables win over this page: once `IMAGE_GEN_*` / `VIDEO_GEN_*` / `VOICE_API_KEY` is set the page says so explicitly, so nobody re-debugs a change that never applied.
+- Endpoints: `GET /api/media/config` (masked snapshot with per-provider availability and env-override list) and `PUT /api/media/config` (per-section patch, validated server-side for provider names and duration / ratio / resolution / speed ranges).
+
 ### 15.5 Reverse MCP: use magic as a tool
 
 Everything above is magic connecting out. It also works the other way — expose the local agent as a stdio MCP server, so another client (Claude Desktop, an IDE, another go-magic) treats the whole machine as one tool:

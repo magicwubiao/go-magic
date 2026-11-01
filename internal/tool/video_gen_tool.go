@@ -156,15 +156,6 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 		return nil, fmt.Errorf("prompt is required")
 	}
 
-	if t.config.APIKey == "" {
-		return map[string]interface{}{
-			"status":             "not_configured",
-			"prompt":             prompt,
-			"message":            "Video generation API key not configured.",
-			"configuration_help": "Add a 'video_gen' section to config.json (api_key + provider: dashscope or volcengine), or set VIDEO_GEN_API_KEY.",
-		}, nil
-	}
-
 	// 图生视频输入：优先 image_url（公网地址），其次本地 image_path。
 	imageURL := ""
 	if v, ok := params["image_url"].(string); ok {
@@ -208,46 +199,45 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 		outputPath = op
 	}
 
-	provider := t.config.Provider
+	provider := effectiveVideoProvider(t.config)
 	if p, ok := params["provider"].(string); ok && p != "" {
 		provider = VideoProvider(p)
 	}
 
-	// 本地图片按 provider 能力处理：volcengine 支持 base64 data URI；
-	// dashscope 的 img_url 只收公网地址/OSS，本地文件直接给出明确报错。
-	if imagePath != "" {
-		resolved, rerr := resolveLocalMedia(ctx, imagePath)
-		if rerr != nil {
-			return nil, rerr
-		}
-		if provider == ProviderVolcengine {
-			dataURI, derr := localImageToDataURI(resolved)
-			if derr != nil {
-				return nil, derr
-			}
-			imageURL = dataURI
-		} else {
-			return nil, fmt.Errorf(
-				"provider %s requires a publicly reachable image_url for image-to-video; "+
-					"upload the file somewhere accessible or switch provider to volcengine, which accepts local images",
-				provider)
-		}
+	// 先查后端：provider 拼错 / 插件已卸载要立刻报"不支持"，而不是误导性的"未配置"。
+	// 首帧图的处理（公网 URL 直用 / 本地文件转 data URI / 不支持就报错）属于
+	// **后端能力差异**，已下沉到各 backend；这里不再按厂商名分支。
+	backend, ok := LookupVideoBackend(string(provider))
+	if !ok {
+		return nil, fmt.Errorf("unsupported video provider: %s (available: %s)",
+			provider, strings.Join(RegisteredVideoProviders(), ", "))
 	}
 
-	var videoURL, taskID string
-	var err error
-
-	switch provider {
-	case ProviderDashScope:
-		videoURL, taskID, err = t.runDashScope(ctx, prompt, negativePrompt, imageURL, model, duration, ratio, resolution)
-	case ProviderVolcengine:
-		videoURL, taskID, err = t.runVolcengine(ctx, prompt, imageURL, model, duration, ratio, resolution)
-	default:
-		return nil, fmt.Errorf("unsupported video provider: %s", provider)
+	// 可用性由后端判定（内置后端要求 key，插件后端可能不需要），不在工具层硬判断。
+	if !backend.Available(t.config) {
+		return map[string]interface{}{
+			"status":             "not_configured",
+			"provider":           provider,
+			"prompt":             prompt,
+			"message":            fmt.Sprintf("Video generation is not configured for provider %q.", provider),
+			"configuration_help": "Add a 'video_gen' section to config.json (api_key + provider: dashscope or volcengine), or set VIDEO_GEN_API_KEY.",
+		}, nil
 	}
+
+	genResult, err := backend.Generate(ctx, t.config, VideoRequest{
+		Prompt:         prompt,
+		NegativePrompt: negativePrompt,
+		ImageURL:       imageURL,
+		ImagePath:      imagePath,
+		Model:          model,
+		Duration:       duration,
+		Ratio:          ratio,
+		Resolution:     resolution,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("video generation failed: %w", err)
 	}
+	videoURL, taskID := genResult.URL, genResult.TaskID
 
 	// 视频 URL 24 小时过期，必须立刻下载保存
 	savedPath, err := t.downloadAndSaveVideo(ctx, videoURL, outputPath)
@@ -582,6 +572,11 @@ func (t *VideoGenerationTool) doHTTP(ctx context.Context, req *http.Request) ([]
 }
 
 // downloadAndSaveVideo 下载生成的 MP4 到输出目录（temp+rename 原子写）
+// maxVideoDownloadBytes 单个视频的下载上限。
+// 同 maxImageDownloadBytes 的理由：URL 来自后端（可能是插件），不能无限信任。
+// 512MB 足够覆盖 1 分钟 1080p 的成片。
+const maxVideoDownloadBytes = 512 << 20
+
 func (t *VideoGenerationTool) downloadAndSaveVideo(ctx context.Context, videoURL, customPath string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", videoURL, nil)
 	if err != nil {
@@ -598,9 +593,12 @@ func (t *VideoGenerationTool) downloadAndSaveVideo(ctx context.Context, videoURL
 		return "", fmt.Errorf("download failed with HTTP %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxVideoDownloadBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read video data: %w", err)
+	}
+	if int64(len(data)) > maxVideoDownloadBytes {
+		return "", fmt.Errorf("video exceeds %d bytes", maxVideoDownloadBytes)
 	}
 	if len(data) == 0 {
 		return "", fmt.Errorf("downloaded video is empty")

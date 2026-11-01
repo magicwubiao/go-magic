@@ -68,9 +68,23 @@ func (r *Registry) RegisterMediaTools() {
 // 两者都没有时返回的配置 APIKey 为空，ImageGenerationTool.Available() 为 false，
 // 工具不会暴露给模型 —— 这正是"没配就别让模型乱试"的预期行为。
 func LoadImageGenConfig() *ImageGenConfig {
+	appCfg, err := config.Load()
+	if err != nil {
+		appCfg = nil
+	}
+	return ImageGenConfigFrom(appCfg)
+}
+
+// ImageGenConfigFrom 用一份已有的应用配置组装图片配置。
+//
+// 服务端设置页保存后要用**内存里的那份配置**热应用，而不是再读一次磁盘：
+// 读盘既多一次 I/O，也可能读到另一个 magic home（server 的 magicHome 可由
+// 参数指定），造成"保存成功但工具还是旧配置"的鬼故事。环境变量覆盖保留，
+// 因为它本来就是覆盖层。
+func ImageGenConfigFrom(appCfg *config.Config) *ImageGenConfig {
 	cfg := DefaultImageGenConfig()
 
-	if appCfg, err := config.Load(); err == nil && appCfg != nil && appCfg.ImageGen != nil {
+	if appCfg != nil && appCfg.ImageGen != nil {
 		ig := appCfg.ImageGen
 		if ig.APIKey != "" {
 			cfg.APIKey = ig.APIKey
@@ -115,9 +129,18 @@ func LoadImageGenConfig() *ImageGenConfig {
 // 两者都没有时返回的配置 APIKey 为空，VideoGenerationTool.Available() 为 false，
 // 工具不会暴露给模型 —— 与图片生成同门槛。
 func LoadVideoGenConfig() *VideoGenConfig {
+	appCfg, err := config.Load()
+	if err != nil {
+		appCfg = nil
+	}
+	return VideoGenConfigFrom(appCfg)
+}
+
+// VideoGenConfigFrom 同 ImageGenConfigFrom：用内存里的应用配置组装，避免二次读盘。
+func VideoGenConfigFrom(appCfg *config.Config) *VideoGenConfig {
 	cfg := DefaultVideoGenConfig()
 
-	if appCfg, err := config.Load(); err == nil && appCfg != nil && appCfg.VideoGen != nil {
+	if appCfg != nil && appCfg.VideoGen != nil {
 		vg := appCfg.VideoGen
 		if vg.APIKey != "" {
 			cfg.APIKey = vg.APIKey

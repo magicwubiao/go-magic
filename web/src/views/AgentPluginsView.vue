@@ -31,10 +31,6 @@
             }) }}
           </n-text>
           <span class="ap-section-spacer" />
-          <n-button size="tiny" quaternary :loading="refreshing" @click="handleRefreshInstalled">
-            <template #icon><component :is="RefreshOutline" /></template>
-            {{ t('common.refresh') }}
-          </n-button>
           <n-button size="tiny" quaternary @click="triggerFileInput">
             <template #icon><component :is="CloudUploadOutline" /></template>
             {{ t('agentplugins.installZip') }}
@@ -759,18 +755,6 @@ function pluginStats(plugin: AgentPlugin): string {
   const cliTools = (plugin.cli_connectors || []).reduce((n, c) => n + (c.tools?.length || 0), 0)
   if (cliTools) parts.push('CLI ' + cliTools)
   return parts.join(' · ')
-}
-
-const refreshing = ref(false)
-
-/** 轻量刷新：只重读已安装列表，不触发全量重扫（重扫在页头按钮）。 */
-async function handleRefreshInstalled() {
-  refreshing.value = true
-  try {
-    await store.loadPlugins()
-  } finally {
-    refreshing.value = false
-  }
 }
 
 async function handleReload() {
