@@ -13,8 +13,10 @@ import (
 
 // CLI 登录/OAuth 路由契约：
 //   - /api/cli/catalog/login 只接受目录 id，没有代跑命令的条目返回 4xx；
-//   - /api/cli/catalog/login/{session} 能到达处理器（未知会话 404，而不是 405）；
-//   - /api/cli/connectors/{name}/oauth/status 能到达处理器（此前整段被当成名字）。
+//   - /api/cli/catalog/login/{session} 能到达处理器（未知会话 404，而不是 405）。
+//
+// 连接器级 OAuth 的三个路由已随手写 CLI 面板一起移除，现在只剩插件那条
+// （/api/agent-plugins/{p}/cli/{n}/oauth/*，见 agentplugin_cli_oauth_test.go）。
 func TestCLILoginRoutes(t *testing.T) {
 	s := &Server{}
 

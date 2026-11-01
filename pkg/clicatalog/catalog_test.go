@@ -163,15 +163,6 @@ func TestReadOnlyToolSnapshot(t *testing.T) {
 			"ro = 免审批，rw = 每次审批。逐条确认新增/翻转的工具真的只读，\n"+
 			"确认后把 readOnlySnapshot 整体替换成下面的内容：\n\n%s", got)
 	}
-	// 写操作必须留在 raw（恒审批），不能靠 read_only 混进免审批面。
-	for _, e := range All() {
-		for _, sp := range e.Connector.Tools {
-			if sp.ReadOnly {
-				continue
-			}
-			if !e.Connector.Raw {
-				t.Errorf("%s/%s 是写操作，但连接器没开 Raw：它只能走审批，而目录条目必须留 raw 逃生口", e.ID, sp.Name)
-			}
-		}
-	}
+	// 写操作要靠 raw 走审批这条不变量由 TestCatalogEntriesShipRaw 覆盖
+	// （每个条目都必须开 Raw，比"只在有写工具时要求"更强）。
 }

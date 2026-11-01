@@ -35,13 +35,12 @@ func (s *Server) applyCLIConnectors() {
 	}
 	defs := s.cliConnectorConfigs()
 
-	// 与保存并发时，cliMgr 的赋值与注册表同步必须整体串行：否则 A 先把新工具
-	// 注册进去、B 再用旧定义覆盖 cliMgr，注册表与内存定义就会长期不一致。
+	// 注册表的"清空 + 重注册"不是原子的：两次并发重建会让后注册的赢一半、
+	// 先注册的残留一半。串行化整段重建是这里唯一的理由。
 	// 策略在持锁前取：cfgSnapshot 走 cfgMu，持 s.mu 再进它是反序。
 	pol := s.policySnapshot()
 	s.acquireServerMu("applyCLIConnectors")
-	mgr, count := cliconnbridge.BuildAndSync(defs, s.toolReg, s.activeProfile(), pol)
-	s.cliMgr = mgr
+	_, count := cliconnbridge.BuildAndSync(defs, s.toolReg, s.activeProfile(), pol)
 	s.releaseServerMu()
 
 	log.Infof("[CLI] connectors synced: %d connectors, %d tools", len(defs), count)

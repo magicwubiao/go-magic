@@ -1313,7 +1313,7 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
 
 On the command line, `magic cli list` shows the configured connectors and the expanded tool names (`cli_<connector>_<tool>`) — the fastest way to answer "why can't the model see this tool".
 
-**The fastest way to add one is to paste the command** (same parser as the web quick-import):
+**The fastest way to add one is to paste the command** — `magic cli add` parses it (first word is the command, subcommands form the tool name, value-taking options become parameters):
 
 ```bash
 # one command line -> one tool; parameter types inferred from the sample values

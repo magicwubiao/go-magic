@@ -102,8 +102,9 @@ func init() {
 
 // runCLIAdd 是 `magic cli add` 的执行体：解析命令 → 合并进连接器 → 落盘。
 //
-// 与 Web 的「快速导入」共用同一个 cliconn.ParseCommand，两边产出的草稿形状一致；
-// 差异只在这里多了"同名连接器合并"和命令行覆盖项。
+// 解析交给 cliconn.ParseCommand（首词是命令、子命令拼成工具名、带值的选项
+// 变参数），命令行侧因此不需要参数模板语法。这条命令是手写连接器唯一的
+// 图形化之外入口——Web UI 只保留插件页的目录卡片。
 func runCLIAdd(commandLine string) error {
 	parsed, err := cliconn.ParseCommand(commandLine)
 	if err != nil {
@@ -266,7 +267,8 @@ func runCLIList(cmd *cobra.Command, args []string) {
 	}
 	if cfg.Cli == nil || len(cfg.Cli.Connectors) == 0 {
 		fmt.Println("No CLI connectors configured.")
-		fmt.Println("Add one from the Web UI (Connectors -> CLI -> App catalog) or edit config.json.")
+		fmt.Println("Install a CLI app from the Web UI (Plugins -> CLI Apps), declare one in cli.json")
+		fmt.Println("next to config.json, or run: magic cli add \"gh pr list --limit 20 --json\" --read-only")
 		return
 	}
 

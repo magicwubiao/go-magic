@@ -23,7 +23,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/approval"
 	"github.com/magicwubiao/go-magic/internal/bot"
 	"github.com/magicwubiao/go-magic/internal/bus"
-	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/cortex"
 	"github.com/magicwubiao/go-magic/internal/cron"
 	"github.com/magicwubiao/go-magic/internal/goal"
@@ -167,10 +166,6 @@ type Server struct {
 
 	// MCP manager
 	mcpMgr *mcp.Manager
-
-	// cliMgr 持有 CLI 连接器定义（config.json 的 cli 段）。CLI 是无状态的
-	// 一次性子进程，因此这里没有"连接"概念，只负责定义与工具注册。
-	cliMgr *cliconn.Manager
 
 	// Goal manager
 	goalMgr *goal.Manager
@@ -696,7 +691,6 @@ Your working directory is: %s
 		approvalMgr:          approvalMgr,
 		usageMgr:             usageMgr,
 		mcpMgr:               mcpMgr,
-		cliMgr:               cliconn.New(nil),
 		actions:              make(map[string]*ActionStatus),
 		sessionTokens:        make(map[string][3]int),
 		authToken:            authToken,
@@ -1758,7 +1752,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 
 	// CLI 连接器：没有 HTTP 管理面了——新增/编辑走目录卡片（Agent Plugin）
 	// 或配置文件里的 cli 段，见 cli_config.go 的说明。
-	// 委托登录仍由面板外的"安装/登录"按钮触发：服务端代跑 CLI 自己的
+	// 委托登录由插件页安装/凭据弹窗里的"登录"按钮触发：服务端代跑 CLI 自己的
 	// login 命令（只接受目录 id）。
 	mux.HandleFunc("/api/cli/catalog/login", withCORS(requireAuth(s.handleCLILoginStart)))
 	mux.HandleFunc("/api/cli/catalog/login/", withCORS(requireAuth(s.handleCLILoginByID)))
