@@ -92,6 +92,16 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 上下文用量：GET /context 返回本会话发给模型的上下文按分类的 token 估算
+	// （系统提示词 / 工具 / 对话消息 / 连接器及MCP / 技能），chat 页输入框的
+	// "上下文用量"浮层数据源。注意要与 /cancel 等后缀区分开，放在通用 id
+	// 分支之前。
+	if strings.HasSuffix(path, "/context") {
+		sessionID := strings.TrimSuffix(path, "/context")
+		s.handleSessionContext(w, r, sessionID)
+		return
+	}
+
 	// Check for reset endpoint
 	if strings.HasSuffix(path, "/reset") {
 		sessionID := strings.TrimSuffix(path, "/reset")

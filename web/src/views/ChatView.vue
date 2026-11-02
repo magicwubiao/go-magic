@@ -814,6 +814,54 @@
               />
             </div>
             <div class="toolbar-right">
+              <!-- 上下文用量浮层：当前会话发给模型的上下文占比与分类明细。
+                   打开浮层、以及回合结束且浮层开着时才拉数据，不常驻请求。 -->
+              <n-popover
+                trigger="click"
+                placement="top-end"
+                :show-arrow="true"
+                :duration="100"
+                @update:show="onCtxUsageShow"
+              >
+                <template #trigger>
+                  <n-button
+                    size="tiny"
+                    quaternary
+                    class="toolbar-btn ctx-usage-btn"
+                    :title="t('chat.ctxUsageTitle')"
+                  >
+                    <template #icon>
+                      <n-icon><PieChartOutline /></n-icon>
+                    </template>
+                  </n-button>
+                </template>
+                <div class="ctx-usage-panel">
+                  <div class="ctx-usage-title">{{ t('chat.ctxUsageTitle') }}</div>
+                  <div class="ctx-usage-total">
+                    <span class="ctx-usage-percent">{{ ctxPercent.toFixed(1) }}%</span>
+                    <span class="ctx-usage-sub">
+                      {{ t('chat.ctxUsageUsed') }} {{ formatCtxTokens(ctxUsage?.total_tokens || 0) }} /
+                      {{ formatCtxTokens(ctxUsage?.context_len || 0) }}
+                    </span>
+                  </div>
+                  <n-progress
+                    type="line"
+                    :percentage="ctxPercent"
+                    :show-indicator="false"
+                    :height="8"
+                    :border-radius="4"
+                    :color="ctxBarColor"
+                    class="ctx-usage-bar"
+                  />
+                  <div class="ctx-usage-rows">
+                    <div v-for="row in ctxRows" :key="row.key" class="ctx-usage-row">
+                      <span class="ctx-dot" :style="{ background: row.color }"></span>
+                      <span class="ctx-label">{{ t(row.labelKey) }}</span>
+                      <span class="ctx-value">{{ row.pct.toFixed(1) }}%</span>
+                    </div>
+                  </div>
+                </div>
+              </n-popover>
               <n-select
                 v-if="modelOptions.length > 0"
                 ref="modelSelectRef"
@@ -1253,7 +1301,7 @@ import ComposerEditor from '@/components/ComposerEditor.vue'
 import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline } from '@vicons/ionicons5'
+import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline, PieChartOutline } from '@vicons/ionicons5'
 import type { DropdownOption, UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -1316,6 +1364,81 @@ const rightSidebarMobileVisible = ref(false)
 const mobileSessionExpanded = ref(false)
 const sidebarSearchInput = ref<{ focus: () => void } | null>(null)
 const isMobile = ref(window.innerWidth <= 768)
+
+// ========== 上下文用量浮层 ==========
+// 数据源是 GET /api/sessions/{id}/context：服务端按分类估算发往模型的
+// 上下文 token（与压缩触发同口径：字节/4）。拉取时机只有两个——打开浮层、
+// 以及回合结束且浮层开着时，不在对话过程中常驻请求。会话还没有 agent
+// （新会话没发过消息）时后端按全 0 返回，浮层照常展示 0%。
+const ctxUsageShow = ref(false)
+const ctxUsageLoading = ref(false)
+const ctxUsage = ref<sessionsApi.SessionContextUsage | null>(null)
+
+// 总占比：已用 token / 模型窗口，钳到 100（超出后红条顶满即可，不要 NaN/越界）
+const ctxPercent = computed(() => {
+  const b = ctxUsage.value
+  if (!b || !b.context_len) return 0
+  return Math.min(100, (b.total_tokens / b.context_len) * 100)
+})
+
+// 总进度条颜色随用量分级：绿（余量充足）→ 橙（接近压缩）→ 红（快满/已越线）
+const ctxBarColor = computed(() => {
+  const p = ctxPercent.value
+  if (p >= 85) return '#d03050'
+  if (p >= 60) return '#f0a020'
+  return '#18a058'
+})
+
+// 分类明细行。pct 一律按"占窗口的百分比"算，与截图口径一致：
+// 对话消息 34.7% = 该类 token / 窗口，而不是占已用量的比例。
+const ctxRows = computed(() => {
+  const b = ctxUsage.value?.breakdown
+  const ctxLen = ctxUsage.value?.context_len || 0
+  const rows = [
+    { key: 'system', labelKey: 'chat.ctxUsageCatSystem', value: b?.system || 0, color: '#7c5cff' },
+    { key: 'tools', labelKey: 'chat.ctxUsageCatTools', value: b?.tools || 0, color: '#18a058' },
+    { key: 'messages', labelKey: 'chat.ctxUsageCatMessages', value: b?.messages || 0, color: '#f0a020' },
+    { key: 'mcp', labelKey: 'chat.ctxUsageCatMcp', value: b?.mcp || 0, color: '#2080f0' },
+    { key: 'skills', labelKey: 'chat.ctxUsageCatSkills', value: b?.skills || 0, color: '#e05a9a' },
+  ]
+  return rows.map((r) => ({
+    ...r,
+    pct: ctxLen > 0 ? Math.min(100, (r.value / ctxLen) * 100) : 0,
+  }))
+})
+
+// token 展示：118.4K 这种短格式，浮层里放不下完整数字
+function formatCtxTokens(n: number): string {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
+  return String(n)
+}
+
+async function refreshCtxUsage() {
+  const id = chatStore.activeSessionId
+  if (!id) return
+  ctxUsageLoading.value = true
+  try {
+    const res = await sessionsApi.getSessionContext(id)
+    if (res) ctxUsage.value = res
+  } finally {
+    ctxUsageLoading.value = false
+  }
+}
+
+function onCtxUsageShow(show: boolean) {
+  ctxUsageShow.value = show
+  if (show) refreshCtxUsage()
+}
+
+// 回合结束（busy true→false）且浮层开着时刷新，让数字跟着对话实时走；
+// 浮层没开就不请求，避免每个回合都多发一次调用。
+watch(
+  () => chatStore.busy,
+  (now, prev) => {
+    if (prev && !now && ctxUsageShow.value) refreshCtxUsage()
+  },
+)
 
 // 移动端顶部工具条的标题：当前会话名；尚未选中会话时给出引导文案
 const mobileTopbarTitle = computed(() => chatStore.activeSession?.title || t('chat.selectSession'))
@@ -7058,6 +7181,64 @@ onActivated(() => {
 .approval-select-menu .n-base-select-option .approval-short-label__text {
   overflow: visible !important;
   text-overflow: clip !important;
+}
+
+/* 上下文用量浮层：n-popover teleport 到 body，样式必须写在全局区
+   （scoped 样式缺 data-v-xxx 会完全失效，见文件末尾说明）。 */
+.ctx-usage-panel {
+  width: 300px;
+  padding: 2px 4px;
+  font-size: 13px;
+}
+.ctx-usage-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 10px;
+}
+.ctx-usage-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ctx-usage-percent {
+  font-size: 22px;
+  font-weight: 700;
+  color: #333;
+  line-height: 1;
+}
+.ctx-usage-sub {
+  font-size: 12px;
+  color: #999;
+}
+.ctx-usage-bar {
+  margin-bottom: 12px;
+}
+.ctx-usage-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ctx-usage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.ctx-label {
+  color: #555;
+  flex: 1;
+  min-width: 0;
+}
+.ctx-value {
+  color: #333;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 加号下拉菜单里的「计划模式」行已于 2026-09-29 冻结并全量删除，对应的

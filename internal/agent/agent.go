@@ -4503,6 +4503,107 @@ func (a *Agent) GetTokenUsage() TokenUsage {
 	}
 }
 
+// ContextBreakdown 是会话上下文用量的分类估算（chat 页"上下文用量"浮层的
+// 数据源）。全部字段按"字节数 / 4 ≈ token"估算，与压缩触发逻辑
+// （maybeCompressContext 的 totalChars/4）同一口径，因此这里的总量接近
+// 压缩器判断越线时用的值。
+type ContextBreakdown struct {
+	// System 是系统提示词：history[0] 的 system 消息（已扣除其中嵌入的
+	// 技能块，避免与 Skills 重复计入）+ 各注入块（规则链 / SOUL 静态头 /
+	// 工作目录 / 快照记忆 / 动态记忆 / SOUL 易变区）。注入块不写回 history
+	// （见 withContextBlocks），所以必须在这里单独补计。
+	System int `json:"system"`
+	// Tools 是内置工具 + 子智能体的工具 schema 占用（非 mcp_/ap_ 前缀的工具）。
+	Tools int `json:"tools"`
+	// Messages 是对话消息（history 除 system 外的全部消息，含媒体 base64 权重）。
+	Messages int `json:"messages"`
+	// MCP 是连接器及 MCP 工具 schema 的占用（mcp_* 与插件 ap_* 前缀工具）。
+	MCP int `json:"mcp"`
+	// Skills 是技能清单块的占用（skillsCtx 嵌在 history[0] 里，这里单列）。
+	Skills int `json:"skills"`
+	// Total 是以上各项之和。
+	Total int `json:"total"`
+	// ToolCount / MCPToolCount 是两类工具的数量（仅展示用）。
+	ToolCount    int `json:"tool_count"`
+	MCPToolCount int `json:"mcp_tool_count"`
+}
+
+// toolNameOf 从工具 schema 里取注册名。getToolsSchema 产出的是 OpenAI 格式
+// （{type:"function", function:{name,...}}），但保险起见兼容平铺的 {name:...}。
+func toolNameOf(t map[string]interface{}) string {
+	if fn, ok := t["function"].(map[string]interface{}); ok {
+		if n, ok := fn["name"].(string); ok {
+			return n
+		}
+	}
+	if n, ok := t["name"].(string); ok {
+		return n
+	}
+	return ""
+}
+
+// ContextBreakdown 按分类估算当前会话发往模型时占用的上下文 token。
+// 调用方可与正在执行的回合并发，全部字段在 a.mu 读锁下采集；
+// 注入块直接读字段（不能再调 snapshotMemoryBlock 等加锁读取器——
+// 持 RLock 期间递归加读锁，遇到等锁的写者会死锁）。
+func (a *Agent) ContextBreakdown() ContextBreakdown {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var b ContextBreakdown
+	var sysBytes, skillsBytes, msgBytes int
+	for i, m := range a.history {
+		w := messageWeight(m)
+		if i == 0 && m.Role == "system" {
+			// 技能块以替换语义嵌在 history[0] 里（setContextBlock），从
+			// 系统提示词里扣出去单列，否则它会数两次。
+			skillsBytes = len(a.skillsCtx)
+			if skillsBytes > w {
+				skillsBytes = w
+			}
+			sysBytes += w - skillsBytes
+			continue
+		}
+		msgBytes += w
+	}
+	// withContextBlocks 的注入块：均不写回 history，出站时才插入 system。
+	sysBytes += len(a.ruleContext)
+	sysBytes += len(a.cortexStatic)
+	sysBytes += len(a.snapshotMemory)
+	sysBytes += len(a.dynamicMemory)
+	sysBytes += len(a.cortexDynamic)
+	if a.memoryScope != "" {
+		// 与 withContextBlocks 里的工作目录块同文；长度按同一格式串估算。
+		ws := fmt.Sprintf("[Workspace]\nCurrent working directory: %s\nResolve every file, command and repository operation against this directory. Memory entries that reference other project paths are not authoritative for this workspace.", a.memoryScope)
+		sysBytes += len(ws)
+	}
+
+	for _, t := range a.tools {
+		raw, err := json.Marshal(t)
+		if err != nil {
+			continue
+		}
+		name := toolNameOf(t)
+		if strings.HasPrefix(name, "mcp_") || strings.HasPrefix(name, "ap_") {
+			// mcp_* 是 MCP 连接器工具；ap_* 是插件的 MCP/CLI 连接器工具，
+			// 同属"连接器及 MCP"分类。
+			b.MCP += len(raw)
+			b.MCPToolCount++
+		} else {
+			b.Tools += len(raw)
+			b.ToolCount++
+		}
+	}
+
+	b.System = sysBytes / 4
+	b.Skills = skillsBytes / 4
+	b.Messages = msgBytes / 4
+	b.Tools /= 4
+	b.MCP /= 4
+	b.Total = b.System + b.Skills + b.Messages + b.Tools + b.MCP
+	return b
+}
+
 // SetHistory sets the conversation history
 // SetHistory replaces the conversation history. Guarded by the agent mutex:
 // callers may run concurrently with a worker goroutine executing a turn.

@@ -94,6 +94,38 @@ export async function getSession(id: string): Promise<{ session_id: string; mess
   return request(`/sessions/${id}/messages`)
 }
 
+// 会话上下文用量（chat 页"上下文用量"浮层数据源）：服务端按分类估算当前
+// 会话发往模型的上下文 token（字节/4 口径，与压缩触发一致），并带回模型
+// 窗口上限。breakdown 各项单位是估算 token，前端按 value/context_len 求占比。
+export interface SessionContextBreakdown {
+  system: number
+  tools: number
+  messages: number
+  mcp: number
+  skills: number
+  total: number
+  tool_count: number
+  mcp_tool_count: number
+}
+
+export interface SessionContextUsage {
+  session_id: string
+  model: string
+  context_len: number
+  total_tokens: number
+  breakdown: SessionContextBreakdown
+}
+
+export async function getSessionContext(id: string): Promise<SessionContextUsage | null> {
+  // 会话不存在（刚被删除 / 服务重启后未恢复）时静默降级为 null：
+  // 浮层是随时可开的展示型入口，不该为它弹一次可见的报错。
+  try {
+    return await request<SessionContextUsage>(`/sessions/${id}/context`)
+  } catch {
+    return null
+  }
+}
+
 // getSessionMeta 取单个会话的元信息（标题/最近活动/消息数等）。
 //
 // 存在的意义：回合结束后只需要刷新侧栏里**这一条**，而不是把整张列表按第 1 页
