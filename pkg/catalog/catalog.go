@@ -74,7 +74,9 @@ var catalog = []Provider{
 		Models: []Model{
 			// 2026-09-10 发布：V4.1-Flash（552B MoE，官方模型名 deepseek-flash），
 			// 原生多模态视觉理解；V4-Flash 已下线，旧名临时路由到 V4.1-Flash。
-			{ID: "deepseek-flash", Name: "DeepSeek V4.1 Flash", Description: "Latest workhorse, native vision", ContextLen: 1000000, Vision: b(true)},
+			// 2026-10-17 起官方在 deepseek-flash 名下滚动更新（V4.1-Flash-1017，
+			// MIT 开源权重）：端到端完整项目能力增强，API 模型名不变。
+			{ID: "deepseek-flash", Name: "DeepSeek V4.1 Flash", Description: "Latest workhorse (1017 update), native vision", ContextLen: 1000000, Vision: b(true)},
 			// V4-Pro 官方宣布 9-14 后继续提供服务（应用户需求延长）。
 			{ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", Description: "Previous-gen flagship reasoning", ContextLen: 1000000, Vision: b(false)},
 			// 兼容别名：官方临时路由到 V4.1-Flash（多模态），故视觉判定为 true。
@@ -83,7 +85,7 @@ var catalog = []Provider{
 	},
 	{
 		Name: "openai", DisplayName: "OpenAI",
-		Description:  "GPT-6 series (Sep 2026)",
+		Description:  "GPT-6 / 6.1 series (Oct 2026)",
 		BaseURL:      "https://api.openai.com/v1",
 		NeedsAPIKey:  true,
 		DefaultModel: "gpt-6.1-sol",
@@ -91,6 +93,10 @@ var catalog = []Provider{
 		Models: []Model{
 			// 2026-09-29：GPT-6 Sol 的升级版，官方称"近 Astra 能力、约五分之一价格"。
 			{ID: "gpt-6.1-sol", Name: "GPT-6.1 Sol", Description: "Upgraded Sol, near-flagship capability", ContextLen: 1050000, Vision: b(true)},
+			// 2026-10-26 发布：GPT-6.1 Terra 系列（$1/$5，1M 上下文），
+			// 取代 GPT-5.6 世代中端档位，API 价格再降一半。
+			{ID: "gpt-6.1-terra-pro", Name: "GPT-6.1 Terra Pro", Description: "Newest 6.1 tier, higher capability", ContextLen: 1050000, Vision: b(true)},
+			{ID: "gpt-6.1-terra", Name: "GPT-6.1 Terra", Description: "Newest 6.1 tier, balanced price", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-astra", Name: "GPT-6 Astra", Description: "Most capable flagship", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-sol", Name: "GPT-6 Sol", Description: "Previous-gen balanced (superseded by 6.1 Sol)", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-luna", Name: "GPT-6 Luna", Description: "Fastest and cheapest", ContextLen: 1050000, Vision: b(true)},
@@ -111,9 +117,14 @@ var catalog = []Provider{
 			// 2026-09-22 发布：长时间运行的智能体编码与知识工作。
 			{ID: "claude-opus-5-5", Name: "Claude Opus 5.5", Description: "Latest flagship, adaptive thinking", ContextLen: 1000000, Vision: b(true)},
 			{ID: "claude-fable-5-1", Name: "Claude Fable 5.1", Description: "Fable-class reasoning flagship", ContextLen: 1000000, Vision: b(true)},
+			// 2026-09-28 发布：多数工作的主力档（免费版 claude.ai 也可用）。
+			{ID: "claude-sonnet-5-5", Name: "Claude Sonnet 5.5", Description: "Latest balanced tier", ContextLen: 1000000, Vision: b(true)},
+			// 2026-10-07 发布：$0.10/$0.50，比 Haiku 4.5 便宜 75%，面向高并发
+			// 摘要、子智能体与浏览器操作。
+			{ID: "claude-haiku-5-5", Name: "Claude Haiku 5.5", Description: "Fastest and cheapest, built for subagents", ContextLen: 1000000, Vision: b(true)},
 			{ID: "claude-opus-5", Name: "Claude Opus 5", Description: "Previous-gen flagship", ContextLen: 1000000, Vision: b(true)},
 			{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Description: "Balanced speed and intelligence", ContextLen: 1000000, Vision: b(true)},
-			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Description: "Fastest model", ContextLen: 200000, Vision: b(true)},
+			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Description: "Previous-gen fast model", ContextLen: 200000, Vision: b(true)},
 		},
 	},
 	{
@@ -146,6 +157,9 @@ var catalog = []Provider{
 		Models: []Model{
 			// M3：428B/23B MoE，1M 上下文，原生多模态（图片+视频）。
 			{ID: "MiniMax-M3", Name: "MiniMax M3", Description: "Flagship, native multimodal, 1M context", ContextLen: 1000000, Vision: b(true)},
+			// 2026-10-19 发布：M3.1 Flash（$0.15/$0.60），Agentic/编程/
+			// Computer Use 代际提升，推理提速近 3 倍，开源权重已上 HuggingFace。
+			{ID: "MiniMax-M3.1-Flash", Name: "MiniMax M3.1 Flash", Description: "Latest low-cost agentic model", ContextLen: 1000000},
 			{ID: "MiniMax-M2.7", Name: "MiniMax M2.7", Description: "Enhanced coding"},
 			{ID: "MiniMax-M2.5", Name: "MiniMax M2.5", Description: "Advanced reasoning"},
 		},
@@ -177,12 +191,15 @@ var catalog = []Provider{
 		Group:        "aggregator",
 		Models: []Model{
 			{ID: "openai/gpt-6.1-sol", Name: "GPT-6.1 Sol", Description: "Upgraded Sol (same as the openai default)"},
+			{ID: "openai/gpt-6.1-terra", Name: "GPT-6.1 Terra"},
 			{ID: "openai/gpt-6-sol", Name: "GPT-6 Sol"},
 			{ID: "openai/gpt-5.6", Name: "GPT-5.6 Sol"},
 			{ID: "anthropic/claude-opus-5-5", Name: "Claude Opus 5.5"},
-			{ID: "anthropic/claude-sonnet-5", Name: "Claude Sonnet 5"},
+			{ID: "anthropic/claude-sonnet-5-5", Name: "Claude Sonnet 5.5"},
+			{ID: "google/gemini-4-argon", Name: "Gemini 4 Argon"},
 			{ID: "google/gemini-3.8-flash", Name: "Gemini 3.8 Flash"},
 			{ID: "deepseek/deepseek-flash", Name: "DeepSeek V4.1 Flash"},
+			{ID: "moonshotai/kimi-k3.1-pro", Name: "Kimi K3.1 Pro"},
 		},
 	},
 	{
@@ -219,10 +236,14 @@ var catalog = []Provider{
 		BaseURL:      "https://generativelanguage.googleapis.com/v1beta",
 		NeedsAPIKey:  true,
 		NeedsBaseURL: true,
-		DefaultModel: "gemini-3.8-flash",
+		DefaultModel: "gemini-4-argon",
 		Group:        "other",
 		Models: []Model{
-			{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash", Description: "Latest workhorse model", ContextLen: 1000000, Vision: b(true)},
+			// 2026-10-13 发布并 GA：Gemini 4 Argon，迄今最强 Gemini（1M 上下文，
+			// 引导价 $2/$10 至 11-30，之后 $4/$20）。同月预告的 Gemini 4 Carbon
+			// 首批面向网络防御者，未开放公网 API，暂不登记。
+			{ID: "gemini-4-argon", Name: "Gemini 4 Argon", Description: "Latest flagship, most capable Gemini", ContextLen: 1000000, Vision: b(true)},
+			{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash", Description: "Cost-effective workhorse", ContextLen: 1000000, Vision: b(true)},
 			{ID: "gemini-3.7-flash", Name: "Gemini 3.7 Flash", Description: "Cost-effective", ContextLen: 1000000, Vision: b(true)},
 			{ID: "gemini-3.6-flash", Name: "Gemini 3.6 Flash"},
 			{ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro", Description: "Strongest reasoning", ContextLen: 1000000, Vision: b(true)},
@@ -272,8 +293,8 @@ var catalog = []Provider{
 		Group:        "other",
 		Models: []Model{
 			// 2026-10-06：Large 4 公开预览（1.05T/49B MoE，原生多模态，1M 上下文）；
-			// 官方称权重 10 月底发布，故此处按 API 预览登记。
-			{ID: "mistral-large-4", Name: "Mistral Large 4", Description: "Preview flagship, 1M context", ContextLen: 1000000},
+			// 权重已于 2026-10-29 以 Mistral Ecosystem Open-Weight License 发布。
+			{ID: "mistral-large-4", Name: "Mistral Large 4", Description: "Flagship, 1M context", ContextLen: 1000000},
 			// Mistral Large 确认为纯文本模型（官方文档，2026-09）；窗口按官方 256K
 			// （旧值 128000 与 Large 3 的官方口径不符）。
 			{ID: "mistral-large-latest", Name: "Mistral Large 3", Description: "GA alias, always points to the latest GA flagship (text only)", ContextLen: 256000, Vision: b(false)},
@@ -354,10 +375,15 @@ var catalog = []Provider{
 		Description:  "Moonshot Kimi model series",
 		BaseURL:      "https://api.moonshot.cn/v1",
 		NeedsAPIKey:  true,
-		DefaultModel: "kimi-k3",
+		DefaultModel: "kimi-k3.1-pro",
 		Group:        "china",
 		Models: []Model{
-			{ID: "kimi-k3", Name: "Kimi K3", Description: "Flagship, 2.8T MoE, native vision", ContextLen: 1000000, Vision: b(true)},
+			// 2026-10-23 发布：K3.1 Pro（2.8T MoE / 104B 活跃，1M 上下文），
+			// 代码 / 3D / 金融研究 / 长程 Agent 显著提升，完整权重官方承诺
+			// 11-04 前开源。Highspeed 为 2-3 倍出速的服务档（单价约 2 倍）。
+			{ID: "kimi-k3.1-pro", Name: "Kimi K3.1 Pro", Description: "Latest flagship, agent and coding", ContextLen: 1000000, Vision: b(true)},
+			{ID: "kimi-k3.1-pro-highspeed", Name: "Kimi K3.1 Pro Highspeed", Description: "Latest flagship, 2-3x faster serving tier", ContextLen: 1000000, Vision: b(true)},
+			{ID: "kimi-k3", Name: "Kimi K3", Description: "Previous flagship, 2.8T MoE, native vision", ContextLen: 1000000, Vision: b(true)},
 			{ID: "kimi-k2.6", Name: "Kimi K2.6", Description: "Multimodal + thinking", ContextLen: 262144, Vision: b(true)},
 			{ID: "kimi-k2.7-code", Name: "Kimi K2.7 Code", Description: "Coding", ContextLen: 262144, Vision: b(true)},
 			{ID: "kimi-k2.7-code-highspeed", Name: "Kimi K2.7 Code Highspeed", Description: "Coding (high-speed)", ContextLen: 262144, Vision: b(true)},
@@ -423,9 +449,15 @@ var catalog = []Provider{
 		Description:  "Muse Spark multimodal reasoning models from Meta Superintelligence Labs",
 		BaseURL:      "https://api.meta.ai/v1",
 		NeedsAPIKey:  true,
-		DefaultModel: "muse-spark-1.3",
+		DefaultModel: "muse-wonder",
 		Group:        "other",
 		Models: []Model{
+			// 2026-10-12 预览：Muse Wonder——Meta 最强的长程智能体/编码托管
+			// 模型（Meta Model API + Muse Code）。更高配的 Muse Wonder Full
+			// 仅限 Muse Code 订阅内使用，不进 API 目录。
+			{ID: "muse-wonder", Name: "Muse Wonder", Description: "Preview flagship for long-running agents and coding", ContextLen: 1048576},
+			// 2026-10-15 开源：Muse Spark Open（816B/42B MoE，Muse Model License）。
+			{ID: "muse-spark-open", Name: "Muse Spark Open", Description: "Open-weights 816B MoE", ContextLen: 1048576, Vision: b(true)},
 			{ID: "muse-spark-1.3", Name: "Muse Spark 1.3", Description: "Flagship multimodal reasoning model", ContextLen: 1048576, Vision: b(true)},
 			{ID: "muse-spark-1.2", Name: "Muse Spark 1.2", Description: "Multimodal reasoning model", ContextLen: 1048576, Vision: b(true)},
 			{ID: "muse-spark-1.1", Name: "Muse Spark 1.1", Description: "Debut reasoning model", ContextLen: 1048576, Vision: b(true)},
