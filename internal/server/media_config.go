@@ -88,16 +88,69 @@ type voicePatch struct {
 	GroupID *string `json:"group_id"`
 }
 
-// handleMediaConfig 处理 GET / PUT /api/media/config。
+// handleMediaConfig 处理 GET / PUT / DELETE /api/media/config。
 func (s *Server) handleMediaConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		jsonResponse(w, s.mediaConfigSnapshot())
 	case http.MethodPut, http.MethodPost:
 		s.handleMediaConfigUpdate(w, r)
+	case http.MethodDelete:
+		s.handleMediaConfigReset(w, r)
 	default:
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleMediaConfigReset 处理 DELETE /api/media/config?section=image|video|voice|all。
+//
+// 为什么需要独立接口而不是"PUT 一堆空串"：清空是整段语义，PUT 是逐字段补丁，
+// 后者清不掉 voice.providers 里的分厂商凭据（minimax 的 group_id 等），
+// 也容易因为漏字段留下半套配置。这里直接把整段换成零值，路径与 PUT 一致：
+// 落盘 → 热应用 → 回快照。
+//
+// 注意：环境变量（IMAGE_GEN_API_KEY 等）不在配置里，清不掉；前端确认框会
+// 明确提示这一点，否则用户会以为"清了还在能用"是 bug。
+func (s *Server) handleMediaConfigReset(w http.ResponseWriter, r *http.Request) {
+	section := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("section")))
+	switch section {
+	case "image", "video", "voice", "all":
+	case "":
+		jsonError(w, http.StatusBadRequest, "missing section (image, video, voice or all)")
+		return
+	default:
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("unknown section %q (image, video, voice or all)", section))
+		return
+	}
+
+	s.acquireServerMu("handleMediaConfigReset")
+	s.lockCfgForWrite() // copy-on-write：改的是私有副本
+
+	if s.cfg == nil {
+		s.cfg = &appconfig.Config{}
+	}
+	if section == "image" || section == "all" {
+		s.cfg.ImageGen = &appconfig.ImageGenConfig{}
+	}
+	if section == "video" || section == "all" {
+		s.cfg.VideoGen = &appconfig.VideoGenConfig{}
+	}
+	if section == "voice" || section == "all" {
+		// speed 留 1.0：0 会被各 TTS 后端当成"更快/异常"，而这不是用户想要的清除效果。
+		s.cfg.Voice = &voice.VoiceConfig{Speed: 1}
+	}
+
+	err := s.persistConfig(true)
+	s.unlockCfgForWrite()
+	s.releaseServerMu()
+
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+
+	s.hotApplyMediaConfig()
+	jsonResponse(w, s.mediaConfigSnapshot())
 }
 
 // mediaConfigSnapshot 组装当前配置（密钥已脱敏）。
@@ -349,12 +402,8 @@ func (s *Server) handleMediaConfigUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// 校验在拿锁之前完成：校验只读注册表与请求体，不碰 s.cfg，
-	// 放在锁里做只会拉长临界区。
-	if err := validateMediaPatch(&patch); err != nil {
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+	// 厂商相关的档位校验（时长/画幅/分辨率）必须拿到"补丁合并后的最终配置"
+	// 才能按 provider 判定，所以放在应用补丁之后（见 validateMediaSettings）。
 
 	s.acquireServerMu("handleMediaConfigUpdate")
 	s.lockCfgForWrite() // copy-on-write：下面原地改的是私有副本
@@ -371,6 +420,14 @@ func (s *Server) handleMediaConfigUpdate(w http.ResponseWriter, r *http.Request)
 	applyImageGenPatch(s.cfg.ImageGen, patch.ImageGen)
 	applyVideoGenPatch(s.cfg.VideoGen, patch.VideoGen)
 	applyVoicePatch(s.cfg.Voice, patch.Voice)
+
+	// 校验失败时私有副本直接丢弃（不落盘、不热应用），效果等同改前拦截。
+	if err := validateMediaSettings(s.cfg.ImageGen, s.cfg.VideoGen, s.cfg.Voice); err != nil {
+		s.unlockCfgForWrite()
+		s.releaseServerMu()
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	err := s.persistConfig(true)
 	s.unlockCfgForWrite()
@@ -422,71 +479,97 @@ func (s *Server) hotApplyMediaConfig() {
 	tool.ResetEnvProbes()
 }
 
-// ---- 校验 ----
-
-func validateMediaPatch(p *mediaConfigPatch) error {
-	if p == nil {
-		return fmt.Errorf("empty request body")
-	}
-	if p.ImageGen != nil && p.ImageGen.Provider != nil {
-		name := strings.TrimSpace(*p.ImageGen.Provider)
-		if name != "" {
+// validateMediaSettings 校验补丁合并后的最终媒体配置。
+//
+// 之所以校验"合并结果"而不是请求补丁：时长/画幅/分辨率的合法档位因厂商而异
+// （minimax 是 768p/2k，runway 时长只有 5/10 秒），而补丁可以只改分辨率不改
+// provider——此时合法档位要按"最终生效的 provider"（可能是配置里已有的那个）
+// 判定，只有合并后的配置才拿得到这个信息。
+func validateMediaSettings(img *appconfig.ImageGenConfig, vid *appconfig.VideoGenConfig, vc *voice.VoiceConfig) error {
+	if img != nil {
+		if name := strings.TrimSpace(img.Provider); name != "" {
 			if _, ok := tool.LookupImageBackend(name); !ok {
 				return fmt.Errorf("unknown image provider %q (available: %s)",
 					name, strings.Join(tool.RegisteredImageProviders(), ", "))
 			}
 		}
 	}
-	if p.VideoGen != nil {
-		if p.VideoGen.Provider != nil {
-			name := strings.TrimSpace(*p.VideoGen.Provider)
-			if name != "" {
-				if _, ok := tool.LookupVideoBackend(name); !ok {
-					return fmt.Errorf("unknown video provider %q (available: %s)",
-						name, strings.Join(tool.RegisteredVideoProviders(), ", "))
-				}
+	if vid != nil {
+		name := strings.TrimSpace(vid.Provider)
+		if name != "" {
+			if _, ok := tool.LookupVideoBackend(name); !ok {
+				return fmt.Errorf("unknown video provider %q (available: %s)",
+					name, strings.Join(tool.RegisteredVideoProviders(), ", "))
 			}
 		}
-		if p.VideoGen.DefaultDuration != nil {
-			d := *p.VideoGen.DefaultDuration
-			// 0 = 用后端默认；非 0 则钳到厂商共同支持的范围（3~15 秒）。
-			if d != 0 && (d < 3 || d > 15) {
-				return fmt.Errorf("default_duration must be 0 (provider default) or between 3 and 15 seconds, got %d", d)
-			}
-		}
-		if p.VideoGen.DefaultRatio != nil {
-			if v := strings.TrimSpace(*p.VideoGen.DefaultRatio); v != "" && !oneOf(v, "16:9", "9:16", "1:1") {
-				return fmt.Errorf("default_ratio must be 16:9, 9:16 or 1:1, got %q", v)
-			}
-		}
-		if p.VideoGen.DefaultResolution != nil {
-			if v := strings.TrimSpace(*p.VideoGen.DefaultResolution); v != "" && !oneOf(v, "480p", "720p", "1080p") {
-				return fmt.Errorf("default_resolution must be 480p, 720p or 1080p, got %q", v)
-			}
+		if err := validateVideoDefaults(name, vid); err != nil {
+			return err
 		}
 	}
-	if p.Voice != nil {
-		if p.Voice.Provider != nil {
-			name := strings.TrimSpace(*p.Voice.Provider)
-			if name != "" && !oneOf(name, builtinVoiceProviders...) {
-				if _, ok := tool.LookupSpeechBackend(name); !ok {
-					return fmt.Errorf("unknown voice provider %q (builtin: %s)",
-						name, strings.Join(builtinVoiceProviders, ", "))
-				}
+	if vc != nil {
+		if name := strings.TrimSpace(vc.Provider); name != "" && !oneOf(name, builtinVoiceProviders...) {
+			if _, ok := tool.LookupSpeechBackend(name); !ok {
+				return fmt.Errorf("unknown voice provider %q (builtin: %s)",
+					name, strings.Join(builtinVoiceProviders, ", "))
 			}
 		}
-		if p.Voice.Speed != nil {
-			if v := *p.Voice.Speed; v != 0 && (v < 0.5 || v > 2.0) {
-				return fmt.Errorf("voice speed must be between 0.5 and 2.0, got %v", v)
-			}
+		if v := vc.Speed; v != 0 && (v < 0.5 || v > 2.0) {
+			return fmt.Errorf("voice speed must be between 0.5 and 2.0, got %v", v)
 		}
-		if p.Voice.Pitch != nil {
-			if v := *p.Voice.Pitch; v < -20 || v > 20 {
-				return fmt.Errorf("voice pitch must be between -20 and 20, got %v", v)
-			}
+		if v := vc.Pitch; v < -20 || v > 20 {
+			return fmt.Errorf("voice pitch must be between -20 and 20, got %v", v)
 		}
 	}
 	return nil
+}
+
+// validateVideoDefaults 按厂商目录校验视频默认档位。
+// provider 没登记进目录（如走了自定义后端）时回落到旧的通用白名单；
+// 0 值一律放行（表示"用后端默认"）。
+func validateVideoDefaults(provider string, vid *appconfig.VideoGenConfig) error {
+	info, known := tool.ProviderInfo(tool.MediaKindVideo, provider)
+	if d := vid.DefaultDuration; d != 0 {
+		// 0 = 用后端默认；非 0 按厂商的时长区间钳（runway/minimax 只有 5~10 秒）。
+		min, max := 3, 15
+		if known && info.MinDuration > 0 && info.MaxDuration >= info.MinDuration {
+			min, max = info.MinDuration, info.MaxDuration
+		}
+		if d < min || d > max {
+			return fmt.Errorf("default_duration must be 0 (provider default) or between %d and %d seconds for %s, got %d",
+				min, max, provider, d)
+		}
+	}
+	if r := strings.TrimSpace(vid.DefaultRatio); r != "" {
+		allowed := []string{"16:9", "9:16", "1:1"}
+		if known && len(info.Ratios) > 0 {
+			allowed = info.Ratios
+		}
+		if !containsFold(allowed, r) {
+			return fmt.Errorf("default_ratio for %s must be one of %s, got %q",
+				provider, strings.Join(allowed, ", "), r)
+		}
+	}
+	if v := strings.TrimSpace(vid.DefaultResolution); v != "" {
+		allowed := []string{"480p", "720p", "1080p"}
+		if known && len(info.Resolutions) > 0 {
+			allowed = info.Resolutions
+		}
+		if !containsFold(allowed, v) {
+			return fmt.Errorf("default_resolution for %s must be one of %s, got %q",
+				provider, strings.Join(allowed, ", "), v)
+		}
+	}
+	return nil
+}
+
+// containsFold 大小写不敏感的档位匹配（目录里存小写，历史配置可能是 "2K"）。
+func containsFold(candidates []string, v string) bool {
+	for _, c := range candidates {
+		if strings.EqualFold(c, v) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- 应用补丁（只改请求里出现的字段） ----

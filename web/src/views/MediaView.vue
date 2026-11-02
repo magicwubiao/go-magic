@@ -165,6 +165,23 @@
 
         <n-space align="center" justify="space-between" style="margin-top: 12px;">
           <n-space align="center">
+            <n-popconfirm
+              :positive-text="t('media.clear')"
+              :negative-text="t('common.cancel')"
+              @positive-click="clearSection('image')"
+            >
+              <template #trigger>
+                <n-button
+                  text
+                  size="small"
+                  type="error"
+                  :disabled="!config.image_gen.api_key_set && !config.image_gen.provider"
+                >
+                  {{ t('media.clear') }}
+                </n-button>
+              </template>
+              {{ imageClearConfirm }}
+            </n-popconfirm>
             <n-tag v-if="imageClearKey" type="warning" size="small">{{ t('media.keyWillBeCleared') }}</n-tag>
             <n-button v-else-if="config.image_gen.api_key_set" text size="small" @click="imageClearKey = true">
               {{ t('media.clearKey') }}
@@ -301,6 +318,23 @@
 
         <n-space align="center" justify="space-between" style="margin-top: 12px;">
           <n-space align="center">
+            <n-popconfirm
+              :positive-text="t('media.clear')"
+              :negative-text="t('common.cancel')"
+              @positive-click="clearSection('video')"
+            >
+              <template #trigger>
+                <n-button
+                  text
+                  size="small"
+                  type="error"
+                  :disabled="!config.video_gen.api_key_set && !config.video_gen.provider"
+                >
+                  {{ t('media.clear') }}
+                </n-button>
+              </template>
+              {{ videoClearConfirm }}
+            </n-popconfirm>
             <n-tag v-if="videoClearKey" type="warning" size="small">{{ t('media.keyWillBeCleared') }}</n-tag>
             <n-button v-else-if="config.video_gen.api_key_set" text size="small" @click="videoClearKey = true">
               {{ t('media.clearKey') }}
@@ -467,6 +501,23 @@
 
         <n-space align="center" justify="space-between" style="margin-top: 12px;">
           <n-space align="center">
+            <n-popconfirm
+              :positive-text="t('media.clear')"
+              :negative-text="t('common.cancel')"
+              @positive-click="clearSection('voice')"
+            >
+              <template #trigger>
+                <n-button
+                  text
+                  size="small"
+                  type="error"
+                  :disabled="!config.voice.api_key_set && !config.voice.provider"
+                >
+                  {{ t('media.clear') }}
+                </n-button>
+              </template>
+              {{ voiceClearConfirm }}
+            </n-popconfirm>
             <n-tag v-if="voiceClearKey" type="warning" size="small">{{ t('media.keyWillBeCleared') }}</n-tag>
             <n-button v-else-if="config.voice.api_key_set" text size="small" @click="voiceClearKey = true">
               {{ t('media.clearKey') }}
@@ -510,6 +561,7 @@ import {
   NInput,
   NInputGroup,
   NInputNumber,
+  NPopconfirm,
   NSelect,
   NSlider,
   NSpace,
@@ -523,6 +575,7 @@ import DirPickerModal from '@/components/DirPickerModal.vue'
 
 import {
   getMediaConfig,
+  resetMediaConfig,
   testMediaConfig,
   updateMediaConfig,
   type ImageGenPatch,
@@ -1041,6 +1094,50 @@ async function saveVoice() {
     ['provider', 'model', 'voice', 'language', 'region', 'api_url', 'group_id', 'speed', 'pitch'],
   )
   await applyPatch('voice', patch as Record<string, unknown>)
+}
+
+// ---- 清除配置（整段复位） ----
+//
+// 与「清除密钥」的区别：那个只清 key（保存后生效，其它字段不动）；这个是整段
+// 归零——密钥、模型、接口地址、分厂商凭据（如 minimax 的 group_id）一起清掉，
+// 并立即落盘。用 DELETE 而不是 PUT 一堆空串：整段语义更明确，也不会漏字段。
+const imageClearConfirm = computed(() => clearConfirmText('image'))
+const videoClearConfirm = computed(() => clearConfirmText('video'))
+const voiceClearConfirm = computed(() => clearConfirmText('voice'))
+
+function sectionEnvOverrides(section: Section): string[] {
+  const c = config.value
+  if (!c) return []
+  if (section === 'image') return c.image_gen.env_overrides
+  if (section === 'video') return c.video_gen.env_overrides
+  return c.voice.env_overrides
+}
+
+function clearConfirmText(section: Section): string {
+  let txt = t('media.clearConfirm')
+  const keys = sectionEnvOverrides(section)
+  // 环境变量不在配置文件里、清不掉；不说清楚，用户会以为"清了还能用"是 bug。
+  if (keys.length) txt += ' ' + t('media.clearEnvNote', { keys: keys.join(', ') })
+  return txt
+}
+
+async function clearSection(section: Section) {
+  saving.value = section
+  try {
+    config.value = await resetMediaConfig(section)
+    // 试运行小样对应的是刚被清掉的配置，留着会让人以为"清除了还在跑"。
+    if (section !== 'video') {
+      testState[section].result = null
+      testState[section].error = ''
+      testState[section].previewUrl = ''
+    }
+    syncForms()
+    message.success(t('media.cleared'))
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : String(err))
+  } finally {
+    saving.value = ''
+  }
 }
 
 async function copyConfigPath() {

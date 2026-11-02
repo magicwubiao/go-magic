@@ -120,9 +120,13 @@ func TestKlingImageToVideoRequiresPublicURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when only a local image is given")
 	}
-	// 错误必须给出下一步：改 image_url，或换支持本地文件的后端。
-	if !strings.Contains(err.Error(), "image_url") || !strings.Contains(err.Error(), "volcengine") {
-		t.Errorf("error should point at image_url and an alternative provider, got: %v", err)
+	// 错误必须给出下一步（改用 image_url 或干脆不带图），但**不能**劝模型换 provider：
+	// video_gen 只有一份凭据，换一家内置后端必然失败，模型会一家家试下去刷出一屏 404。
+	if !strings.Contains(err.Error(), "image_url") {
+		t.Errorf("error should point at image_url, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "switch provider") || strings.Contains(err.Error(), "volcengine") {
+		t.Errorf("error must not suggest switching provider at call time, got: %v", err)
 	}
 }
 

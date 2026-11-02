@@ -47,10 +47,14 @@ func (minimaxVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, re
 	base := info.BaseURL(cfg.BaseURL)
 	model := info.Model(req.Model)
 
+	// 同时接受通用档位（480p/720p/1080p，工具 schema 面向模型就是这套）和
+	// MiniMax 原生档位（768p/2k，设置页下拉直接展示这套）。
 	resolution := resolutionFor(map[string]string{
 		"480p":  "768P",
 		"720p":  "768P",
 		"1080p": "2K",
+		"768p":  "768P",
+		"2k":    "2K",
 	}, req.Resolution, "768P")
 	duration := clampDuration(req.Duration, 5, 10)
 
@@ -59,9 +63,12 @@ func (minimaxVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, re
 
 	if req.ImagePath != "" || req.ImageURL != "" {
 		if req.ImageURL == "" {
+			// 别在这里教模型"换一家支持本地文件的"：video_gen 只有一份凭据，
+			// 换 provider 必然失败，而模型会一家一家试下去，刷出一屏 404。
 			return nil, fmt.Errorf(
-				"%s needs a publicly reachable first-frame image: pass image_url instead of image_path, "+
-					"or switch provider to volcengine / runway (both accept local files)",
+				"%s can only animate a first-frame image that is publicly reachable: pass image_url (http/https) "+
+					"instead of image_path. Local files are not supported by this provider — host the frame "+
+					"somewhere public, or generate the video without an image",
 				info.Label)
 		}
 		content = append(content, map[string]any{

@@ -62,11 +62,13 @@ func (klingVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, req 
 
 	if req.ImagePath != "" || req.ImageURL != "" {
 		// 本地图：Kling 只认公网 URL，这里必须明确报错。
-		// 措辞里点名可替代的后端，用户才知道下一步该改哪个字段。
+		// 措辞里**不要**劝模型"换一家支持本地文件的"：video_gen 只有一份凭据，
+		// 换 provider 必然失败，而模型会一家一家试下去，刷出一屏 404。
 		if req.ImageURL == "" {
 			return nil, fmt.Errorf(
-				"%s needs a publicly reachable first-frame image: pass image_url instead of image_path, "+
-					"or switch provider to volcengine / runway (both accept local files)",
+				"%s can only animate a first-frame image that is publicly reachable: pass image_url (http/https) "+
+					"instead of image_path. Local files are not supported by this provider — host the frame "+
+					"somewhere public, or generate the video without an image",
 				info.Label)
 		}
 		endpoint = base + "/image-to-video/" + url.PathEscape(model)

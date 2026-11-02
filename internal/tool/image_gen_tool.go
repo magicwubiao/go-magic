@@ -177,9 +177,16 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 
 	// 检查是否指定了覆盖的提供商。未指定时用 effectiveImageProvider 兜零值，
 	// 保证 &ImageGenConfig{APIKey: ...} 这种漏填 Provider 的配置也能正常工作。
-	provider := effectiveImageProvider(t.config)
-	if p, ok := params["provider"].(string); ok && p != "" {
-		provider = ImageProvider(p)
+	// 换到另一家内置后端时，凭据与默认域名都属于配置里那一家，见下方说明。
+	configuredProvider := effectiveImageProvider(t.config)
+	provider := configuredProvider
+	overridden := false
+	if p, ok := params["provider"].(string); ok {
+		if p = strings.TrimSpace(p); p != "" {
+			provider = ImageProvider(p)
+			overridden = CanonicalProviderName(MediaKindImage, p) !=
+				CanonicalProviderName(MediaKindImage, string(configuredProvider))
+		}
 	}
 
 	// 先查后端：provider 拼错 / 插件已卸载要立刻报"不支持"，而不是误导性的"未配置"。
@@ -191,9 +198,37 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 			provider, strings.Join(RegisteredImageProviders(), ", "))
 	}
 
+	// 内置后端共用 image_gen 段那一份 key / base_url：运行期换名等于拿 A 的密钥
+	// 打 B 的接口（再拼出别家的域名 + 路径，回来一个网关 404 页），所以直接拒绝。
+	// 插件后端自带凭据，换过去可以，但要把配置里那家的 base_url / model 清掉。
+	if overridden && isBuiltinImageBackend(string(provider)) {
+		return map[string]interface{}{
+			"status":   "not_configured",
+			"provider": provider,
+			"prompt":   prompt,
+			"style":    style,
+			"size":     size,
+			"count":    count,
+			"message": fmt.Sprintf(
+				"Only %q is configured with credentials, so this call cannot switch to %q at runtime: "+
+					"it would send the %q key to another vendor's endpoint. Retry with provider %q, "+
+					"or ask the user to change the provider in Settings > Media.",
+				configuredProvider, provider, configuredProvider, configuredProvider),
+			"configuration_help": ConfigHelp(MediaKindImage, string(provider)),
+		}, nil
+	}
+
+	genCfg := t.config
+	if overridden {
+		clone := *t.config
+		clone.BaseURL = ""
+		clone.Model = ""
+		genCfg = &clone
+	}
+
 	// 可用性由后端判定，不在工具层硬判断 APIKey：内置后端要求 key，插件后端可能
 	// 不需要（如本地 ComfyUI）。
-	if !backend.Available(t.config) {
+	if !backend.Available(genCfg) {
 		return map[string]interface{}{
 			"status":             "not_configured",
 			"provider":           provider,
@@ -206,7 +241,7 @@ func (t *ImageGenerationTool) Execute(ctx context.Context, params map[string]int
 		}, nil
 	}
 
-	result, err := backend.Generate(ctx, t.config, ImageRequest{
+	result, err := backend.Generate(ctx, genCfg, ImageRequest{
 		Prompt:         prompt,
 		NegativePrompt: negativePrompt,
 		Style:          style,

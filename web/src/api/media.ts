@@ -148,8 +148,20 @@ export async function updateMediaConfig(patch: MediaConfigPatch): Promise<MediaC
   })
 }
 
-// ---- 试运行 ----
+/**
+ * 清除某一段（或全部）媒体配置：后端把整段换成零值（密钥、模型、地址、
+ * 分厂商凭据一起清），落盘并热应用，返回新的完整快照。
+ */
+export async function resetMediaConfig(
+  section: 'image' | 'video' | 'voice' | 'all',
+): Promise<MediaConfig> {
+  return request(`/media/config?section=${section}`, {
+    method: 'DELETE',
+    timeoutMs: 60000,
+  })
+}
 
+// ---- 试运行 ----
 export interface MediaTestResult {
   status: 'success' | 'not_configured' | string
   /** 生成的样张/音频绝对路径；前端用它换 read 票据做内嵌预览 */

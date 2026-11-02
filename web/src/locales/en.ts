@@ -2342,6 +2342,11 @@ export default {
     copied: 'Config path copied',
     saved: 'Saved and applied',
     noChanges: 'Nothing changed',
+    clear: 'Clear config',
+    clearConfirm:
+      'Clear this whole section? The key, model and endpoint will all be removed and cannot be restored.',
+    clearEnvNote: 'Note: environment variable(s) {keys} still supply credentials, so this capability may stay available.',
+    cleared: 'Cleared',
     copyConfigPath: 'Copy config path',
     test: 'Test run',
     testHint: 'Makes one real request with the saved settings and shows a sample (image: seconds up to 1 min)',

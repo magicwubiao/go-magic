@@ -104,10 +104,13 @@ func (dashscopeVideoBackend) Available(cfg *VideoGenConfig) bool { return videoB
 // dashscope 的 img_url 只接受公网地址 / OSS，本地文件在这里直接给出可操作的建议，
 // 而不是把本地路径拼进请求让厂商回一个看不懂的 400。
 func (dashscopeVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, req VideoRequest) (*VideoResult, error) {
-	if req.ImagePath != "" {
+	// 同时给了公网地址时以 image_url 为准：本地那份只是调用方的临时占位，
+	// 不该因为它的存在把一次本可以成功的调用直接打回。
+	if req.ImagePath != "" && req.ImageURL == "" {
 		return nil, fmt.Errorf(
 			"provider %s requires a publicly reachable image_url for image-to-video; "+
-				"upload the file somewhere accessible or switch provider to volcengine, which accepts local images",
+				"this provider cannot read local files — upload the image somewhere accessible "+
+				"and pass image_url, or generate the video without an image",
 			ProviderDashScope)
 	}
 	t := &VideoGenerationTool{config: cfg}

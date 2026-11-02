@@ -77,6 +77,9 @@ func TestLoadImageGenConfigEnvOverrides(t *testing.T) {
 }
 
 func TestVideoGenerateHiddenWithoutKey(t *testing.T) {
+	// 必须把 magic home 指到临时目录：LoadVideoGenConfig 会读真实的 config.json，
+	// 开发者本机配过 video_gen.api_key 时，这个用例会莫名其妙地红。
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
 	t.Setenv("VIDEO_GEN_API_KEY", "")
 
 	r := NewRegistry()

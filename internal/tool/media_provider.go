@@ -299,6 +299,12 @@ func RegisteredImageProviders() []string {
 	return names
 }
 
+// isBuiltinImageBackend 与 isBuiltinVideoBackend 同理：image_gen 段也只有一份凭据。
+func isBuiltinImageBackend(name string) bool {
+	_, ok := ProviderInfo(MediaKindImage, name)
+	return ok
+}
+
 // RegisterVideoBackend 注册内核内置视频后端，同名覆盖。
 func RegisterVideoBackend(b VideoBackend) {
 	registerVideoBackend("", b)
@@ -359,6 +365,19 @@ func LookupVideoBackend(name string) (VideoBackend, bool) {
 		return entry.backend, ok
 	}
 	return nil, false
+}
+
+// isBuiltinVideoBackend 报告 name 是否指向一个**内核自带**的视频后端。
+//
+// 只有一个用途：模型在参数里把 provider 换成另一家时，判断这次请求能不能借用
+// config.json 里那份凭据。内置厂商的 key / base_url / model 是全局单值（video_gen
+// 段只存一份），换成别家就等于拿 A 的密钥打 B 的接口；插件后端自带凭据，不受此限。
+//
+// 判据用 catalog（= 内核认可的厂商清单）而不是注册表 owner：插件覆盖同名内置
+// 实现时凭据仍来自 config，同样不能借给别家。
+func isBuiltinVideoBackend(name string) bool {
+	_, ok := ProviderInfo(MediaKindVideo, name)
+	return ok
 }
 
 // RegisteredVideoProviders 返回已注册的视频 provider 名称（升序）。

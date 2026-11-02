@@ -90,6 +90,8 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 				"runway (Runway Gen-4), minimax (Hailuo H3). Pick the provider by what the user's account "+
 				"has, and by capability: Runway only renders 5 or 10 second clips; Kling and MiniMax need a "+
 				"public URL for image-to-video while volcengine and runway accept local files. "+
+				"Only the provider configured in Settings has credentials, so do not switch provider "+
+				"on your own to work around a capability limit — report the limit instead. "+
 				"Generation typically takes 1-5 minutes; the tool polls the provider and saves the MP4 locally.",
 			map[string]interface{}{
 				"type": "object",
@@ -136,7 +138,7 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Override default provider: dashscope, volcengine, kling, runway or minimax",
+						"description": "Override the configured provider. Only useful for plugin backends that carry their own credentials; built-in providers share one credential set, so overriding to a different built-in provider is rejected.",
 						// 这个 enum 是**内置后端**的快照，故意不跟注册表联动：工具 schema 一旦
 						// 随插件注册变化，模型看到的能力面就不可复现了（同一个 prompt 在装插件
 						// 前后表现不一致，排查成本极高）。插件贡献的 provider 走
@@ -206,9 +208,24 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 		outputPath = op
 	}
 
-	provider := effectiveVideoProvider(t.config)
-	if p, ok := params["provider"].(string); ok && p != "" {
-		provider = VideoProvider(p)
+	// 配置里的 provider 才是"这份凭据属于谁"。模型可以通过 provider 参数改选，
+	// 但内置后端的 key / base_url / model 是全局单值，换名等于让凭据与接口错配。
+	configuredProvider := effectiveVideoProvider(t.config)
+	provider := configuredProvider
+	overridden := false
+	if p, ok := params["provider"].(string); ok {
+		if p = strings.TrimSpace(p); p != "" {
+			provider = VideoProvider(p)
+			overridden = CanonicalProviderName(MediaKindVideo, p) !=
+				CanonicalProviderName(MediaKindVideo, string(configuredProvider))
+		}
+	}
+	if overridden {
+		// 配置里的模型名属于配置里那一家（runway + MiniMax-H3 就是一个必 404 的组合）。
+		// 模型显式传了 model 的仍然尊重，那是调用方明确的意图。
+		if m, ok := params["model"].(string); !ok || strings.TrimSpace(m) == "" {
+			model = ""
+		}
 	}
 
 	// 先查后端：provider 拼错 / 插件已卸载要立刻报"不支持"，而不是误导性的"未配置"。
@@ -220,8 +237,38 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 			provider, strings.Join(RegisteredVideoProviders(), ", "))
 	}
 
+	// 换到另一家**内置**后端时直接拒绝，不发请求。
+	//
+	// video_gen 段只有一份 key：硬发就是拿 minimax 的密钥去打 runway，再拼出
+	// https://api.minimax.cn/v1/videos/text2video 这种不存在的路径，回来一个
+	// nginx 404 页；模型读不懂 404，会继续换下一家，一次对话刷出一屏互相矛盾的
+	// 错误——用户看到的现象就是"明明配好了，怎么全在报错"。这里把链路断在源头。
+	if overridden && isBuiltinVideoBackend(string(provider)) {
+		return map[string]interface{}{
+			"status":   "not_configured",
+			"provider": provider,
+			"prompt":   prompt,
+			"message": fmt.Sprintf(
+				"Only %q is configured with credentials, so this call cannot switch to %q at runtime: "+
+					"it would send the %q key to another vendor's endpoint. Retry with provider %q, "+
+					"or ask the user to change the provider in Settings > Media.",
+				configuredProvider, provider, configuredProvider, configuredProvider),
+			"configuration_help": ConfigHelp(MediaKindVideo, string(provider)),
+		}, nil
+	}
+
+	// 插件后端自带凭据，可以换；但 base_url / model 属于配置里那一家，不能顺手
+	// 带过去——否则插件后端会拿着别家的域名和模型名发请求。
+	genCfg := t.config
+	if overridden {
+		clone := *t.config
+		clone.BaseURL = ""
+		clone.Model = ""
+		genCfg = &clone
+	}
+
 	// 可用性由后端判定（内置后端要求 key，插件后端可能不需要），不在工具层硬判断。
-	if !backend.Available(t.config) {
+	if !backend.Available(genCfg) {
 		return map[string]interface{}{
 			"status":             "not_configured",
 			"provider":           provider,
@@ -231,7 +278,7 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 		}, nil
 	}
 
-	genResult, err := backend.Generate(ctx, t.config, VideoRequest{
+	genResult, err := backend.Generate(ctx, genCfg, VideoRequest{
 		Prompt:         prompt,
 		NegativePrompt: negativePrompt,
 		ImageURL:       imageURL,
