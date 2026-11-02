@@ -362,6 +362,14 @@
               <n-input v-model:value="voiceForm.api_url" :placeholder="t('media.baseUrlPlaceholder')" />
             </n-form-item>
           </n-gi>
+          <n-gi v-if="voiceForm.provider === 'minimax'" span="2 s:1">
+            <n-form-item :label="t('media.voice.groupId')" :show-feedback="false">
+              <n-input
+                v-model:value="voiceForm.group_id"
+                :placeholder="t('media.voice.groupIdPlaceholder')"
+              />
+            </n-form-item>
+          </n-gi>
           <n-gi span="2 s:1">
             <n-form-item :label="t('media.voice.speed')" :show-feedback="false">
               <n-input-number v-model:value="voiceForm.speed" :min="0.5" :max="2" :step="0.1" style="width: 100%;" />
@@ -458,6 +466,7 @@ const voiceForm = reactive({
   language: '',
   region: '',
   api_url: '',
+  group_id: '',
   speed: 1,
   pitch: 0,
 })
@@ -496,6 +505,7 @@ function syncForms() {
     language: c.voice.language,
     region: c.voice.region,
     api_url: c.voice.api_url,
+    group_id: c.voice.group_id || '',
     speed: c.voice.speed || 1,
     pitch: c.voice.pitch || 0,
   })
@@ -800,7 +810,7 @@ async function saveVoice() {
     patch as Record<string, unknown>,
     voiceForm as unknown as Record<string, unknown>,
     c.voice as unknown as Record<string, unknown>,
-    ['provider', 'model', 'voice', 'language', 'region', 'api_url', 'speed'],
+    ['provider', 'model', 'voice', 'language', 'region', 'api_url', 'group_id', 'speed'],
   )
   await applyPatch('voice', patch as Record<string, unknown>)
 }

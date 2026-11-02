@@ -2372,6 +2372,8 @@ export default {
       region: 'Region',
       regionPlaceholder: 'Azure only, e.g. eastasia',
       apiUrl: 'Endpoint',
+      groupId: 'Group ID (MiniMax only)',
+      groupIdPlaceholder: 'Account group ID from the MiniMax console, required',
       speed: 'Speed',
       hint: 'Keys and regions can also be set per provider (voice.providers).',
     },

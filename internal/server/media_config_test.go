@@ -247,3 +247,28 @@ func TestMediaConfigPutHotAppliesToLiveTools(t *testing.T) {
 		}
 	}
 }
+
+// MiniMax 的 GroupId 存进按厂商凭据段：缺省不动、显式空串清除。
+func TestApplyVoicePatchGroupID(t *testing.T) {
+	c := &voice.VoiceConfig{}
+
+	g := "grp_1"
+	applyVoicePatch(c, &voicePatch{GroupID: &g})
+	if got := c.Providers["minimax"].GroupID; got != "grp_1" {
+		t.Fatalf("group = %q, want grp_1", got)
+	}
+
+	empty := ""
+	applyVoicePatch(c, &voicePatch{GroupID: &empty})
+	if got := c.Providers["minimax"].GroupID; got != "" {
+		t.Fatalf("group = %q, want cleared", got)
+	}
+
+	// 缺省 = 不动：清除后重新填上，再发一个不带 group_id 的补丁。
+	g2 := "grp_2"
+	applyVoicePatch(c, &voicePatch{GroupID: &g2})
+	applyVoicePatch(c, &voicePatch{})
+	if got := c.Providers["minimax"].GroupID; got != "grp_2" {
+		t.Fatalf("group = %q, want untouched grp_2", got)
+	}
+}

@@ -35,7 +35,7 @@ import (
 var mediaEnvKeys = map[string][]string{
 	"image_gen": {"IMAGE_GEN_API_KEY", "IMAGE_GEN_PROVIDER", "IMAGE_GEN_BASE_URL", "IMAGE_GEN_OUTPUT_DIR"},
 	"video_gen": {"VIDEO_GEN_API_KEY", "VIDEO_GEN_PROVIDER", "VIDEO_GEN_BASE_URL", "VIDEO_GEN_MODEL", "VIDEO_GEN_OUTPUT_DIR"},
-	"voice":     {"VOICE_API_KEY"},
+	"voice":     {"VOICE_API_KEY", "MINIMAX_API_KEY", "MINIMAX_GROUP_ID", "DASHSCOPE_API_KEY"},
 }
 
 // builtinVoiceProviders 是 voice.Manager 内置的 provider（不含插件贡献的）。
@@ -80,6 +80,9 @@ type voicePatch struct {
 	Region   *string  `json:"region"`
 	Speed    *float64 `json:"speed"`
 	Pitch    *float64 `json:"pitch"`
+	// GroupID 是 MiniMax 语音接口的必填账号组 ID，写入 providers.minimax。
+	// 其余厂商忽略此字段。
+	GroupID *string `json:"group_id"`
 }
 
 // handleMediaConfig 处理 GET / PUT /api/media/config。
@@ -309,12 +312,25 @@ func (s *Server) voiceSnapshot(c *voice.VoiceConfig) map[string]interface{} {
 		"api_key_hint":  maskSecret(apiKey),
 		"api_url":       apiURL,
 		"region":        region,
+		"group_id":      voiceGroupID(c),
 		"speed":         speed,
 		"pitch":         pitch,
 		"providers":     providers,
 		"available":     available,
 		"env_overrides": setEnvKeys("voice"),
 	}
+}
+
+// voiceGroupID 取 MiniMax 的账号组 ID（当前唯一需要它的厂商）。
+// GroupId 不算秘密——它随每个请求的 URL 明文传输，这里不掩码。
+func voiceGroupID(c *voice.VoiceConfig) string {
+	if c == nil {
+		return ""
+	}
+	if pc, ok := c.Providers["minimax"]; ok {
+		return strings.TrimSpace(pc.GroupID)
+	}
+	return ""
 }
 
 // handleMediaConfigUpdate 处理 PUT：校验 → 落盘 → 热应用。
@@ -554,6 +570,16 @@ func applyVoicePatch(c *voice.VoiceConfig, p *voicePatch) {
 	}
 	if p.Pitch != nil {
 		c.Pitch = *p.Pitch
+	}
+	if p.GroupID != nil {
+		// MiniMax 的 GroupId 存进按厂商的凭据段：显式 "" = 清除，缺省 = 不动
+		// （与顶层 api_key 同一条约定）。
+		if c.Providers == nil {
+			c.Providers = make(map[string]voice.ProviderCredentials)
+		}
+		pc := c.Providers["minimax"]
+		pc.GroupID = strings.TrimSpace(*p.GroupID)
+		c.Providers["minimax"] = pc
 	}
 }
 

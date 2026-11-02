@@ -33,6 +33,7 @@ func init() {
 	// 注册表非空后 registeredTTSBackendAvailable() 会开始读语音配置，
 	// 所以 speech_backend.go 那边配了 TTL 缓存——顺序别弄反。
 	RegisterSpeechBackend(cosyVoiceBackend{})
+	RegisterSpeechBackend(minimaxSpeechBackend{})
 }
 
 // ---- 图片 ----

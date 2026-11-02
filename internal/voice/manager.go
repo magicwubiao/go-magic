@@ -52,6 +52,9 @@ type ProviderCredentials struct {
 	APIKey string `json:"api_key"`
 	APIURL string `json:"api_url"`
 	Region string `json:"region"`
+	// GroupID 是 MiniMax 系接口特有的账号组 ID（t2a_v2 必须以 ?GroupId= 查询
+	// 参数携带，缺了直接 404/invalid params）。其它厂商忽略此字段。
+	GroupID string `json:"group_id,omitempty"`
 }
 
 // DefaultVoiceConfig returns a default voice configuration

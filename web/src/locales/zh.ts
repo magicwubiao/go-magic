@@ -2378,6 +2378,8 @@ export default {
       region: '区域',
       regionPlaceholder: 'Azure 专用，如 eastasia',
       apiUrl: '接口地址',
+      groupId: 'Group ID（MiniMax 专用）',
+      groupIdPlaceholder: 'MiniMax 控制台的账号组 ID，必填',
       speed: '语速',
       hint: '密钥与区域也可以按服务商分别配置（voice.providers）。',
     },

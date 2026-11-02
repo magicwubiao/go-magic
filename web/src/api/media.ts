@@ -78,6 +78,7 @@ export interface VoiceSettings {
   api_key_hint: string
   api_url: string
   region: string
+  group_id: string
   speed: number
   pitch: number
   providers: MediaProviderOption[]
@@ -121,6 +122,7 @@ export interface VoicePatch {
   language?: string
   api_url?: string
   region?: string
+  group_id?: string
   speed?: number
   pitch?: number
 }

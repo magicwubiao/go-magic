@@ -10,6 +10,7 @@ package tool
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -555,5 +556,139 @@ func TestMediaAPIErrorRateLimitGuidance(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Wait a minute") {
 		t.Errorf("rate-limit error should tell the user to retry later, got: %v", err)
+	}
+}
+
+// ---- MiniMax 语音 ----
+
+// T2A v2 的三个契约：GroupId 必须拼在 query 上、鉴权是 Bearer、
+// data.audio 是十六进制字符串必须解码后交给内核。
+func TestMinimaxSpeechSynthesizesHexAudio(t *testing.T) {
+	wantBytes := []byte("ID3fake-mp3-bytes")
+	var body map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/t2a_v2" {
+			t.Errorf("path = %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if got := r.URL.Query().Get("GroupId"); got != "grp_123" {
+			t.Errorf("GroupId = %q, want grp_123", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mm-key" {
+			t.Errorf("Authorization = %q", got)
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		io.WriteString(w, `{"data":{"audio":"`+hex.EncodeToString(wantBytes)+`"},"base_resp":{"status_code":0}}`)
+	}))
+	defer srv.Close()
+
+	cfg := &voice.VoiceConfig{
+		Providers: map[string]voice.ProviderCredentials{
+			"minimax": {APIKey: "mm-key", GroupID: "grp_123"},
+		},
+		APIURL: srv.URL,
+	}
+	audio, err := minimaxSpeechBackend{}.Synthesize(context.Background(), cfg, SpeechRequest{
+		Text: "你好世界", Format: "mp3", Speed: 1.1, Pitch: -1,
+	})
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+
+	if body["model"] != "speech-02-hd" {
+		t.Errorf("model = %v, want catalog default speech-02-hd", body["model"])
+	}
+	vs, _ := body["voice_setting"].(map[string]any)
+	if vs["voice_id"] != "male-qn-qingse" {
+		t.Errorf("voice_id = %v, want catalog default", vs["voice_id"])
+	}
+	if got, want := vs["speed"], float64(1.1); got != want {
+		t.Errorf("speed = %v, want %v", got, want)
+	}
+	if got, want := vs["pitch"], float64(-1); got != want {
+		t.Errorf("pitch = %v, want %v", got, want)
+	}
+	as, _ := body["audio_setting"].(map[string]any)
+	if as["format"] != "mp3" || as["sample_rate"] != float64(32000) {
+		t.Errorf("audio_setting = %v", as)
+	}
+
+	// 十六进制必须解码：内核拿到的是真实音频字节。
+	if string(audio.Data) != string(wantBytes) {
+		t.Errorf("audio data = %q, want %q", audio.Data, wantBytes)
+	}
+	if audio.Format != "mp3" || audio.Mime != "audio/mpeg" {
+		t.Errorf("format/mime = %q/%q", audio.Format, audio.Mime)
+	}
+}
+
+// base_resp.status_code 非 0 必须报错并把 status_msg 带出来（MiniMax 的
+// 失败都走这个字段，HTTP 状态码永远是 200）。
+func TestMinimaxSpeechAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"base_resp":{"status_code":1004,"status_msg":"invalid voice id"}}`)
+	}))
+	defer srv.Close()
+
+	cfg := &voice.VoiceConfig{
+		Providers: map[string]voice.ProviderCredentials{"minimax": {APIKey: "k", GroupID: "g"}},
+		APIURL:    srv.URL,
+	}
+	_, err := minimaxSpeechBackend{}.Synthesize(context.Background(), cfg, SpeechRequest{Text: "hi"})
+	if err == nil || !strings.Contains(err.Error(), "1004") || !strings.Contains(err.Error(), "invalid voice id") {
+		t.Fatalf("err = %v, want status_code 1004 with message", err)
+	}
+}
+
+// 缺 GroupId 要在客户端侧被拦下，并告诉模型/用户去哪配——MiniMax 服务端
+// 对缺 GroupId 的报错完全不提 GroupId，靠它自己纠不了错。
+func TestMinimaxSpeechRequiresGroupID(t *testing.T) {
+	t.Setenv(minimaxGroupEnvKey, "")
+
+	cfg := &voice.VoiceConfig{APIKey: "k"}
+	_, err := minimaxSpeechBackend{}.Synthesize(context.Background(), cfg, SpeechRequest{Text: "hi"})
+	if err == nil || !strings.Contains(err.Error(), "GroupId") {
+		t.Fatalf("err = %v, want a GroupId hint", err)
+	}
+
+	// 环境变量兜底也算配了。
+	t.Setenv(minimaxGroupEnvKey, "env-grp")
+	if got := minimaxSpeechGroupID(cfg); got != "env-grp" {
+		t.Fatalf("group = %q, want env-grp", got)
+	}
+}
+
+func TestMinimaxSpeechAvailabilityKeySources(t *testing.T) {
+	t.Setenv(minimaxSpeechEnvKey, "")
+
+	if (minimaxSpeechBackend{}).Available(nil) {
+		t.Error("no key anywhere should mean unavailable")
+	}
+	if !(minimaxSpeechBackend{}).Available(&voice.VoiceConfig{APIKey: "k"}) {
+		t.Error("voice.api_key should be enough")
+	}
+	cfg := &voice.VoiceConfig{
+		APIKey:    "generic",
+		Providers: map[string]voice.ProviderCredentials{"minimax": {APIKey: "per-provider"}},
+	}
+	if got := minimaxSpeechAPIKey(cfg); got != "per-provider" {
+		t.Errorf("key = %q, want per-provider", got)
+	}
+
+	t.Setenv(minimaxSpeechEnvKey, "env-key")
+	if got := minimaxSpeechAPIKey(nil); got != "env-key" {
+		t.Errorf("env key = %q", got)
+	}
+}
+
+// wav 不在同步接口的稳定支持列表里，应回落 mp3 而不是报错。
+func TestMinimaxSpeechFormatFallback(t *testing.T) {
+	if got := minimaxSpeechFormat("wav"); got != "mp3" {
+		t.Errorf("wav -> %q, want mp3", got)
+	}
+	if got := minimaxSpeechFormat("flac"); got != "flac" {
+		t.Errorf("flac -> %q, want flac", got)
 	}
 }

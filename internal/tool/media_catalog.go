@@ -274,6 +274,19 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		DefaultVoice:   "longxiaochun_v2",
 		Notes:          "Voice IDs are model-specific: cosyvoice-v2 uses longxiaochun_v2, v3 uses longanhuan.",
 	},
+	{
+		Kind: MediaKindSpeech, Name: "minimax", Label: "MiniMax 语音",
+		DefaultModel:   "speech-02-hd",
+		Models:         []string{"speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"},
+		DefaultBaseURL: "https://api.minimaxi.com",
+		ConsoleURL:     "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+		DocsURL:        "https://platform.minimaxi.com/docs/guides/text-to-speech",
+		KeyHint:        "MiniMax API key + GroupId（控制台接口密钥页同一页；海外账号把接口地址改成 https://api.minimax.io）",
+		Capabilities:   []string{CapTextToSpeech},
+		DefaultVoice:   "male-qn-qingse",
+		Notes: "GroupId is required (voice.providers.minimax.group_id or MINIMAX_GROUP_ID env); " +
+			"response audio is hex-encoded and decoded by the kernel.",
+	},
 }
 
 // mediaProviderAliases 常见手写变体 → 主名。
@@ -298,6 +311,7 @@ var mediaProviderAliases = map[MediaKind]map[string]string{
 	MediaKindSpeech: {
 		"qwen-tts": "cosyvoice", "qwen_tts": "cosyvoice", "dashscope": "cosyvoice",
 		"ali": "cosyvoice", "cosyvoice-v2": "cosyvoice",
+		"hailuo": "minimax", "minimaxi": "minimax", "海螺": "minimax",
 	},
 }
 

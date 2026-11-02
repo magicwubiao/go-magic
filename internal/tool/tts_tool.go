@@ -23,7 +23,7 @@ func NewTTSTool() *TTSTool {
 	return &TTSTool{
 		BaseTool: *NewBaseTool(
 			"tts",
-			"Convert text to speech using various TTS providers (OpenAI, Azure, Google, ElevenLabs). Generate audio from text with customizable voice, language, speed, and pitch.",
+			"Convert text to speech using various TTS providers (OpenAI, Azure, Google, ElevenLabs, CosyVoice, MiniMax). Generate audio from text with customizable voice, language, speed, and pitch.",
 			map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -42,8 +42,8 @@ func NewTTSTool() *TTSTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "TTS provider to use: openai, azure, google, elevenlabs",
-						"enum":        []string{"openai", "azure", "google", "elevenlabs"},
+						"description": "TTS provider to use: openai, azure, google, elevenlabs, cosyvoice (Alibaba), minimax",
+						"enum":        []string{"openai", "azure", "google", "elevenlabs", "cosyvoice", "minimax"},
 						"default":     "openai",
 					},
 					"speed": map[string]interface{}{
@@ -62,7 +62,7 @@ func NewTTSTool() *TTSTool {
 					},
 					"output_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Output file path (default: ~/tts_output_<timestamp>.mp3)",
+						"description": "Output file path (default: tts_output_<timestamp>.mp3 in the session working directory)",
 					},
 					"format": map[string]interface{}{
 						"type":        "string",
