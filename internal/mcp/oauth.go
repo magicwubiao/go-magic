@@ -25,6 +25,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -807,63 +809,193 @@ func (m *OAuthManager) closeFlowLocked(flow *oauthFlow) {
 // handleCallback 返回浏览器跳转的处理器：校验 state → code 换 token →
 // 落盘 → 通知上层重连。
 //
-// 顺序敏感：必须先把 HTTP 响应写给浏览器、**再**收尾关 listener/server。
-// 反过来 server.Close() 会掐断这条正在写的连接，浏览器看到的是一面
-// "连接被重置"，授权明明成功了却像失败。
+// 顺序敏感：必须先把 HTTP 响应完整写给浏览器、**再**收尾关
+// listener/server。反过来 server.Close() 会掐断这条正在写的连接，浏览器
+// 拿到的是被截断的响应——页面是一片白屏，用户以为授权失败（虽然 token
+// 其实已经落盘）。所以这里统一走 writeOAuthResult + finishFlowSoon。
 func (m *OAuthManager) handleCallback(flow *oauthFlow) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if errParam := q.Get("error"); errParam != "" {
 			desc := q.Get("error_description")
-			http.Error(w, "Authorization failed: "+errParam, http.StatusBadRequest)
-			m.finishFlow(flow, fmt.Errorf("authorization server rejected the request: %s (%s)", errParam, desc))
+			detail := errParam
+			if desc != "" {
+				detail = errParam + ": " + desc
+			}
+			writeOAuthResult(w, http.StatusBadRequest, false, flow.serverName, detail)
+			m.finishFlowSoon(flow, fmt.Errorf("authorization server rejected the request: %s (%s)", errParam, desc))
 			return
 		}
 		code := q.Get("code")
 		if code == "" {
-			http.Error(w, "missing code", http.StatusBadRequest)
-			m.finishFlow(flow, fmt.Errorf("authorization callback missing code parameter"))
+			writeOAuthResult(w, http.StatusBadRequest, false, flow.serverName, "callback is missing the code parameter")
+			m.finishFlowSoon(flow, fmt.Errorf("authorization callback missing code parameter"))
 			return
 		}
 		if q.Get("state") != flow.state {
 			// state 不匹配最可能是 CSRF 或者另一个浏览器标签页的旧流程。
-			http.Error(w, "state mismatch", http.StatusBadRequest)
-			m.finishFlow(flow, fmt.Errorf("state mismatch in authorization callback"))
+			writeOAuthResult(w, http.StatusBadRequest, false, flow.serverName, "state mismatch — the authorization link may be stale")
+			m.finishFlowSoon(flow, fmt.Errorf("state mismatch in authorization callback"))
 			return
 		}
 
 		tok, err := m.exchangeCode(flow, code)
 		if err != nil {
-			http.Error(w, "Token exchange failed: "+err.Error(), http.StatusBadGateway)
-			m.finishFlow(flow, err)
+			writeOAuthResult(w, http.StatusBadGateway, false, flow.serverName, "token exchange failed: "+err.Error())
+			m.finishFlowSoon(flow, err)
 			return
 		}
 		if err := m.store.Save(flow.serverName, *tok); err != nil {
-			http.Error(w, "failed to persist token", http.StatusInternalServerError)
-			m.finishFlow(flow, fmt.Errorf("failed to persist OAuth token: %w", err))
+			writeOAuthResult(w, http.StatusInternalServerError, false, flow.serverName, "failed to persist the token")
+			m.finishFlowSoon(flow, fmt.Errorf("failed to persist OAuth token: %w", err))
 			return
 		}
 
 		log.Infof("[MCP] OAuth authorization completed for %q", flow.serverName)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-<p>Authorization complete. You can close this tab and go back to go-magic.</p></body></html>`)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
+		writeOAuthResult(w, http.StatusOK, true, flow.serverName, "")
 
-		// 响应已经写完，现在才能安全地收尾。
-		m.finishFlow(flow, nil)
+		// 响应已完整写出，等浏览器读完再收尾并触发重连。
+		go func() {
+			time.Sleep(oauthCallbackGrace)
+			m.finishFlow(flow, nil)
 
-		// 触发上层重连（异步：handler 要先返回，浏览器别等握手）。
-		m.mu.Lock()
-		fn := m.onAuthorized
-		m.mu.Unlock()
-		if fn != nil {
-			name := flow.serverName
-			go fn(name)
+			m.mu.Lock()
+			fn := m.onAuthorized
+			m.mu.Unlock()
+			if fn != nil {
+				fn(flow.serverName)
+			}
+		}()
+	}
+}
+
+// oauthCallbackGrace 是回调页写完后、关闭 listener 前的宽限期。
+//
+// 立刻 Close 会抢在 TCP 发送缓冲清空前掐断连接，浏览器只收到半截响应，
+// 最终显示一片白屏。600ms 对本机回环足够送完，用户完全感知不到延迟。
+const oauthCallbackGrace = 600 * time.Millisecond
+
+// finishFlowSoon 延迟收尾一次回调流程（失败分支用）。
+//
+// 回调页是用户在这条链路上唯一看到的"结果界面"，宁可多留 600ms 也不能
+// 让连接被掐断——白屏比错误提示更让人困惑。
+func (m *OAuthManager) finishFlowSoon(flow *oauthFlow, err error) {
+	go func() {
+		time.Sleep(oauthCallbackGrace)
+		m.finishFlow(flow, err)
+	}()
+}
+
+// writeOAuthResult 把回调结果渲染成一张完整可见的 HTML 页面。
+//
+// 必须带 Content-Length：不设置长度时 Go 走 chunked，结束块要等 handler
+// 返回才写，而收尾会关闭 server——正是白屏的成因。
+func writeOAuthResult(w http.ResponseWriter, status int, ok bool, serverName, detail string) {
+	page := oauthResultPage(ok, serverName, detail)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(page)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(status)
+	if _, err := io.WriteString(w, page); err != nil {
+		log.Warnf("[MCP] failed to write OAuth result page: %v", err)
+	}
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// oauthResultPage 生成回调结果页（成功/失败共用一套版式）。
+//
+// 无外部资源（离线、内网都要能显示），自带深浅色适配；成功页会尝试
+// window.close()——系统浏览器里用户手动打开的标签页通常关不掉，所以
+// 文案同时给出"手动关闭"的退路。
+func oauthResultPage(ok bool, serverName, detail string) string {
+	name := html.EscapeString(serverName)
+	var tint, glyph, title, line1, line2, extra, script string
+
+	// 文案一律英文：回调页由系统浏览器打开，拿不到 go-magic 的界面语言，
+	// 英文是唯一对所有用户都成立的写法；语义另外用大图标兜底。
+	if ok {
+		tint = "#e9f8ef"
+		glyph = `<svg viewBox="0 0 24 24" fill="none" stroke="#18a058" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`
+		title = "Authorization complete"
+		line1 = "go-magic now has access to <strong>" + name + "</strong>."
+		line2 = "You can close this tab and go back to the app."
+		extra = `<p class="muted">This tab will try to close itself in a moment.</p>`
+		script = `<script>setTimeout(function(){try{window.close()}catch(e){}},2000)</script>`
+	} else {
+		tint = "#fdecef"
+		glyph = `<svg viewBox="0 0 24 24" fill="none" stroke="#d03050" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`
+		title = "Authorization failed"
+		line1 = "go-magic could not get access to <strong>" + name + "</strong>."
+		line2 = "Close this tab and start the sign-in again from the app."
+		if detail != "" {
+			extra = `<div class="detail">` + html.EscapeString(detail) + `</div>`
 		}
 	}
+
+	const tmpl = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>%s</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #f6f7f9; color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .card {
+    width: min(420px, calc(100vw - 40px)); padding: 44px 32px 28px; border-radius: 18px;
+    background: #fff; box-shadow: 0 10px 40px rgba(15,23,42,.09); text-align: center;
+  }
+  .badge {
+    width: 76px; height: 76px; margin: 0 auto 22px; border-radius: 50%%; background: %s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .badge svg { width: 38px; height: 38px; }
+  h1 { margin: 0 0 16px; font-size: 21px; font-weight: 600; letter-spacing: -.01em; }
+  p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; color: #4b5563; }
+  p strong { color: #1f2937; font-weight: 600; }
+  .muted { margin-top: 16px; font-size: 12px; color: #9aa3af; }
+  .detail {
+    margin-top: 16px; padding: 10px 12px; border-radius: 10px; background: #f3f4f6;
+    font-size: 12px; line-height: 1.6; color: #6b7280; text-align: left; word-break: break-word;
+  }
+  .brand { margin-top: 26px; font-size: 11px; letter-spacing: .16em; color: #cbd2da; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16181d; color: #e5e7eb; }
+    .card { background: #1e2127; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+    h1 { color: #e5e7eb; }
+    p { color: #a9b0bb; }
+    p strong { color: #e5e7eb; }
+    .detail { background: #262a31; color: #9aa3af; }
+    .brand { color: #4a515b; }
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">%s</div>
+    <h1>%s</h1>
+    <p>%s</p>
+    <p>%s</p>
+    %s
+    <div class="brand">GO-MAGIC</div>
+  </div>
+  %s
+</body>
+</html>`
+
+	return fmt.Sprintf(tmpl,
+		html.EscapeString(title+" · go-magic"),
+		tint, glyph, title, line1, line2, extra, script,
+	)
 }
 
 // finishFlow 收尾一次流程：关闭 listener、清掉 map（失败/成功都收尾）。

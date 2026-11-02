@@ -8,12 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -645,5 +647,68 @@ func TestStartOAuthManualDoesNotNotify(t *testing.T) {
 	case <-fired:
 		t.Fatal("manual path must not fire onFlowStarted (frontend opens the browser itself)")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// 回调页必须是一张"完整"的响应。
+//
+// 曾经的实现用 fmt.Fprint 写正文但不设 Content-Length，Go 于是走 chunked；
+// Flush 只推出正文块，结束块要等 handler 返回才写，而 handler 紧接着
+// server.Close() —— 连接被掐断，浏览器收到半截响应，页面是一片白屏，
+// 用户以为授权失败。这条用例锁死两件事：长度头必须存在且等于正文长度；
+// serverName / 错误详情必须转义（它们是远端可控字符串）。
+func TestOAuthResultPageCompleteAndEscaped(t *testing.T) {
+	hostile := `lin"ear<script>alert(1)</script>`
+
+	rec := httptest.NewRecorder()
+	writeOAuthResult(rec, http.StatusOK, true, hostile, "")
+	res := rec.Result()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("content-type = %q, want text/html", ct)
+	}
+	if got, want := res.Header.Get("Content-Length"), strconv.Itoa(len(body)); got != want {
+		t.Fatalf("content-length = %q, want %q (chunked response gets truncated into a blank page)", got, want)
+	}
+	page := string(body)
+	if !strings.Contains(page, "Authorization complete") {
+		t.Fatalf("success page missing headline: %s", page)
+	}
+	if strings.Contains(page, hostile) {
+		t.Fatalf("server name must be escaped, got raw injection: %s", page)
+	}
+	if !strings.Contains(page, "lin&#34;ear&lt;script&gt;") {
+		t.Fatalf("escaped server name missing from page")
+	}
+	if !strings.Contains(page, "window.close") {
+		t.Fatalf("success page should try to close the tab")
+	}
+
+	// 失败页：给出原因、不尝试自动关闭（用户还要看错误）。
+	rec = httptest.NewRecorder()
+	writeOAuthResult(rec, http.StatusBadRequest, false, "linear", "access_denied: user said no")
+	res = rec.Result()
+	body, _ = io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", res.StatusCode)
+	}
+	if got, want := res.Header.Get("Content-Length"), strconv.Itoa(len(body)); got != want {
+		t.Fatalf("content-length = %q, want %q", got, want)
+	}
+	fail := string(body)
+	if !strings.Contains(fail, "Authorization failed") {
+		t.Fatalf("failure page missing headline")
+	}
+	if !strings.Contains(fail, "access_denied: user said no") {
+		t.Fatalf("failure page must show the reason")
+	}
+	if strings.Contains(fail, "window.close") {
+		t.Fatalf("failure page must not auto-close")
 	}
 }
