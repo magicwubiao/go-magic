@@ -101,6 +101,7 @@ func Categories() []Category {
 		{ID: "search", Label: "Search & Web"},
 		{ID: "data", Label: "Data & Databases"},
 		{ID: "productivity", Label: "Productivity"},
+		{ID: "design", Label: "Design & Creative"},
 		{ID: "automation", Label: "Browser & Automation"},
 		{ID: "home", Label: "Home & Devices"},
 		{ID: "local", Label: "Local & Files"},
@@ -542,6 +543,203 @@ var catalog = []Connector{
 		DefaultName: "linear",
 		DocsURL:     "https://linear.app/docs/mcp",
 		Tags:        []string{"issues", "project-management"},
+	},
+
+	// --- Design & Creative ---
+	// 端点与授权方式均按官方现状实测（2026-11）：
+	//   - Canva / Miro / Framer / Spline 的远程端点都返回 401 +
+	//     resource_metadata，且 /register（RFC 7591 动态注册）对公共客户端
+	//     实测 201 → 走 go-magic 原生 OAuth，用户点一下授权即可，无需自建应用。
+	//   - Figma 的远程端点 https://mcp.figma.com/mcp 虽然在线，但它的 DCR 要
+	//     Figma 白名单审批（POST /v1/oauth/mcp/register 实测 403，官方文档也写明
+	//     "想接入新客户端请申请"），第三方客户端无法自助注册。所以 Figma 给两条
+	//     不依赖 DCR 的路：官方桌面版 MCP（本地端口，免 token）与社区事实标准
+	//     figma-developer-mcp（个人访问令牌），覆盖"有桌面版"和"只有网页版"两种人。
+	{
+		ID:          "figma",
+		Name:        "Figma",
+		Description: "Read design context, variables and Code Connect data from the selected frame in Figma Dev Mode. Requires the Figma desktop app running with the desktop MCP server enabled.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "http://127.0.0.1:3845/mcp",
+		DefaultName: "figma",
+		DocsURL:     "https://developers.figma.com/docs/figma-mcp-server/local-server-installation/",
+		Tags:        []string{"design", "ui", "code-connect", "local"},
+	},
+	{
+		ID:          "figma-api",
+		Name:        "Figma (API token)",
+		Description: "Read any Figma file or frame by its URL with a personal access token — works without the Figma desktop app.",
+		Category:    "design",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "figma-developer-mcp", "--stdio"},
+		DefaultName: "figma-api",
+		Requires: []Requirement{{
+			Key:      "FIGMA_API_KEY",
+			Label:    "Personal access token",
+			Where:    WhereEnv,
+			Secret:   true,
+			Required: true,
+			HelpURL:  "https://help.figma.com/hc/en-us/articles/8085703771159",
+		}},
+		DocsURL: "https://github.com/GLips/Figma-Context-MCP",
+		Tags:    []string{"design", "ui", "tokens", "api-key"},
+	},
+	{
+		ID:          "canva",
+		Name:        "Canva",
+		Description: "Search, create and edit designs, brand templates, folders and assets in Canva.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://mcp.canva.com/mcp",
+		OAuth: &OAuthRequirement{Scopes: []string{
+			"design:meta:read", "design:content:read", "design:content:write",
+			"folder:read", "asset:read",
+		}},
+		DefaultName: "canva",
+		DocsURL:     "https://www.canva.dev/docs/connect/",
+		Tags:        []string{"design", "graphics", "presentation", "templates"},
+	},
+	{
+		ID:          "miro",
+		Name:        "Miro",
+		Description: "Create and read boards, sticky notes and diagrams on a Miro whiteboard.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://mcp.miro.com/mcp",
+		OAuth:       &OAuthRequirement{Scopes: []string{"boards:read", "boards:write"}},
+		DefaultName: "miro",
+		DocsURL:     "https://developers.miro.com/docs/miro-mcp",
+		Tags:        []string{"whiteboard", "diagram", "collaboration"},
+	},
+	{
+		ID:          "framer",
+		Name:        "Framer",
+		Description: "Read pages, components and CMS content of a Framer website project.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://mcp.framer.com/mcp",
+		OAuth:       &OAuthRequirement{Scopes: []string{"mcp:project"}},
+		DefaultName: "framer",
+		DocsURL:     "https://www.framer.com/",
+		Tags:        []string{"web-design", "site-builder"},
+	},
+	{
+		ID:          "spline",
+		Name:        "Spline",
+		Description: "Read and edit 3D scenes and objects in a Spline project.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://mcp.spline.design/mcp",
+		OAuth:       &OAuthRequirement{Scopes: []string{"spline:read", "spline:write"}},
+		DefaultName: "spline",
+		DocsURL:     "https://spline.design/mcp",
+		Tags:        []string{"3d", "motion", "design"},
+	},
+
+	// --- 国内设计工具 ---
+	// 同样按"第三方客户端能否自助接入"实测筛选（2026-11）：
+	//   - Pixso / 墨刀 / MasterGo 都有**官方**远程 MCP。Pixso 是标准 OAuth：
+	//     https://pixso.cn/mcp 返回 401 + resource_metadata，well-known 里有
+	//     registration_endpoint，用 go-magic 的注册参数 POST
+	//     /api/user/pixso/oauth2/register 实测 201，StartOAuthManual 能产出
+	//     带 PKCE 的 authorize URL（与 linear 同一条链路）。墨刀、MasterGo
+	//     不做 OAuth 发现，只认个人令牌，走 header；MasterGo 的头名是
+	//     x-mg-useraccesstoken（缺 token 时它自己会在响应里提示这个头名）。
+	//   - 即时设计（js.design）没有公共远程端点，官方给的是"画布桥接"：
+	//     本地 npx 进程用 WebSocket 连设计端里的 MCP Bridge 插件。实测
+	//     `npx -y jsdesign-mcp` 的 initialize/tools 都正常，但没开插件时
+	//     工具调用会失败，描述里必须写明，否则会被当成连不上。
+	//   - 蓝湖官方没有 MCP，社区 mcp-lanhu 用浏览器 Cookie 读设计稿；实测
+	//     initialize 正常，凭据走 LANHU_COOKIE（Cookie 会过期，需要重填）。
+	{
+		ID:          "pixso",
+		Name:        "Pixso",
+		Description: "Read design nodes, styles, variables and components in Pixso, and turn frames into code. Official remote MCP with OAuth — no client registration needed.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://pixso.cn/mcp",
+		OAuth:       &OAuthRequirement{Scopes: []string{"mcp:connect"}},
+		DefaultName: "pixso",
+		DocsURL:     "https://pixso.net/help/en/guide/104/1760931757629102",
+		Tags:        []string{"design", "ui", "design-to-code", "cn"},
+	},
+	{
+		ID:          "mastergo",
+		Name:        "MasterGo",
+		Description: "Read DSL and design-to-code data from MasterGo (莫高设计) files. Needs a personal access token; the file must be in a team space with at least team plan.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://mastergo.com/mcp",
+		DefaultName: "mastergo",
+		Requires: []Requirement{{
+			Key:         "MASTERGO_MCP_TOKEN",
+			Label:       "Personal access token",
+			Where:       WhereHeader,
+			Header:      "x-mg-useraccesstoken",
+			Value:       "{{MASTERGO_MCP_TOKEN}}",
+			Secret:      true,
+			Required:    true,
+			Placeholder: "MG_MCP_TOKEN",
+			HelpURL:     "https://mastergo.com/help/ai-features/magic-mcp",
+		}},
+		DocsURL: "https://mastergo.com/help/ai-features/magic-mcp",
+		Tags:    []string{"design", "ui", "design-to-code", "cn"},
+	},
+	{
+		ID:          "modao",
+		Name:        "Modao (墨刀)",
+		Description: "Generate HTML prototypes, React apps and PRD documents with Modao AI. Official Streamable HTTP MCP authenticated by a personal token header.",
+		Category:    "design",
+		Transport:   "http",
+		URL:         "https://modao.cc/agent-py/ai/mcp",
+		DefaultName: "modao",
+		Requires: []Requirement{{
+			Key:      "MODAO_TOKEN",
+			Label:    "Personal access token",
+			Where:    WhereHeader,
+			Header:   "modao-token",
+			Value:    "{{MODAO_TOKEN}}",
+			Secret:   true,
+			Required: true,
+			HelpURL:  "https://modao.cc/feature/ai-mcp.html",
+		}},
+		DocsURL: "https://modao.cc/feature/ai-mcp.html",
+		Tags:    []string{"prototype", "prd", "html", "cn"},
+	},
+	{
+		ID:          "jsdesign",
+		Name:        "即时设计 (JsDesign)",
+		Description: "Read, create and edit designs on the 即时设计 canvas through the local MCP Bridge. Keep the JsDesign client open with the \"MCP Bridge\" plugin enabled, otherwise tool calls fail.",
+		Category:    "design",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "jsdesign-mcp"},
+		DefaultName: "jsdesign",
+		DocsURL:     "https://www.npmjs.com/package/jsdesign-mcp",
+		Tags:        []string{"design", "ui", "canvas", "cn", "local"},
+	},
+	{
+		ID:          "lanhu",
+		Name:        "蓝湖 (Lanhu)",
+		Description: "Read Lanhu design specs, layer styles, slices and PRDs for design-to-code. Community implementation: needs a Lanhu browser cookie, which expires and has to be refreshed.",
+		Category:    "design",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "mcp-lanhu"},
+		DefaultName: "lanhu",
+		Requires: []Requirement{{
+			Key:         "LANHU_COOKIE",
+			Label:       "Lanhu browser cookie",
+			Where:       WhereEnv,
+			Secret:      true,
+			Required:    true,
+			Placeholder: "session=...; user_token=...",
+			HelpURL:     "https://github.com/MrDgbot/lanhu-mcp",
+		}},
+		DocsURL: "https://github.com/MrDgbot/lanhu-mcp",
+		Tags:    []string{"design", "handoff", "design-to-code", "cn"},
 	},
 
 	// --- Browser & Automation ---
