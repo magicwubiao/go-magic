@@ -100,10 +100,6 @@ var catalog = []Provider{
 			{ID: "gpt-6-astra", Name: "GPT-6 Astra", Description: "Most capable flagship", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-sol", Name: "GPT-6 Sol", Description: "Previous-gen balanced (superseded by 6.1 Sol)", ContextLen: 1050000, Vision: b(true)},
 			{ID: "gpt-6-luna", Name: "GPT-6 Luna", Description: "Fastest and cheapest", ContextLen: 1050000, Vision: b(true)},
-			{ID: "gpt-5.6", Name: "GPT-5.6 Sol", Description: "Previous-gen flagship", ContextLen: 1050000, Vision: b(true)},
-			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Description: "Previous-gen balanced", ContextLen: 1050000, Vision: b(true)},
-			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Description: "Previous-gen lightweight", ContextLen: 1050000, Vision: b(true)},
-			{ID: "o3-mini", Name: "o3 Mini", Description: "o3 reasoning series (text only)"},
 		},
 	},
 	{
@@ -122,9 +118,6 @@ var catalog = []Provider{
 			// 2026-10-07 发布：$0.10/$0.50，比 Haiku 4.5 便宜 75%，面向高并发
 			// 摘要、子智能体与浏览器操作。
 			{ID: "claude-haiku-5-5", Name: "Claude Haiku 5.5", Description: "Fastest and cheapest, built for subagents", ContextLen: 1000000, Vision: b(true)},
-			{ID: "claude-opus-5", Name: "Claude Opus 5", Description: "Previous-gen flagship", ContextLen: 1000000, Vision: b(true)},
-			{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Description: "Balanced speed and intelligence", ContextLen: 1000000, Vision: b(true)},
-			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Description: "Previous-gen fast model", ContextLen: 200000, Vision: b(true)},
 		},
 	},
 	{
@@ -142,8 +135,6 @@ var catalog = []Provider{
 			{ID: "qwen3.8-omni-flash", Name: "Qwen 3.8 Omni Flash", Description: "Omni-modal (audio and video)", ContextLen: 1000000, Vision: b(true)},
 			{ID: "qwen3.7-plus", Name: "Qwen 3.7 Plus"},
 			{ID: "qwen3.7-flash", Name: "Qwen 3.7 Flash"},
-			{ID: "qwen3.5-omni-plus", Name: "Qwen 3.5 Omni Plus", Description: "Multimodal"},
-			{ID: "qwen-long", Name: "Qwen Long", ContextLen: 1000000},
 		},
 	},
 	{
@@ -246,9 +237,6 @@ var catalog = []Provider{
 			{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash", Description: "Cost-effective workhorse", ContextLen: 1000000, Vision: b(true)},
 			{ID: "gemini-3.7-flash", Name: "Gemini 3.7 Flash", Description: "Cost-effective", ContextLen: 1000000, Vision: b(true)},
 			{ID: "gemini-3.6-flash", Name: "Gemini 3.6 Flash"},
-			{ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro", Description: "Strongest reasoning", ContextLen: 1000000, Vision: b(true)},
-			{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"},
-			{ID: "gemini-2.5-flash", Name: "Gemini 2.5 Flash"},
 		},
 	},
 	{
@@ -366,8 +354,6 @@ var catalog = []Provider{
 			{ID: "ernie-5.1", Name: "ERNIE 5.1", Description: "Latest text flagship, cost-effective"},
 			// ERNIE 5.0：原生统一多模态（文本/图像/音频/视频）。
 			{ID: "ernie-5.0", Name: "ERNIE 5.0", Description: "Native omni-modal", Vision: b(true)},
-			{ID: "ernie-4.5-turbo-128k", Name: "ERNIE 4.5 Turbo 128K"},
-			{ID: "ernie-x1.1-preview", Name: "ERNIE X1.1", Description: "Deep reasoning"},
 		},
 	},
 	{
@@ -384,9 +370,6 @@ var catalog = []Provider{
 			{ID: "kimi-k3.1-pro", Name: "Kimi K3.1 Pro", Description: "Latest flagship, agent and coding", ContextLen: 1000000, Vision: b(true)},
 			{ID: "kimi-k3.1-pro-highspeed", Name: "Kimi K3.1 Pro Highspeed", Description: "Latest flagship, 2-3x faster serving tier", ContextLen: 1000000, Vision: b(true)},
 			{ID: "kimi-k3", Name: "Kimi K3", Description: "Previous flagship, 2.8T MoE, native vision", ContextLen: 1000000, Vision: b(true)},
-			{ID: "kimi-k2.6", Name: "Kimi K2.6", Description: "Multimodal + thinking", ContextLen: 262144, Vision: b(true)},
-			{ID: "kimi-k2.7-code", Name: "Kimi K2.7 Code", Description: "Coding", ContextLen: 262144, Vision: b(true)},
-			{ID: "kimi-k2.7-code-highspeed", Name: "Kimi K2.7 Code Highspeed", Description: "Coding (high-speed)", ContextLen: 262144, Vision: b(true)},
 		},
 	},
 	{
@@ -403,11 +386,6 @@ var catalog = []Provider{
 			{ID: "mimo-v2.6-pro", Name: "MiMo V2.6 Pro", Description: "Latest flagship, native omni-modal", ContextLen: 1000000, Vision: b(true)},
 			// 用户实测 mimo-v2.6-flash 接受图片输入（2026-06）。
 			{ID: "mimo-v2.6-flash", Name: "MiMo V2.6 Flash", Description: "Latest lightweight model", ContextLen: 1000000, Vision: b(true)},
-			// V2.5 Pro：1T/42B MoE，1M 上下文，原生视觉+音频推理。
-			{ID: "mimo-v2.5-pro", Name: "MiMo V2.5 Pro", Description: "Flagship reasoning", ContextLen: 1000000, Vision: b(true)},
-			{ID: "mimo-v2-flash", Name: "MiMo V2 Flash", Description: "Fast"},
-			{ID: "mimo-v2-pro", Name: "MiMo V2 Pro", Description: "Reasoning"},
-			{ID: "mimo-v2-omni", Name: "MiMo V2 Omni", Description: "Multimodal"},
 		},
 	},
 	{
@@ -422,9 +400,6 @@ var catalog = []Provider{
 			// Hy4 preview（2026-08-28）：770B/49B 紧凑旗舰，1M 上下文。
 			{ID: "hy4-preview", Name: "Hunyuan Hy4 Preview", Description: "Latest flagship, 1M context", ContextLen: 1000000},
 			{ID: "hy3", Name: "Tencent Hy3", Description: "MoE agent model"},
-			{ID: "hy-2.0-think", Name: "HY 2.0 Think", Description: "Deep reasoning"},
-			{ID: "hy-2.0-instruct", Name: "HY 2.0 Instruct"},
-			{ID: "hunyuan-turbos", Name: "Hunyuan TurboS", Description: "Fast"},
 		},
 	},
 	{
