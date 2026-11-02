@@ -1025,8 +1025,27 @@ async function handleOAuthSignIn(row: MCPServer) {
       message.error(t('mcp.oauthFailed'))
       return
     }
-    window.open(res.authorize_url, '_blank', 'noopener')
-    message.info(t('mcp.oauthPopup'), { duration: 8000 })
+    // 授权页由后端用系统浏览器打开：桌面版里 window.open 会被 WebView 当
+    // 弹窗拦掉（壳层的 on_new_window 收不到事件），点了等于没反应。这里
+    // 只提示，并给一个兜底链接——真没弹出来时用户点它即可。
+    message.info(
+      () =>
+        h('span', [
+          t('mcp.oauthPopup'),
+          ' ',
+          h(
+            'a',
+            {
+              href: res.authorize_url,
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              style: 'text-decoration: underline; word-break: break-all',
+            },
+            t('mcp.oauthOpenManual'),
+          ),
+        ]),
+      { duration: 15000 },
+    )
 
     const deadline = Date.now() + 3 * 60 * 1000
     while (Date.now() < deadline) {

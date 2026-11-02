@@ -973,6 +973,10 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 // 探测不到的 key 原样放在 missing 里，前端只为这几项弹表单——很多插件
 // 在这一步就是 0 项，用户一次都不用填。
 //
+// filled 与 missing 同时为空（凭据早已齐全，或插件不声明静态凭据）时
+// 不是"授权完成"，而是这次调用什么都没填：把条目重连一遍并返回真实
+// 状态，前端据此如实报告（见下方 entries 分支的注释）。
+//
 // 安全：探测到的值只在服务端流转，响应里只有 key 与来源，没有值。
 func (s *Server) handlePluginCredentialsAuto(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost {
@@ -1026,7 +1030,6 @@ func (s *Server) handlePluginCredentialsAuto(w http.ResponseWriter, r *http.Requ
 		if mp.Runtime != nil {
 			mp.Runtime.SetCredentials(merged)
 		}
-		entries = s.reconnectPluginEntries(mp)
 		// CLI 工具在注册时把凭据烘进连接器，改完必须重注册（与手动授权同路径）。
 		s.refreshPluginCLITools(name, mp)
 	}
@@ -1036,6 +1039,15 @@ func (s *Server) handlePluginCredentialsAuto(w http.ResponseWriter, r *http.Requ
 		if strings.TrimSpace(merged[k]) == "" {
 			rest = append(rest, k)
 		}
+	}
+	// filled 与 rest 同时为空有两种情况：所有声明的 key 早就填好了，或者
+	// 该插件根本不声明静态凭据（如走 OAuth 的 mcp-remote 条目）。此时这次
+	// 调用对凭据而言是个 no-op——绝不能就此让前端报"授权已自动完成"，
+	// 必须把条目重连一遍，拿真实连接状态回给前端如实报告。对 mcp-remote
+	// 这类 stdio 条目，重连恰好就是真正的授权入口：进程拉起后自己弹浏览器
+	// 走 OAuth，用户点完"允许"条目才连得上。
+	if len(filled) == 0 && len(rest) == 0 {
+		entries = s.reconnectPluginEntries(mp)
 	}
 	jsonResponse(w, map[string]any{
 		"ok":      true,

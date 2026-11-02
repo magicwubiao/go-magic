@@ -525,14 +525,20 @@ var catalog = []Connector{
 		DocsURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
 		Tags:    []string{"chat", "messaging"},
 	},
+	// Linear 官方 MCP 端点（2025 起只有 streamable-http 的 /mcp；老的
+	// https://mcp.linear.app/sse 已下线，任何请求都回 404）。用 mcp-remote
+	// 桥接 /sse 的旧写法因此永远等不到 401、也就永远走不到 OAuth：用户看到
+	// 的只是 "Non-200 status code (404)" 的无限重连。
+	// 官方支持 DCR（registration_endpoint /register）、PKCE S256 与 refresh_token，
+	// 所以直接用远程条目 + 原生 OAuth：点一下弹浏览器授权，不需要 node。
 	{
 		ID:          "linear",
 		Name:        "Linear",
 		Description: "Issues, projects and cycles in Linear.",
 		Category:    "productivity",
-		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "mcp-remote", "https://mcp.linear.app/sse"},
+		Transport:   "http",
+		URL:         "https://mcp.linear.app/mcp",
+		OAuth:       &OAuthRequirement{Scopes: []string{"read", "write"}},
 		DefaultName: "linear",
 		DocsURL:     "https://linear.app/docs/mcp",
 		Tags:        []string{"issues", "project-management"},

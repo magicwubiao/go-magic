@@ -15,13 +15,27 @@
         <div class="co-code-label">{{ t('cli.oauthCode') }}</div>
         <div class="co-code">{{ device.user_code }}</div>
         <n-space :size="8" justify="center" style="margin-top: 10px;">
-          <n-button size="small" type="primary" @click="openBrowser">
+          <!-- 真实锚点：桌面版 WebView 会拦 window.open，锚点点击才能交给系统浏览器 -->
+          <n-button
+            tag="a"
+            :href="device.verification_uri_complete || device.verification_uri"
+            target="_blank"
+            rel="noopener noreferrer"
+            size="small"
+            type="primary"
+          >
             {{ t('cli.oauthOpen') }}
           </n-button>
           <n-button size="small" @click="copy(device.user_code)">
             {{ t('cli.catalogCopy') }}
           </n-button>
         </n-space>
+        <div class="co-url" v-if="device.verification_uri">
+          {{ device.verification_uri }}
+          <n-button text size="tiny" @click="copy(device.verification_uri)">
+            {{ t('cli.catalogCopy') }}
+          </n-button>
+        </div>
       </div>
       <n-text depth="3" style="font-size: 12px; display: block; margin-top: 10px;">
         {{ t('cli.oauthWaiting') }}
@@ -163,12 +177,6 @@ async function signOut() {
   }
 }
 
-function openBrowser() {
-  const d = device.value
-  if (!d) return
-  const url = d.verification_uri_complete || d.verification_uri
-  if (url) window.open(url, '_blank', 'noopener')
-}
 
 async function copy(text: string) {
   try {
@@ -209,6 +217,13 @@ onBeforeUnmount(stopTimer)
   font-size: 26px;
   letter-spacing: 4px;
   font-weight: 600;
+}
+/* 设备码流程的授权地址：按钮被拦时用户还能复制/手输 */
+.co-url {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
+  word-break: break-all;
 }
 .co-status {
   display: flex;

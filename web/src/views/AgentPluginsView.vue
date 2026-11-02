@@ -703,7 +703,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, h } from 'vue'
 import { useMessage } from 'naive-ui'
 import { NAlert, NAvatar, NButton, NCollapseTransition, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NPopconfirm, NSpace, NSpin, NSwitch, NTag, NText, NTooltip } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -719,6 +719,7 @@ import {
   OpenOutline,
 } from '@vicons/ionicons5'
 import { useAgentPluginsStore } from '@/stores/agentplugins'
+import { openExternal } from '@/utils/external'
 import type { AgentPlugin, AgentPluginBlocker, AgentPluginCLIEntry, CredentialField } from '@/api/agentplugins'
 import CatalogPackCards from '@/components/CatalogPackCards.vue'
 import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
@@ -1142,7 +1143,8 @@ function entryErrorHint(entry: { error?: string; error_kind?: string }): string 
 
 /** 打开凭据获取页（新标签页，不带走当前页面状态）。 */
 function openCredHelp(url?: string) {
-  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+  // 桌面版里 window.open 会被 WebView 拦掉，统一走 anchor 点击。
+  openExternal(url)
 }
 
 /**
@@ -1167,8 +1169,22 @@ async function handleAuthorize(name: string) {
     }
     if (res.missing.length) {
       await openCredentials(name, res.missing, res.filled.map((f) => f.key))
-    } else {
-      if (!res.filled.length) message.success(t('agentplugins.autoDone'))
+    } else if (!res.filled.length) {
+      // filled 与 missing 都是空：这次调用没有填任何凭据（早就填好了，
+      // 或该插件不靠静态凭据、走的是进程内 OAuth 如 mcp-remote）。
+      // 后端此时已把条目重连一遍，按真实连接状态报告——绝不能谎报
+      // "授权已自动完成"，用户实际可能连登录页都还没见过。
+      await store.loadPlugins()
+      const failed = (res.entries || []).filter((e) => !e.connected)
+      if (failed.length) {
+        message.warning(
+          t('agentplugins.autoReconnectFailed', {
+            names: failed.map((e) => e.name).join(', '),
+          }),
+        )
+      } else if (res.entries?.length) {
+        message.success(t('agentplugins.autoReconnected'))
+      }
     }
   } catch (e: any) {
     // 探测接口失败不该把用户挡在门外：退回手填。
@@ -1326,8 +1342,27 @@ async function handleOAuthSignIn(plugin: string, server: string) {
       message.error(t('agentplugins.oauthFailedMsg'))
       return
     }
-    window.open(res.authorize_url, '_blank', 'noopener')
-    message.info(t('agentplugins.oauthPopup'), { duration: 8000 })
+    // 授权页由后端用系统浏览器打开（桌面版 WebView 会拦掉 window.open，
+    // 壳层的 on_new_window 收不到事件，点击等于没反应）。前端只提示 +
+    // 给一个兜底链接。
+    message.info(
+      () =>
+        h('span', [
+          t('agentplugins.oauthPopup'),
+          ' ',
+          h(
+            'a',
+            {
+              href: res.authorize_url,
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              style: 'text-decoration: underline; word-break: break-all',
+            },
+            t('agentplugins.oauthOpenManual'),
+          ),
+        ]),
+      { duration: 15000 },
+    )
 
     const deadline = Date.now() + 3 * 60 * 1000
     while (Date.now() < deadline) {

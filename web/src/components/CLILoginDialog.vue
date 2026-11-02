@@ -28,12 +28,17 @@
           {{ t('cli.catalogCopy') }}
         </n-button>
       </div>
+      <!-- 用真实 <a> 而不是 window.open：桌面版 WebView 会拦弹窗，
+           锚点点击才能被 Tauri 的 on_new_window 接管、交给系统浏览器。 -->
       <n-button
         v-if="session.auth_url"
+        tag="a"
+        :href="session.auth_url"
+        target="_blank"
+        rel="noopener noreferrer"
         size="tiny"
         type="primary"
         style="margin-top: 8px;"
-        @click="openAuth"
       >
         {{ t('cli.loginOpenBrowser') }}
       </n-button>
@@ -209,11 +214,6 @@ async function stop() {
   }
   stopTimer()
   session.value = { ...session.value, state: 'cancelled' }
-}
-
-function openAuth() {
-  const url = session.value?.auth_url
-  if (url) window.open(url, '_blank', 'noopener')
 }
 
 async function copy(text: string) {

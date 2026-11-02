@@ -57,6 +57,14 @@ func (s *Server) handlePluginEntryOAuth(w http.ResponseWriter, r *http.Request, 
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// 后端自己拉起系统浏览器（与连接器页同一套做法）：桌面版页面跑在
+		// Tauri WebView 里，前端 window.open 在 await 之后会被当弹窗拦掉，
+		// 壳层的 on_new_window 收不到事件，点击等于没反应。authorize_url
+		// 仍然返回给前端的兜底链接用。
+		if authorizeURL != "" {
+			log.Infof("[AgentPlugin] opening browser for OAuth authorization of %s/%s", name, server)
+			openURLBrowser(authorizeURL)
+		}
 		jsonResponse(w, map[string]any{
 			"authorize_url":      authorizeURL,
 			"already_authorized": authorizeURL == "",

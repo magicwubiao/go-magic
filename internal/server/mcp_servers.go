@@ -887,14 +887,23 @@ func (s *Server) handleMCPOAuthStart(w http.ResponseWriter, name string) {
 	}
 
 	// StartOAuthManual 而不是 StartOAuth：这是用户在 UI 里手动点"登录"的
-	// 路径，前端自己会 window.open authorize URL；后端 onFlowStarted 弹
-	// 浏览器的行为是给"连接时自动发起"的路径准备的，两边都开会双开标签页。
+	// 路径，onFlowStarted 的自动弹浏览器是给"连接时自动发起"准备的，
+	// 两边都开会双开标签页。
 	authorizeURL, err := mgr.StartOAuthManual(name, cfg)
 	if err != nil {
 		// 授权失败不是 5xx：发现/注册失败都有明确的修复动作（改 URL / 手填
 		// client_id），按 422 交给 UI 原样展示。
 		jsonError(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	}
+	// 由后端拉起系统浏览器，而不是让前端 window.open：打包成桌面版后页面
+	// 跑在 Tauri 的 WebView 里，window.open 在 await 之后调用会被当弹窗
+	// 拦截，壳层的 on_new_window 收不到事件，用户看到的就是"点了没反应"。
+	// 后端进程与用户同一个桌面会话，打开浏览器不依赖页面激活状态。
+	// 前端仍然拿到 authorize_url：万一没弹出来，页面上有可点的兜底链接。
+	if authorizeURL != "" {
+		log.Infof("[MCP] opening browser for OAuth authorization of %q", name)
+		openURLBrowser(authorizeURL)
 	}
 	resp := map[string]interface{}{"status": mgr.Status(name)}
 	if authorizeURL != "" {
