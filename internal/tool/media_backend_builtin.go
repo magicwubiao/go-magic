@@ -2,7 +2,7 @@ package tool
 
 import (
 	"context"
-	"fmt"
+	"time"
 )
 
 // media_backend_builtin.go — 内置媒体后端。
@@ -101,25 +101,38 @@ func (dashscopeVideoBackend) Name() string                       { return string
 func (dashscopeVideoBackend) Available(cfg *VideoGenConfig) bool { return videoBackendHasKey(cfg) }
 
 // Generate 走 wan 系列：文生视频 video-generation 端点，带首帧图时切 image2video。
-// dashscope 的 img_url 只接受公网地址 / OSS，本地文件在这里直接给出可操作的建议，
-// 而不是把本地路径拼进请求让厂商回一个看不懂的 400。
+// dashscope 的 img_url 除了公网地址/OSS，也接受 Base64 data URI
+// （data:image/png;base64,...，JPEG/JPG/PNG/BMP/WEBP，wan2.2/2.1 上限 10MB），
+// 所以本地图在这里直接内联，不用先传图床。
 func (dashscopeVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, req VideoRequest) (*VideoResult, error) {
+	imageURL := req.ImageURL
 	// 同时给了公网地址时以 image_url 为准：本地那份只是调用方的临时占位，
 	// 不该因为它的存在把一次本可以成功的调用直接打回。
 	if req.ImagePath != "" && req.ImageURL == "" {
-		return nil, fmt.Errorf(
-			"provider %s requires a publicly reachable image_url for image-to-video; "+
-				"this provider cannot read local files — upload the image somewhere accessible "+
-				"and pass image_url, or generate the video without an image",
-			ProviderDashScope)
+		data, mime, err := readInlineImage(ctx, req.ImagePath, dashscopeMaxImageBytes, dashscopeImageExts, "DashScope")
+		if err != nil {
+			return nil, err
+		}
+		imageURL = imageDataURI(mime, data)
 	}
 	t := &VideoGenerationTool{config: cfg}
-	videoURL, taskID, err := t.runDashScope(ctx, req.Prompt, req.NegativePrompt, req.ImageURL, req.Model, req.Duration, req.Ratio, req.Resolution)
+	videoURL, taskID, err := t.runDashScope(ctx, req.Prompt, req.NegativePrompt, imageURL, req.Model, req.Duration, req.Ratio, req.Resolution)
 	if err != nil {
 		return nil, err
 	}
 	return &VideoResult{URL: videoURL, TaskID: taskID}, nil
 }
+
+// dashscopePollInterval 百炼的轮询间隔。变量而非常量：测试调到毫秒级，
+// 否则每个百炼用例都要真等 10 秒（其它厂商早就这么做了）。
+var dashscopePollInterval = 10 * time.Second
+
+// dashscopeMaxImageBytes 内联上限。wan2.2/wanx2.1 是 10MB，wan2.5/2.6 放宽到 20MB；
+// 取较保守的 10MB——同一份配置在换模型时不会突然开始报"图片太大"。
+const dashscopeMaxImageBytes = 10 << 20
+
+// dashscopeImageExts 官方支持的首帧格式（PNG 不支持透明通道，无法在发请求前判断）。
+var dashscopeImageExts = []string{".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 type volcengineVideoBackend struct{}
 

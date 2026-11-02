@@ -30,12 +30,14 @@ import (
 // 测试套件的时长会随"接入了几家厂商"线性增长，最后没人愿意跑。
 func fastMediaPoll(t *testing.T) {
 	t.Helper()
-	prevK, prevR, prevM := klingPollInterval, runwayPollInterval, minimaxPollInterval
+	prevK, prevR, prevM, prevD := klingPollInterval, runwayPollInterval, minimaxPollInterval, dashscopePollInterval
 	klingPollInterval = time.Millisecond
 	runwayPollInterval = time.Millisecond
 	minimaxPollInterval = time.Millisecond
+	dashscopePollInterval = time.Millisecond
 	t.Cleanup(func() {
 		klingPollInterval, runwayPollInterval, minimaxPollInterval = prevK, prevR, prevM
+		dashscopePollInterval = prevD
 	})
 }
 
@@ -111,22 +113,62 @@ func TestKlingTextToVideoPathBodyAndClamping(t *testing.T) {
 	}
 }
 
-func TestKlingImageToVideoRequiresPublicURL(t *testing.T) {
+// Kling 也吃本地图，但必须是**裸** base64：官方明确写了带 data: 前缀会解析失败。
+func TestKlingImageToVideoSendsRawBase64(t *testing.T) {
+	fastMediaPoll(t)
+
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/image-to-video/"):
+			json.NewDecoder(r.Body).Decode(&body)
+			io.WriteString(w, `{"code":0,"message":"ok","data":{"id":"k1","status":"submitted"}}`)
+		case r.URL.Path == "/tasks":
+			io.WriteString(w, `{"code":0,"data":[{"id":"k1","status":"succeeded",
+				"outputs":[{"type":"video","url":"https://cdn.example/k.mp4"}]}]}`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	frame := filepath.Join(t.TempDir(), "frame.png")
+	if err := os.WriteFile(frame, []byte("png-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &VideoGenConfig{APIKey: "k", BaseURL: srv.URL, Timeout: 5 * time.Second}
+	if _, err := (klingVideoBackend{}).Generate(context.Background(), cfg, VideoRequest{
+		Prompt: "x", ImagePath: frame, Duration: 5, Resolution: "720p",
+	}); err != nil {
+		t.Fatalf("Generate with local frame: %v", err)
+	}
+
+	contents, _ := body["contents"].([]any)
+	if len(contents) != 2 {
+		t.Fatalf("contents length = %d, want 2", len(contents))
+	}
+	frameItem, _ := contents[1].(map[string]any)
+	ref, _ := frameItem["url"].(string)
+	if strings.HasPrefix(ref, "data:") {
+		t.Error("kling must receive the raw base64 string, without a data: prefix")
+	}
+	if ref != "cG5nLWJ5dGVz" { // base64("png-bytes")
+		t.Errorf("first frame = %q, want base64 of the file", ref)
+	}
+}
+
+// 不支持的格式必须在本地就拒绝，别等厂商回一个看不懂的 400。
+func TestKlingRejectsUnsupportedFrameFormat(t *testing.T) {
+	frame := filepath.Join(t.TempDir(), "anim.gif")
+	if err := os.WriteFile(frame, []byte("GIF89a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := &VideoGenConfig{APIKey: "k", BaseURL: "https://api.example", Timeout: time.Second}
-	_, err := klingVideoBackend{}.Generate(context.Background(), cfg, VideoRequest{
-		Prompt:    "x",
-		ImagePath: filepath.Join(t.TempDir(), "in.png"),
-	})
-	if err == nil {
-		t.Fatal("expected an error when only a local image is given")
-	}
-	// 错误必须给出下一步（改用 image_url 或干脆不带图），但**不能**劝模型换 provider：
-	// video_gen 只有一份凭据，换一家内置后端必然失败，模型会一家家试下去刷出一屏 404。
-	if !strings.Contains(err.Error(), "image_url") {
-		t.Errorf("error should point at image_url, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "switch provider") || strings.Contains(err.Error(), "volcengine") {
-		t.Errorf("error must not suggest switching provider at call time, got: %v", err)
+	_, err := klingVideoBackend{}.Generate(context.Background(), cfg, VideoRequest{Prompt: "x", ImagePath: frame})
+	if err == nil || !strings.Contains(err.Error(), ".png") {
+		t.Errorf("unsupported format should list accepted formats, got: %v", err)
 	}
 }
 
@@ -249,6 +291,50 @@ func TestRunwayRejectsOversizeFirstFrame(t *testing.T) {
 	}
 }
 
+// ---- 阿里云百炼 ----
+
+// 百炼的 img_url 也吃 base64 data URI：本地图不该逼用户先传 OSS。
+func TestDashScopeImageToVideoSendsDataURI(t *testing.T) {
+	fastMediaPoll(t)
+
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/services/aigc/image2video/video-synthesis"):
+			json.NewDecoder(r.Body).Decode(&body)
+			io.WriteString(w, `{"output":{"task_id":"ds1","task_status":"PENDING"}}`)
+		case r.URL.Path == "/tasks/ds1":
+			io.WriteString(w, `{"output":{"task_status":"SUCCEEDED","video_url":"https://cdn.example/wan.mp4"}}`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	frame := filepath.Join(t.TempDir(), "frame.png")
+	if err := os.WriteFile(frame, []byte("png-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &VideoGenConfig{APIKey: "sk", BaseURL: srv.URL, Timeout: 5 * time.Second}
+	res, err := dashscopeVideoBackend{}.Generate(context.Background(), cfg, VideoRequest{
+		Prompt: "x", ImagePath: frame, Duration: 5, Ratio: "16:9", Resolution: "720p",
+	})
+	if err != nil {
+		t.Fatalf("Generate with local frame: %v", err)
+	}
+	if res.URL != "https://cdn.example/wan.mp4" {
+		t.Errorf("result url = %q", res.URL)
+	}
+
+	input, _ := body["input"].(map[string]any)
+	imgURL, _ := input["img_url"].(string)
+	if !strings.HasPrefix(imgURL, "data:image/png;base64,") {
+		t.Errorf("img_url = %.60q, want a png data URI", imgURL)
+	}
+}
+
 // ---- MiniMax ----
 
 func TestMinimaxVideoUsesAdaptiveRatioForFirstFrame(t *testing.T) {
@@ -300,6 +386,83 @@ func TestMinimaxVideoUsesAdaptiveRatioForFirstFrame(t *testing.T) {
 	}
 	if res.URL != "https://cdn.example/mm.mp4" || res.Ratio != "adaptive" {
 		t.Errorf("result = %+v", res)
+	}
+}
+
+// 本地首帧图必须能直接用：MiniMax v2 的 image_url 支持 base64 data URI，
+// 逼用户先把图传到图床是没必要的门槛（曾经这里直接 400 劝模型换 provider）。
+func TestMinimaxImageToVideoSendsDataURI(t *testing.T) {
+	fastMediaPoll(t)
+
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/video_generation":
+			json.NewDecoder(r.Body).Decode(&body)
+			io.WriteString(w, `{"task_id":"mm3"}`)
+		case strings.HasPrefix(r.URL.Path, "/v2/query/video_generation/"):
+			io.WriteString(w, `{"task":{"id":"mm3","status":"succeeded",
+				"content":{"url":"https://cdn.example/mm.mp4"}}}`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	frame := filepath.Join(t.TempDir(), "frame.jpg")
+	if err := os.WriteFile(frame, []byte("fake-jpeg-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &VideoGenConfig{APIKey: "mm", BaseURL: srv.URL, Timeout: 5 * time.Second}
+	if _, err := (minimaxVideoBackend{}).Generate(context.Background(), cfg, VideoRequest{
+		Prompt: "x", ImagePath: frame, Duration: 5, Resolution: "768p",
+	}); err != nil {
+		t.Fatalf("Generate with local frame: %v", err)
+	}
+
+	content, _ := body["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content length = %d, want 2 (text + first_frame)", len(content))
+	}
+	second, _ := content[1].(map[string]any)
+	imageURL, _ := second["image_url"].(map[string]any)
+	ref, _ := imageURL["url"].(string)
+	// jpg 必须报 image/jpeg：报 image/jpg 会被厂商当成未知格式。
+	if !strings.HasPrefix(ref, "data:image/jpeg;base64,") {
+		t.Errorf("first frame ref = %.60q, want a jpeg data URI", ref)
+	}
+	if body["ratio"] != "adaptive" {
+		t.Errorf("ratio = %v, want adaptive", body["ratio"])
+	}
+}
+
+// 超限/不支持的格式要在本地直接拒绝，别把 30MB 的 base64 发出去再等厂商报错。
+func TestMinimaxRejectsOversizeOrUnsupportedFrame(t *testing.T) {
+	prev := minimaxMaxImageBytes
+	minimaxMaxImageBytes = 8
+	t.Cleanup(func() { minimaxMaxImageBytes = prev })
+
+	cfg := &VideoGenConfig{APIKey: "mm", BaseURL: "https://api.example", Timeout: time.Second}
+	dir := t.TempDir()
+
+	big := filepath.Join(dir, "big.png")
+	if err := os.WriteFile(big, make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := minimaxVideoBackend{}.Generate(context.Background(), cfg, VideoRequest{Prompt: "x", ImagePath: big})
+	if err == nil || !strings.Contains(err.Error(), "MB") {
+		t.Errorf("oversize frame should be rejected with a size hint, got: %v", err)
+	}
+
+	gif := filepath.Join(dir, "anim.gif")
+	if err := os.WriteFile(gif, []byte("GIF89a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = minimaxVideoBackend{}.Generate(context.Background(), cfg, VideoRequest{Prompt: "x", ImagePath: gif})
+	if err == nil || !strings.Contains(err.Error(), ".heic") {
+		t.Errorf("unsupported format should list accepted formats, got: %v", err)
 	}
 }
 

@@ -21,6 +21,13 @@ package tool
 //
 // 图生视频时 ratio 必须是 "adaptive"：成片画幅由输入图决定，传 16:9 反而会 400。
 //
+// 首帧图有两条路，且**都受支持**：
+//   - 公网地址（image_url）：要求外部可访问，适合已经有图床/OSS 的场景；
+//   - Base64 Data URL（image_path）：v2 的 image_url.url 明确接受
+//     "data:image/jpeg;base64,..."。格式 JPG/JPEG/PNG/WEBP/HEIC/HEIF，单图 ≤30MB，
+//     整个请求体 ≤64MB（base64 膨胀 4/3，所以本地图上限按 30MB 卡）。
+//     这条让"本地图 → 视频"不必先上传图床再来一遍。
+//
 // 域名分国内外：默认 api.minimax.io（海外），中国大陆账号用 api.minimaxi.com，
 // 通过 base_url 覆盖——两边 API 形状一致，只有域名不同。
 
@@ -35,6 +42,10 @@ import (
 
 // minimaxPollInterval 轮询间隔，测试可调小（官方推荐 10 秒一次）。
 var minimaxPollInterval = 10 * time.Second
+
+// minimaxMaxImageBytes 单张首帧图上限（官方 30MB）。变量而非常量：测试用
+// 小值覆盖，避免为了测上限真去写一个 30MB 的临时文件。
+var minimaxMaxImageBytes int64 = 30 << 20
 
 type minimaxVideoBackend struct{}
 
@@ -62,18 +73,13 @@ func (minimaxVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, re
 	ratio := pickRatio(req.Ratio, info.Ratios, "16:9")
 
 	if req.ImagePath != "" || req.ImageURL != "" {
-		if req.ImageURL == "" {
-			// 别在这里教模型"换一家支持本地文件的"：video_gen 只有一份凭据，
-			// 换 provider 必然失败，而模型会一家一家试下去，刷出一屏 404。
-			return nil, fmt.Errorf(
-				"%s can only animate a first-frame image that is publicly reachable: pass image_url (http/https) "+
-					"instead of image_path. Local files are not supported by this provider — host the frame "+
-					"somewhere public, or generate the video without an image",
-				info.Label)
+		ref, err := minimaxImageRef(ctx, req.ImagePath, req.ImageURL)
+		if err != nil {
+			return nil, err
 		}
 		content = append(content, map[string]any{
 			"type":      "image_url",
-			"image_url": map[string]string{"url": req.ImageURL},
+			"image_url": map[string]string{"url": ref},
 			"role":      "first_frame",
 		})
 		// 图生视频的画幅由首帧图决定，官方要求传 adaptive。
@@ -139,6 +145,25 @@ func (minimaxVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, re
 		Model:      model,
 	}, nil
 }
+
+// minimaxImageRef 把首帧图变成 v2 能吃的引用。
+//
+// 优先用调用方给的公网地址；没有就地把本地图内联成 Base64 Data URL——
+// v2 的 image_url.url 官方支持 data:image/...;base64,（单图 ≤30MB、请求体 ≤64MB），
+// 所以图生视频不必先把图传到图床。
+func minimaxImageRef(ctx context.Context, imagePath, imageURL string) (string, error) {
+	if imageURL != "" {
+		return imageURL, nil
+	}
+	data, mime, err := readInlineImage(ctx, imagePath, minimaxMaxImageBytes, minimaxImageExts, "MiniMax")
+	if err != nil {
+		return "", err
+	}
+	return imageDataURI(mime, data), nil
+}
+
+// minimaxImageExts 官方支持的图片格式（比其它厂商多 HEIC/HEIF）。
+var minimaxImageExts = []string{".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 
 func pollMiniMaxTask(ctx context.Context, cfg *VideoGenConfig, base, taskID, label string) (string, error) {
 	endpoint := base + "/v2/query/video_generation/" + url.PathEscape(taskID)

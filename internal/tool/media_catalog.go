@@ -159,7 +159,7 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Ratios:         []string{"16:9", "9:16", "1:1"},
 		Resolutions:    []string{"480p", "720p", "1080p"},
 		MinDuration:    3, MaxDuration: 15,
-		Notes: "First-frame image must be a public URL (img_url); local files are rejected.",
+		Notes: "First-frame images accept a public URL or a base64 data URI (JPG/PNG/BMP/WEBP, max 10MB).",
 	},
 	{
 		Kind: MediaKindVideo, Name: string(ProviderVolcengine), Label: "火山方舟 · Seedance",
@@ -187,7 +187,7 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Ratios:         []string{"16:9", "9:16", "1:1"},
 		Resolutions:    []string{"720p", "1080p"},
 		MinDuration:    3, MaxDuration: 15,
-		Notes: "Image-to-video needs a publicly reachable first-frame URL; the model name is part of the path.",
+		Notes: "Image-to-video accepts a public URL or a raw base64 string (JPG/PNG, max 10MB; the model name is part of the path).",
 	},
 	{
 		Kind: MediaKindVideo, Name: "runway", Label: "Runway",
@@ -215,7 +215,7 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Ratios:         []string{"16:9", "9:16", "1:1"},
 		Resolutions:    []string{"768p", "2k"},
 		MinDuration:    5, MaxDuration: 10,
-		Notes: "Success returns content.url directly (no file_id exchange); first-frame image must be a public URL.",
+		Notes: "Success returns content.url directly (no file_id exchange). First-frame images accept a public URL or a base64 data URI (JPG/PNG/WEBP/HEIC/HEIF, max 30MB).",
 	},
 
 	// ---- 语音 ----

@@ -19,12 +19,15 @@ package tool
 //  3. 新版查询接口是 /tasks?task_ids=（旧的 /v1/videos/{type}/{id} 是上一代路径，
 //     两者不通用）。这里只实现新版，旧账号如仍只有老网关，用 base_url 覆盖。
 //
-// 首帧图只接受公网可达 URL：Kling 的 first_frame.url 不支持 data URI。
-// 本地文件在这里明确报错并指向支持 data URI 的后端（volcengine / runway），
-// 而不是丢一个本地路径过去换回一句看不懂的 400。
+// 首帧图两种形态都行：
+//   - 公网可达 URL；
+//   - 本地文件的 Base64——但**不能带 data: 前缀**，官方明确写了带前缀会解析失败，
+//     直接传编码后的字符串。格式 .jpg/.jpeg/.png，≤10MB（kling-3.0 放宽到 50MB，
+//     这里取各模型公共的 10MB，一份配置换模型不会突然报错）。
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -35,6 +38,24 @@ import (
 // klingPollInterval 查询间隔。定义成变量而不是常量，是为了测试能把它调到毫秒级
 // —— 否则每个用例都要真的等 10 秒，加一个厂商就等于给测试套件加 10 秒。
 var klingPollInterval = 10 * time.Second
+
+// klingMaxImageBytes 内联上限，取各模型公共的 10MB。
+const klingMaxImageBytes = 10 << 20
+
+// klingImageExts 官方支持的图片格式（比 volcengine / dashscope 少 BMP/WEBP）。
+var klingImageExts = []string{".jpg", ".jpeg", ".png"}
+
+// klingImageRef 优先用公网地址；没有就把本地图转成**裸** base64（不带 data: 前缀）。
+func klingImageRef(ctx context.Context, imagePath, imageURL string) (string, error) {
+	if imageURL != "" {
+		return imageURL, nil
+	}
+	data, _, err := readInlineImage(ctx, imagePath, klingMaxImageBytes, klingImageExts, "Kling")
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
 
 type klingVideoBackend struct{}
 
@@ -61,21 +82,15 @@ func (klingVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, req 
 	var payload map[string]any
 
 	if req.ImagePath != "" || req.ImageURL != "" {
-		// 本地图：Kling 只认公网 URL，这里必须明确报错。
-		// 措辞里**不要**劝模型"换一家支持本地文件的"：video_gen 只有一份凭据，
-		// 换 provider 必然失败，而模型会一家一家试下去，刷出一屏 404。
-		if req.ImageURL == "" {
-			return nil, fmt.Errorf(
-				"%s can only animate a first-frame image that is publicly reachable: pass image_url (http/https) "+
-					"instead of image_path. Local files are not supported by this provider — host the frame "+
-					"somewhere public, or generate the video without an image",
-				info.Label)
+		ref, err := klingImageRef(ctx, req.ImagePath, req.ImageURL)
+		if err != nil {
+			return nil, err
 		}
 		endpoint = base + "/image-to-video/" + url.PathEscape(model)
 		payload = map[string]any{
 			"contents": []map[string]any{
 				{"type": "prompt", "text": req.Prompt},
-				{"type": "first_frame", "url": req.ImageURL},
+				{"type": "first_frame", "url": ref},
 			},
 			"settings": map[string]any{
 				"resolution": resolution,

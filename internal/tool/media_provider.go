@@ -127,8 +127,9 @@ type VideoRequest struct {
 
 	// ImageURL 是公网可达的首帧图地址（图生视频）。
 	ImageURL string
-	// ImagePath 是本地首帧图路径。是否支持由后端决定：volcengine 支持 base64
-	// data URI，dashscope 只收公网地址，不支持的后端必须返回明确错误。
+	// ImagePath 是本地首帧图路径。内置后端都支持内联：dashscope / volcengine /
+	// minimax / runway 发 base64 data URI，kling 发裸 base64（官方不接受 data:
+	// 前缀）。不支持的后端必须返回明确错误，而不是把本地路径原样发出去。
 	ImagePath string
 
 	Model      string

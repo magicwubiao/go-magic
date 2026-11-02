@@ -106,7 +106,7 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"image_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Local path of a first-frame image for image-to-video. Sent as a base64 data URI, which is supported by volcengine and runway; dashscope, kling and minimax require image_url with a publicly reachable address instead.",
+						"description": "Local path of a first-frame image for image-to-video. All built-in providers accept local files (base64 inline; kling sends the raw string, the rest send a data URI); providers without an inline path reject it with a hint to pass image_url instead.",
 					},
 					"model": map[string]interface{}{
 						"type":        "string",
@@ -447,7 +447,7 @@ func (t *VideoGenerationTool) postDashScopeTask(ctx context.Context, url string,
 // pollDashScopeTask 轮询百炼任务直到 SUCCEEDED/FAILED（PENDING → RUNNING → SUCCEEDED/FAILED）
 func (t *VideoGenerationTool) pollDashScopeTask(ctx context.Context, baseURL, taskID string) (string, error) {
 	url := baseURL + "/tasks/" + taskID
-	return pollUntilDone(ctx, 10*time.Second, func() (done bool, videoURL string, err error) {
+	return pollUntilDone(ctx, dashscopePollInterval, func() (done bool, videoURL string, err error) {
 		req, rerr := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if rerr != nil {
 			return true, "", fmt.Errorf("failed to create poll request: %w", rerr)
