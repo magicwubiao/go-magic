@@ -147,3 +147,35 @@ export async function updateMediaConfig(patch: MediaConfigPatch): Promise<MediaC
     timeoutMs: 60000,
   })
 }
+
+// ---- 试运行 ----
+
+export interface MediaTestResult {
+  status: 'success' | 'not_configured' | string
+  /** 生成的样张/音频绝对路径；前端用它换 read 票据做内嵌预览 */
+  file_path?: string
+  mime?: string
+  provider?: string
+  /** 仅语音：合成时长（秒） */
+  duration?: number
+  format?: string
+  message?: string
+  configuration_help?: string
+}
+
+/**
+ * testMediaConfig 用已保存的配置真实调一次图片生成 / 语音合成。
+ *
+ * 视频刻意不支持：一次要几分钟还烧钱，不适合塞进设置页的交互里。
+ * 后端最长 3 分钟返回，前端超时给足余量。
+ */
+export async function testMediaConfig(section: 'image' | 'voice'): Promise<MediaTestResult> {
+  return request('/media/test', {
+    method: 'POST',
+    body: JSON.stringify({ section }),
+    timeoutMs: 200000,
+    // 试运行是**计费**请求：客户端层严禁自动重试（5xx 时默认会重试 3 次，
+    // 意味着一次点击最多烧 4 次生成费）。失败就如实展示，由用户决定再试。
+    retries: 0,
+  })
+}

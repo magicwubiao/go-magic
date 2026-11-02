@@ -1842,6 +1842,8 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// Media capabilities (image_gen / video_gen / voice): the only write path
 	// the Web UI has for these three sections. GET never returns plaintext keys.
 	mux.HandleFunc("/api/media/config", withCORS(requireAuth(s.handleMediaConfig)))
+	// 试运行：用已保存配置真实调一次图片/语音，产出小样供页面内嵌预览。
+	mux.HandleFunc("/api/media/test", withCORS(requireAuth(s.handleMediaTest)))
 
 	// Cron - order matters: more specific paths first
 	mux.HandleFunc("/api/cron/jobs", withCORS(requireAuth(s.handleCronJobs)))

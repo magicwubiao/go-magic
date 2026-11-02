@@ -19,11 +19,14 @@ package server
 //     服务端不校验就等于没有。
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/internal/voice"
@@ -114,11 +117,16 @@ func (s *Server) mediaConfigSnapshot() map[string]interface{} {
 	}
 }
 
-func (s *Server) mediaConfigPath() string {
+func (s *Server) magicHomeOr() string {
 	home := s.magicHome
 	if home == "" {
 		home = appconfig.GetMagicHome()
 	}
+	return home
+}
+
+func (s *Server) mediaConfigPath() string {
+	home := s.magicHomeOr()
 	if home == "" {
 		return ""
 	}
@@ -650,4 +658,151 @@ func voiceProviderConfigured(c *voice.VoiceConfig, name string) bool {
 	// whisper 支持本地运行，但内核无法判断本机是否装了 whisper.cpp，这里
 	// 不谎报"可用"——真的本地部署走插件后端更准确。
 	return false
+}
+
+// ---- 试运行（POST /api/media/test） ----
+//
+// 配置页只能"填"，能不能用要到对话里碰运气才知道——这是本页最大的体验缺口。
+// 试运行用**已保存**的配置真实调用一次图片生成 / 语音合成，产出一个小样文件，
+// 前端拿路径换 read 票据后内嵌预览/试听。视频刻意不支持：一次要几分钟还烧钱，
+// 不适合塞进设置页的交互里。
+//
+// 前端在点试运行前会先保存未保存的改动，所以"页面上看到的"就是"试的"。
+
+// mediaTestTimeout 覆盖图片生成工具自身的 120s 超时并留出落盘余量。
+const mediaTestTimeout = 3 * time.Minute
+
+func (s *Server) handleMediaTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Section string `json:"section"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), mediaTestTimeout)
+	defer cancel()
+	// 工作目录注入 magicHome：工具的路径沙箱（resolvePath）以它为边界，
+	// 小样文件落 <magicHome>/test_media/，既不污染会话工作区，也能被
+	// /api/fs/sign 的 read 票据覆盖到。
+	ctx = tool.WithWorkDir(ctx, s.magicHomeOr())
+
+	switch req.Section {
+	case "image":
+		s.runMediaImageTest(ctx, w)
+	case "voice":
+		s.runMediaVoiceTest(ctx, w)
+	default:
+		jsonError(w, http.StatusBadRequest, "section must be \"image\" or \"voice\"")
+	}
+}
+
+// runMediaImageTest 用当前 image_gen 配置真实生成一张测试图。
+func (s *Server) runMediaImageTest(ctx context.Context, w http.ResponseWriter) {
+	imgCfg := tool.ImageGenConfigFrom(s.cfgSnapshot())
+	t := tool.NewImageGenerationTool(imgCfg)
+	outPath := filepath.Join(s.magicHomeOr(), "test_media",
+		fmt.Sprintf("image_test_%d.png", time.Now().Unix()))
+
+	res, err := t.Execute(ctx, map[string]interface{}{
+		"prompt":      "a single colorful hot air balloon floating over green hills, clear blue sky, bright daylight",
+		"count":       1,
+		"output_path": outPath,
+	})
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	m, ok := res.(map[string]interface{})
+	if !ok {
+		jsonError(w, http.StatusInternalServerError, "unexpected tool result")
+		return
+	}
+	if st, _ := m["status"].(string); st == "not_configured" {
+		jsonResponse(w, map[string]interface{}{
+			"status":             "not_configured",
+			"message":            m["message"],
+			"configuration_help": m["configuration_help"],
+		})
+		return
+	}
+	images, _ := m["images"].([]string)
+	if len(images) == 0 {
+		jsonError(w, http.StatusBadGateway, "provider returned no image")
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"status":    "success",
+		"file_path": images[0],
+		"mime":      mimeOfMediaPath(images[0]),
+		"provider":  m["provider"],
+	})
+}
+
+// runMediaVoiceTest 用当前 voice 配置真实合成一句测试语音。
+func (s *Server) runMediaVoiceTest(ctx context.Context, w http.ResponseWriter) {
+	t := tool.NewTTSTool()
+	outPath := filepath.Join(s.magicHomeOr(), "test_media",
+		fmt.Sprintf("voice_test_%d.mp3", time.Now().Unix()))
+
+	res, err := t.Execute(ctx, map[string]interface{}{
+		"text":        "你好，这是一条测试语音。Hello, this is a voice test.",
+		"output_path": outPath,
+	})
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	m, ok := res.(map[string]interface{})
+	if !ok {
+		jsonError(w, http.StatusInternalServerError, "unexpected tool result")
+		return
+	}
+	if st, _ := m["status"].(string); st == "not_configured" {
+		jsonResponse(w, map[string]interface{}{
+			"status":             "not_configured",
+			"message":            m["message"],
+			"configuration_help": m["configuration_help"],
+		})
+		return
+	}
+	fp, _ := m["output_path"].(string)
+	if fp == "" {
+		jsonError(w, http.StatusBadGateway, "provider returned no audio file")
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"status":    "success",
+		"file_path": fp,
+		"mime":      mimeOfMediaPath(fp),
+		"provider":  m["provider"],
+		"duration":  m["duration_sec"],
+		"format":    m["format"],
+	})
+}
+
+// mimeOfMediaPath 按扩展名给出预览用的 MIME；未知扩展名交给浏览器嗅探
+// （票据应答本身带 nosniff，不会把内容当文档渲染）。
+func mimeOfMediaPath(p string) string {
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg":
+		return "audio/ogg"
+	default:
+		return ""
+	}
 }

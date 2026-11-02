@@ -32,6 +32,15 @@
             <n-tag :type="config.image_gen.available ? 'success' : 'default'" size="small">
               {{ config.image_gen.available ? t('media.available') : t('media.notConfigured') }}
             </n-tag>
+            <n-button
+              size="small"
+              :loading="testState.image.loading"
+              :title="t('media.testHint')"
+              @click="runTest('image')"
+            >
+              <template #icon><n-icon><FlaskOutline /></n-icon></template>
+              {{ t('media.test') }}
+            </n-button>
           </n-space>
         </template>
 
@@ -116,10 +125,43 @@
           </n-gi>
           <n-gi span="2">
             <n-form-item :label="t('media.outputDir')" :show-feedback="false">
-              <n-input v-model:value="imageForm.output_dir" :placeholder="t('media.outputDirPlaceholder')" />
+              <n-input-group>
+                <n-input v-model:value="imageForm.output_dir" :placeholder="t('media.outputDirPlaceholder')" />
+                <n-button :title="t('media.browse')" @click="openDirPicker('image')">
+                  <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+                  {{ t('media.browse') }}
+                </n-button>
+              </n-input-group>
             </n-form-item>
           </n-gi>
         </n-grid>
+
+        <!-- 试运行结果：真实调用一次后的小样预览 -->
+        <div v-if="testState.image.error" class="test-result">
+          <n-alert type="error" :show-icon="true">{{ testState.image.error }}</n-alert>
+        </div>
+        <div v-else-if="testState.image.result" class="test-result">
+          <n-alert v-if="testState.image.result.status === 'not_configured'" type="warning" :show-icon="true">
+            {{ testState.image.result.message || t('media.testNotConfigured') }}
+          </n-alert>
+          <template v-else>
+            <img
+              v-if="testState.image.previewUrl"
+              :src="testState.image.previewUrl"
+              class="test-image"
+              :alt="t('media.test')"
+            />
+            <div class="test-meta">
+              <n-text depth="3" style="font-size: 12px;">
+                {{ t('media.testSavedTo') }}: {{ testState.image.result.file_path }}
+              </n-text>
+              <n-button text size="tiny" @click="copyText(testState.image.result?.file_path || '')">
+                <template #icon><n-icon><CopyOutline /></n-icon></template>
+                {{ t('media.copyPath') }}
+              </n-button>
+            </div>
+          </template>
+        </div>
 
         <n-space align="center" justify="space-between" style="margin-top: 12px;">
           <n-space align="center">
@@ -136,6 +178,7 @@
           </n-space>
           <n-button type="primary" :loading="saving === 'image'" @click="saveImage">
             {{ t('common.save') }}
+            <template v-if="imageDirty">#</template>
           </n-button>
         </n-space>
       </n-card>
@@ -245,7 +288,13 @@
           </n-gi>
           <n-gi span="2 s:1">
             <n-form-item :label="t('media.outputDir')" :show-feedback="false">
-              <n-input v-model:value="videoForm.output_dir" :placeholder="t('media.outputDirPlaceholder')" />
+              <n-input-group>
+                <n-input v-model:value="videoForm.output_dir" :placeholder="t('media.outputDirPlaceholder')" />
+                <n-button :title="t('media.browse')" @click="openDirPicker('video')">
+                  <template #icon><n-icon><FolderOpenOutline /></n-icon></template>
+                  {{ t('media.browse') }}
+                </n-button>
+              </n-input-group>
             </n-form-item>
           </n-gi>
         </n-grid>
@@ -263,6 +312,7 @@
           </n-space>
           <n-button type="primary" :loading="saving === 'video'" @click="saveVideo">
             {{ t('common.save') }}
+            <template v-if="videoDirty">#</template>
           </n-button>
         </n-space>
       </n-card>
@@ -270,9 +320,20 @@
       <!-- 语音 -->
       <n-card :title="t('media.voice.title')">
         <template #header-extra>
-          <n-tag :type="config.voice.available ? 'success' : 'default'" size="small">
-            {{ config.voice.available ? t('media.available') : t('media.notConfigured') }}
-          </n-tag>
+          <n-space align="center">
+            <n-tag :type="config.voice.available ? 'success' : 'default'" size="small">
+              {{ config.voice.available ? t('media.available') : t('media.notConfigured') }}
+            </n-tag>
+            <n-button
+              size="small"
+              :loading="testState.voice.loading"
+              :title="t('media.testHint')"
+              @click="runTest('voice')"
+            >
+              <template #icon><n-icon><FlaskOutline /></n-icon></template>
+              {{ t('media.test') }}
+            </n-button>
+          </n-space>
         </template>
 
         <n-alert v-if="config.voice.env_overrides.length" type="warning" style="margin-bottom: 12px;" :show-icon="true">
@@ -372,10 +433,37 @@
           </n-gi>
           <n-gi span="2 s:1">
             <n-form-item :label="t('media.voice.speed')" :show-feedback="false">
-              <n-input-number v-model:value="voiceForm.speed" :min="0.5" :max="2" :step="0.1" style="width: 100%;" />
+              <n-slider v-model:value="voiceForm.speed" :min="0.5" :max="2" :step="0.1" style="width: 100%;" />
+            </n-form-item>
+          </n-gi>
+          <n-gi span="2 s:1">
+            <n-form-item :label="t('media.voice.pitch')" :show-feedback="false">
+              <n-slider v-model:value="voiceForm.pitch" :min="-10" :max="10" :step="1" style="width: 100%;" />
             </n-form-item>
           </n-gi>
         </n-grid>
+
+        <!-- 试运行结果：真实合成一句的试听 -->
+        <div v-if="testState.voice.error" class="test-result">
+          <n-alert type="error" :show-icon="true">{{ testState.voice.error }}</n-alert>
+        </div>
+        <div v-else-if="testState.voice.result" class="test-result">
+          <n-alert v-if="testState.voice.result.status === 'not_configured'" type="warning" :show-icon="true">
+            {{ testState.voice.result.message || t('media.testNotConfigured') }}
+          </n-alert>
+          <template v-else>
+            <audio v-if="testState.voice.previewUrl" controls :src="testState.voice.previewUrl" class="test-audio"></audio>
+            <div class="test-meta">
+              <n-text depth="3" style="font-size: 12px;">
+                {{ t('media.testSavedTo') }}: {{ testState.voice.result.file_path }}
+              </n-text>
+              <n-button text size="tiny" @click="copyText(testState.voice.result?.file_path || '')">
+                <template #icon><n-icon><CopyOutline /></n-icon></template>
+                {{ t('media.copyPath') }}
+              </n-button>
+            </div>
+          </template>
+        </div>
 
         <n-space align="center" justify="space-between" style="margin-top: 12px;">
           <n-space align="center">
@@ -390,15 +478,25 @@
           </n-space>
           <n-button type="primary" :loading="saving === 'voice'" @click="saveVoice">
             {{ t('common.save') }}
+            <template v-if="voiceDirty">#</template>
           </n-button>
         </n-space>
       </n-card>
     </template>
+
+    <!-- 输出目录选择（图片 / 视频共用一个弹窗，按 target 写回对应表单） -->
+    <DirPickerModal
+      v-model:show="showDirPicker"
+      :title="t('media.outputDir')"
+      :current="dirPickerTarget === 'image' ? imageForm.output_dir : videoForm.output_dir"
+      @select="applyPickedDir"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import {
@@ -410,24 +508,31 @@ import {
   NGrid,
   NIcon,
   NInput,
+  NInputGroup,
   NInputNumber,
   NSelect,
+  NSlider,
   NSpace,
   NSpin,
   NTag,
   NText,
 } from 'naive-ui'
-import { CopyOutline, RefreshOutline } from '@vicons/ionicons5'
+import { CopyOutline, FlaskOutline, FolderOpenOutline, RefreshOutline } from '@vicons/ionicons5'
+
+import DirPickerModal from '@/components/DirPickerModal.vue'
 
 import {
   getMediaConfig,
+  testMediaConfig,
   updateMediaConfig,
   type ImageGenPatch,
   type MediaConfig,
   type MediaProviderOption,
+  type MediaTestResult,
   type VideoGenPatch,
   type VoicePatch,
 } from '@/api/media'
+import { getFSReadUrl } from '@/api/sessions'
 
 const { t, te } = useI18n()
 const message = useMessage()
@@ -474,6 +579,129 @@ const voiceForm = reactive({
 const imageClearKey = ref(false)
 const videoClearKey = ref(false)
 const voiceClearKey = ref(false)
+
+// ---- 输出目录选择器（与 chat/cron/kanban 各页同款交互） ----
+type DirPickerTarget = 'image' | 'video'
+const showDirPicker = ref(false)
+const dirPickerTarget = ref<DirPickerTarget>('image')
+
+function openDirPicker(target: DirPickerTarget) {
+  dirPickerTarget.value = target
+  showDirPicker.value = true
+}
+
+function applyPickedDir(path: string) {
+  if (dirPickerTarget.value === 'image') imageForm.output_dir = path
+  else videoForm.output_dir = path
+}
+
+// ---- 试运行：配置完当场验证，不用去对话里碰运气 ----
+//
+// 试运行用的是**已保存**的配置，所以点按钮前先把未保存的改动落盘——
+// 否则"页面上看到的"和"试的"是两份配置，结果只会让人更困惑。
+const testState = reactive<
+  Record<'image' | 'voice', { loading: boolean; error: string; result: MediaTestResult | null; previewUrl: string }>
+>({
+  image: { loading: false, error: '', result: null, previewUrl: '' },
+  voice: { loading: false, error: '', result: null, previewUrl: '' },
+})
+
+async function runTest(section: 'image' | 'voice') {
+  try {
+    if (section === 'image' && imageDirty.value) await saveImage()
+    else if (section === 'voice' && voiceDirty.value) await saveVoice()
+  } catch {
+    // 保存失败时 saveXxx 已经弹过错误，别拿旧配置继续试
+    return
+  }
+  const st = testState[section]
+  st.loading = true
+  st.error = ''
+  st.result = null
+  st.previewUrl = ''
+  try {
+    const res = await testMediaConfig(section)
+    st.result = res
+    if (res.status === 'success' && res.file_path) {
+      // <img>/<audio> 发不出 Authorization 头，走 read 票据预览
+      st.previewUrl = await getFSReadUrl(res.file_path)
+    }
+  } catch (err) {
+    st.error = err instanceof Error ? err.message : String(err)
+  } finally {
+    st.loading = false
+  }
+}
+
+async function copyText(v: string) {
+  if (!v) return
+  try {
+    await navigator.clipboard.writeText(v)
+    message.success(t('media.copied'))
+  } catch {
+    message.info(v)
+  }
+}
+
+// ---- 未保存修改提醒 ----
+//
+// 三个卡片各自独立保存，改动只在前端表单里；直接切页/关页会静默丢掉。
+// 这里逐字段与最近一次快照比对（api_key 除外：表单里本来就只放新 key）。
+const imageDirty = computed(() => {
+  const c = config.value?.image_gen
+  if (!c) return false
+  return (
+    imageForm.provider !== c.provider ||
+    imageForm.base_url !== c.base_url ||
+    imageForm.model !== (c.model || '') ||
+    imageForm.default_size !== c.default_size ||
+    imageForm.default_style !== c.default_style ||
+    imageForm.output_dir !== c.output_dir ||
+    imageClearKey.value
+  )
+})
+const videoDirty = computed(() => {
+  const c = config.value?.video_gen
+  if (!c) return false
+  return (
+    videoForm.provider !== c.provider ||
+    videoForm.base_url !== c.base_url ||
+    videoForm.model !== c.model ||
+    videoForm.default_duration !== c.default_duration ||
+    videoForm.default_ratio !== c.default_ratio ||
+    videoForm.default_resolution !== c.default_resolution ||
+    videoForm.output_dir !== c.output_dir ||
+    videoClearKey.value
+  )
+})
+const voiceDirty = computed(() => {
+  const c = config.value?.voice
+  if (!c) return false
+  return (
+    voiceForm.provider !== c.provider ||
+    voiceForm.model !== c.model ||
+    voiceForm.voice !== c.voice ||
+    voiceForm.language !== c.language ||
+    voiceForm.region !== c.region ||
+    voiceForm.api_url !== c.api_url ||
+    voiceForm.group_id !== (c.group_id || '') ||
+    voiceForm.speed !== (c.speed || 1) ||
+    voiceForm.pitch !== (c.pitch || 0) ||
+    voiceClearKey.value
+  )
+})
+const anyDirty = computed(() => imageDirty.value || videoDirty.value || voiceDirty.value)
+
+onBeforeRouteLeave(() => {
+  if (!anyDirty.value) return true
+  return window.confirm(t('media.unsavedConfirm'))
+})
+
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!anyDirty.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
 
 function syncForms() {
   const c = config.value
@@ -810,7 +1038,7 @@ async function saveVoice() {
     patch as Record<string, unknown>,
     voiceForm as unknown as Record<string, unknown>,
     c.voice as unknown as Record<string, unknown>,
-    ['provider', 'model', 'voice', 'language', 'region', 'api_url', 'group_id', 'speed'],
+    ['provider', 'model', 'voice', 'language', 'region', 'api_url', 'group_id', 'speed', 'pitch'],
   )
   await applyPatch('voice', patch as Record<string, unknown>)
 }
@@ -826,7 +1054,13 @@ async function copyConfigPath() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  window.addEventListener('beforeunload', onBeforeUnload)
+})
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
+})
 </script>
 
 <style scoped>
@@ -861,5 +1095,46 @@ onMounted(load)
 
 .console-link:hover {
   text-decoration: underline;
+}
+
+/* ===== 试运行结果 ===== */
+.test-result {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(128, 128, 128, 0.3);
+}
+
+.test-image {
+  display: block;
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 6px;
+}
+
+.test-audio {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+}
+
+.test-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+/* ===== 移动端 ===== */
+@media (max-width: 768px) {
+  .page-head {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .test-image {
+    max-width: 100%;
+    max-height: 200px;
+  }
 }
 </style>
