@@ -430,6 +430,9 @@ body {
   
   .n-layout-content {
     margin-left: 0 !important;
+    /* 24px 的桌面留白在 390px 屏上两侧要吃掉 48px，收敛到 12px；
+       full-content（聊天页）的 padding-top:0 由更具体的选择器保持不变 */
+    padding: 16px 12px !important;
     /* 悬浮工具条不占布局空间，内容占满全屏，不再让出顶部高度 */
   }
 

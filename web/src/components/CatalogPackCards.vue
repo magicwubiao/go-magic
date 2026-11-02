@@ -111,7 +111,7 @@
       v-model:show="detailShow"
       preset="card"
       :title="detail?.display_name || ''"
-      style="width: 620px;"
+      style="width: min(620px, calc(100vw - 20px));"
     >
       <template v-if="detail">
         <div class="cpc-head">

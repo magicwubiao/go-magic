@@ -494,7 +494,7 @@
         v-model:show="credModal.show"
         preset="card"
         :title="t('agentplugins.credentialsTitle', { name: credModal.plugin })"
-        style="max-width: 520px;"
+        style="max-width: min(520px, calc(100vw - 20px));"
       >
         <n-spin v-if="credModal.loading" />
         <template v-else>
@@ -609,7 +609,7 @@
         v-model:show="blockerModal.show"
         preset="card"
         :title="t('agentplugins.blockersTitle', { name: blockerModal.plugin })"
-        style="max-width: 560px;"
+        style="max-width: min(560px, calc(100vw - 20px));"
       >
         <n-text depth="3" style="font-size: 12px; display: block; margin-bottom: 12px;">
           {{ t('agentplugins.blockersHint') }}
@@ -1749,6 +1749,73 @@ onMounted(async () => {
   font-size: 13px;
   color: #606266;
   word-break: break-all;
+}
+
+/* ===== 移动端（≤768px）=====
+ * 390px 实测的三个问题：页头副标题被"重新加载"按钮挤成窄竖排；
+ * 摘要行/详情沿用桌面 46px 图标缩进后内容只剩两百多像素；统计文字把
+ * 操作按钮顶出卡片。这里统一改为整行换行 + 收敛缩进。 */
+@media (max-width: 768px) {
+  .ap-header {
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  /* 标题块占主要宽度，副标题在自己的宽度内正常换行，不再被按钮压成竖排 */
+  .ap-header > div:first-child {
+    flex: 1 1 calc(100% - 110px);
+    min-width: 0;
+  }
+
+  .ap-section {
+    margin-bottom: 20px;
+  }
+
+  .ap-section-head {
+    flex-wrap: wrap;
+  }
+
+  /* 区块摘要（"3 个插件 · …"）换到标题下一行整行显示 */
+  .ap-section-head .n-text {
+    flex-basis: 100%;
+    order: 5;
+  }
+
+  .drop-strip {
+    flex-wrap: wrap;
+  }
+
+  .drop-strip .n-text {
+    flex-basis: 100%;
+  }
+
+  .ap-plugin-row {
+    padding: 10px 12px;
+    row-gap: 6px;
+  }
+
+  /* 统计文字可被压缩省略，别把开关/删除/箭头顶出卡片 */
+  .ap-plugin-stats {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 桌面的 46px 左缩进是为图标列留的，窄屏直接贴边 */
+  .ap-plugin-brief {
+    padding: 0 12px 10px;
+  }
+
+  .ap-plugin-detail {
+    padding: 4px 12px 14px;
+  }
+
+  .ap-plugin-desc {
+    max-width: 100%;
+  }
 }
 
 /* ===== 深色模式 ===== */

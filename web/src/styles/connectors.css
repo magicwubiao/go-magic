@@ -511,3 +511,63 @@
     color: #78a9ff;
   }
 }
+
+/* ===== 移动端（≤768px）=====
+ * 目录工具栏在窄屏重新排布：第一行"搜索框 + 刷新"，分类芯片单独一行横向滚动。
+ * 芯片若照桌面那样换行堆叠，十来个分类能吃掉半屏高度（实测 390px 宽下占 6 行）；
+ * 横滚一行既省空间又贴合移动端滑动习惯，所以把 chips 挪到 order:3 独占一行。
+ * 弹窗里的命令行 / 长链接允许折行，否则会撑出横向滚动。 */
+@media (max-width: 768px) {
+  .conn-toolbar {
+    gap: 8px;
+  }
+
+  .conn-search {
+    /* n-input 根元素默认 width:100%，flex-basis 会取到整行把刷新挤下去；
+       basis 归零让它和刷新按钮真正同排，剩余宽度全给搜索框 */
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+
+  .conn-toolbar-actions {
+    margin-left: 0;
+  }
+
+  .conn-chips {
+    order: 3;
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .conn-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .conn-chip {
+    flex: none;
+  }
+
+  .conn-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .conn-card {
+    padding: 12px;
+  }
+
+  .cpc-cmd,
+  .cli-install-cmd {
+    flex-wrap: wrap;
+  }
+
+  .cpc-cmd code,
+  .cli-install-cmd code {
+    word-break: break-all;
+  }
+}
