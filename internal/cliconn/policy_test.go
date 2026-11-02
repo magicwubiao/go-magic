@@ -18,8 +18,11 @@ func TestSecurityCheckFiltersTools(t *testing.T) {
 		},
 	})
 	m.SetSecurityCheck(func(name string, c Connector) error {
-		if c.Command != "gh" {
-			return fmt.Errorf("command %q is not in the policy allowlist", c.Command)
+		// 注意：不能拿 c.Command 做判断——New() 会先 PinCommandPath，
+		// 在装了 gh 的机器（如 GitHub Actions runner）上 Command 已经被
+		// 固定成绝对路径，按命令名匹配会环境相关地挂掉。按连接器名判断。
+		if name != "gh" {
+			return fmt.Errorf("connector %q is not in the policy allowlist", name)
 		}
 		return nil
 	})
