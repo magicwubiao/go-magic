@@ -163,18 +163,19 @@ func (t *TTSTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		play = p
 	}
 
-	// 设置输出路径
+	// 输出路径：默认落到会话工作目录（与 asr / download_url 同一套规则）。
+	// 此前默认写 $HOME——文件落在了用户找不到的地方，还等于给模型开了一条
+	// 绕过文件工具沙箱的任意路径写入通道。
 	outputPath := ""
 	if op, ok := params["output_path"].(string); ok && op != "" {
 		outputPath = op
 	} else {
-		home, _ := os.UserHomeDir()
 		timestamp := fmt.Sprintf("%d", time.Now().Unix())
-		outputPath = filepath.Join(home, fmt.Sprintf("tts_output_%s.%s", timestamp, format))
+		outputPath = fmt.Sprintf("tts_output_%s.%s", timestamp, format)
 	}
 
-	// 验证输出路径
-	absPath, err := filepath.Abs(outputPath)
+	// 验证输出路径（相对路径按会话工作目录解析，并做沙箱边界检查）
+	absPath, err := resolvePath(ctx, outputPath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid output path: %w", err)
 	}

@@ -149,6 +149,27 @@ func defaultFileSecurity() FileSecurityConfig {
 	}
 }
 
+// ResolveMediaOutputDir 解析媒体生成工具（image_gen / video_gen）的输出目录。
+//
+// 相对目录一律按**会话工作目录**（WorkDirFromContext）解析，而不是进程 cwd：
+// 桌面版进程 cwd 是安装目录（如 AppData\Local\Go Magic），按 cwd 解析会把
+// 生成的图片/视频写进用户根本找不到的程序目录；会话工作目录才是用户在
+// 文件面板里能看到、能继续拿去用的位置。绝对目录（config.json 里显式配置的）
+// 原样尊重——那是用户自己指定的落点，不强行收编。
+func ResolveMediaOutputDir(ctx context.Context, dir, fallback string) (string, error) {
+	if dir == "" {
+		dir = fallback
+	}
+	dir = normalizeToolPath(dir)
+	if filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	if workDir := normalizeToolPath(WorkDirFromContext(ctx)); workDir != "" {
+		dir = filepath.Join(workDir, dir)
+	}
+	return filepath.Abs(dir)
+}
+
 func resolvePath(ctx context.Context, path string) (string, error) {
 	security := FileSecurityFromContext(ctx)
 

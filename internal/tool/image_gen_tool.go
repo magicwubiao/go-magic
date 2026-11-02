@@ -672,15 +672,21 @@ func parseSize(size string) (width, height int) {
 func (t *ImageGenerationTool) downloadAndSaveImages(ctx context.Context, images []ImageInfo, customPath string) ([]string, error) {
 	savedPaths := make([]string, 0, len(images))
 
-	// 确保输出目录存在
-	outputDir := t.config.OutputDirectory
-	if outputDir == "" {
-		outputDir = "./generated_images"
+	// 解析落盘位置。相对输出目录按会话工作目录解析——桌面版进程 cwd 是
+	// 安装目录，按 cwd 落盘会把图片写进 AppData 的程序目录里（真实事故）；
+	// 模型给的自定义路径走 resolvePath，与 write_file 同一套沙箱规则。
+	outputDir, err := ResolveMediaOutputDir(ctx, t.config.OutputDirectory, "generated_images")
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve output directory: %w", err)
 	}
 
 	if customPath != "" {
-		// 如果指定了自定义路径，使用其目录
-		outputDir = filepath.Dir(customPath)
+		abs, perr := resolvePath(ctx, customPath)
+		if perr != nil {
+			return nil, fmt.Errorf("invalid output path: %w", perr)
+		}
+		customPath = abs
+		outputDir = filepath.Dir(abs)
 	}
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {

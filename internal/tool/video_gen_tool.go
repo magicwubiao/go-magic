@@ -627,17 +627,24 @@ func (t *VideoGenerationTool) downloadAndSaveVideo(ctx context.Context, videoURL
 		return "", fmt.Errorf("downloaded video is empty")
 	}
 
-	outputDir := t.config.OutputDirectory
-	if outputDir == "" {
-		outputDir = "./generated_videos"
+	// 相对输出目录按会话工作目录解析（与 image_gen 同一套规则，别按进程
+	// cwd 落盘——桌面版会把视频写进安装目录）；自定义路径走 resolvePath 沙箱。
+	outputDir, err := ResolveMediaOutputDir(ctx, t.config.OutputDirectory, "generated_videos")
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve output directory: %w", err)
 	}
 	filePath := customPath
-	if filePath == "" {
+	if filePath != "" {
+		abs, perr := resolvePath(ctx, filePath)
+		if perr != nil {
+			return "", fmt.Errorf("invalid output path: %w", perr)
+		}
+		filePath = abs
+	} else {
 		filename := fmt.Sprintf("generated_video_%s.mp4", time.Now().Format("20060102_150405"))
 		filePath = filepath.Join(outputDir, filename)
-	} else if dir := filepath.Dir(filePath); dir != "." {
-		outputDir = dir
 	}
+	outputDir = filepath.Dir(filePath)
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create output directory: %w", err)
