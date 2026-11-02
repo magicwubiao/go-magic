@@ -868,6 +868,7 @@
                 v-model:value="currentModelId"
                 :options="modelOptions"
                 size="small"
+                :bordered="false"
                 style="min-width: 160px; max-width: 260px; margin-right: 8px"
                 :placeholder="t('chat.selectModel')"
                 :consistent-menu-width="false"
