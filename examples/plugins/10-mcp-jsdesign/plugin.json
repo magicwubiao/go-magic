@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-jsdesign",
+  "version": "1.0.0",
+  "description": "JsDesign (即时设计) canvas bridge — needs the desktop client open with the MCP Bridge plugin enabled",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "local", "design", "jsdesign", "cn"],
+  "examples": [
+    "读取即时设计这个画板的图层结构，列一下间距",
+    "在即时设计里给这个页面加一个按钮并复制样式"
+  ]
+}

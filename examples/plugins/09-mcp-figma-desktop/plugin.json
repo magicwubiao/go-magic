@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-figma-desktop",
+  "version": "1.0.0",
+  "description": "Figma desktop MCP (local 3845 port, no token) — only useful when the Figma desktop app runs on the same machine",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "http", "local", "design", "figma", "code-connect"],
+  "examples": [
+    "把 Figma 里选中的这个 frame 转成 Vue 组件",
+    "读一下当前选中 frame 的设计变量，列出色板和圆角"
+  ]
+}

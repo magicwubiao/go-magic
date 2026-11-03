@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-godot",
+  "version": "1.0.0",
+  "description": "Godot MCP bridge over the Godot CLI — point it at your Godot executable; needs no editor add-on",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "local", "game-engine", "godot", "gdscript"],
+  "examples": [
+    "在 Godot 里跑一下主场景，把报错贴给我",
+    "给玩家角色写一个移动脚本，然后 headless 跑一遍看有没有解析错误"
+  ]
+}

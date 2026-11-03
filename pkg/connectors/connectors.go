@@ -102,7 +102,6 @@ func Categories() []Category {
 		{ID: "data", Label: "Data & Databases"},
 		{ID: "productivity", Label: "Productivity"},
 		{ID: "design", Label: "Design & Creative"},
-		{ID: "game", Label: "3D & Game Engines"},
 		{ID: "automation", Label: "Browser & Automation"},
 		{ID: "home", Label: "Home & Devices"},
 		{ID: "local", Label: "Local & Files"},
@@ -562,18 +561,14 @@ var catalog = []Connector{
 	//     Figma 白名单审批（POST /v1/oauth/mcp/register 实测 403，官方文档也写明
 	//     "想接入新客户端请申请"），第三方客户端无法自助注册。所以 Figma 给两条
 	//     不依赖 DCR 的路：官方桌面版 MCP（本地端口，免 token）与社区事实标准
-	//     figma-developer-mcp（个人访问令牌），覆盖"有桌面版"和"只有网页版"两种人。
-	{
-		ID:          "figma",
-		Name:        "Figma",
-		Description: "Read design context, variables and Code Connect data from the selected frame in Figma Dev Mode. Requires the Figma desktop app running with the desktop MCP server enabled.",
-		Category:    "design",
-		Transport:   "http",
-		URL:         "http://127.0.0.1:3845/mcp",
-		DefaultName: "figma",
-		DocsURL:     "https://developers.figma.com/docs/figma-mcp-server/local-server-installation/",
-		Tags:        []string{"design", "ui", "code-connect", "local"},
-	},
+	//     figma-developer-mcp（个人访问令牌）。
+	//
+	// 只保留"纯远程"条目：内置目录要能用在服务器端部署上（go-magic 经常跑在
+	// 远端），而下面两类依赖"同一台机器上装着那个客户端"的条目一旦内置，在
+	// 服务端就是必然失败——用户看到的只是"连不上"。它们已移到
+	// examples/plugins/09-mcp-local-design-apps（跟着示例走，本地装才用）：
+	//   - Figma 桌面版 MCP（127.0.0.1:3845，需 Figma 客户端开着 Dev Mode）
+	//   - 即时设计画布桥接（本地进程 WebSocket 连客户端里的 MCP Bridge 插件）
 	{
 		ID:          "figma-api",
 		Name:        "Figma (API token)",
@@ -641,9 +636,10 @@ var catalog = []Connector{
 	//     不做 OAuth 发现，只认个人令牌，走 header；MasterGo 的头名是
 	//     x-mg-useraccesstoken（缺 token 时它自己会在响应里提示这个头名）。
 	//   - 即时设计（js.design）没有公共远程端点，官方给的是"画布桥接"：
-	//     本地 npx 进程用 WebSocket 连设计端里的 MCP Bridge 插件。实测
-	//     `npx -y jsdesign-mcp` 的 initialize/tools 都正常，但没开插件时
-	//     工具调用会失败，描述里必须写明，否则会被当成连不上。
+	//     本地 npx 进程用 WebSocket 连设计端里的 MCP Bridge 插件。它依赖本机
+	//     装着客户端，已移到 examples/plugins/09-mcp-local-design-apps（实测
+	//     `npx -y jsdesign-mcp` 的 initialize/tools 都正常，但没开插件时工具
+	//     调用会失败）。
 	//   - 蓝湖官方没有 MCP，社区 mcp-lanhu 用浏览器 Cookie 读设计稿；实测
 	//     initialize 正常，凭据走 LANHU_COOKIE（Cookie 会过期，需要重填）。
 	{
@@ -702,18 +698,6 @@ var catalog = []Connector{
 		Tags:    []string{"prototype", "prd", "html", "cn"},
 	},
 	{
-		ID:          "jsdesign",
-		Name:        "即时设计 (JsDesign)",
-		Description: "Read, create and edit designs on the 即时设计 canvas through the local MCP Bridge. Keep the JsDesign client open with the \"MCP Bridge\" plugin enabled, otherwise tool calls fail.",
-		Category:    "design",
-		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "jsdesign-mcp"},
-		DefaultName: "jsdesign",
-		DocsURL:     "https://www.npmjs.com/package/jsdesign-mcp",
-		Tags:        []string{"design", "ui", "canvas", "cn", "local"},
-	},
-	{
 		ID:          "lanhu",
 		Name:        "蓝湖 (Lanhu)",
 		Description: "Read Lanhu design specs, layer styles, slices and PRDs for design-to-code. Community implementation: needs a Lanhu browser cookie, which expires and has to be refreshed.",
@@ -735,72 +719,21 @@ var catalog = []Connector{
 		Tags:    []string{"design", "handoff", "design-to-code", "cn"},
 	},
 
-	// --- 3D & Game Engines ---
-	// 这几条都是「本地桥」：MCP server 自身不碰引擎，真正干活的是宿主软件；
-	// 条目只负责把 server 拉起来。所以宿主软件没开、或桥接插件没启用时，
-	// 表现是工具调用失败/空工具列表，而不是连接失败——描述里必须写清这个前置条件，
-	// 否则用户会以为是 go-magic 连不上。
-	//   - Blender：addon 在 Blender 里点 Connect 后监听 127.0.0.1:9876，server 反向连它。
-	//   - Unity：CoplayDev 的 Unity 包（v10）负责与 Editor 通信，server 从 PyPI 用 uvx 拉。
-	//   - Godot：不需要任何 addon，server 直接调 Godot 的 CLI（--headless --script），
-	//     所以唯一的依赖是"能找到一个可用的 Godot 可执行文件"。
-	//
-	// Unreal 已从内置移除：它依赖 UE 5.8+ 的内置 ModelContextProtocol 插件，且必须
-	// 同时启用 All Toolsets（只开前者时 server 在跑但 tools/list 为空），还要手动
-	// 打开 Auto Start Server；实验性功能、工具在 game thread 串行执行，版本与配置
-	// 差异太大，内置一条"装完还得改四处设置"的条目只会变成"连上了却没有工具"的
-	// 投诉源。需要的人手填自定义 MCP：Transport=http，URL=http://127.0.0.1:8000/mcp。
-	{
-		ID:          "blender",
-		Name:        "Blender",
-		Description: "Prompt-assisted 3D modeling, scene building and material editing in Blender. Requires the MCP for Blender add-on installed in Blender and its Connect button pressed (the add-on listens on 127.0.0.1:9876); needs uv/uvx.",
-		Category:    "game",
-		Transport:   "stdio",
-		Command:     "uvx",
-		Args:        []string{"mcp-for-blender"},
-		DefaultName: "blender",
-		DocsURL:     "https://github.com/ahujasid/blender-mcp",
-		Tags:        []string{"3d", "modeling", "blender", "local"},
-	},
-	{
-		ID:          "unity",
-		Name:        "Unity",
-		Description: "Create scenes and GameObjects, edit C# scripts, manage assets and run tests in the Unity Editor. Requires the \"MCP for Unity\" package added to the project via Unity Package Manager; needs uv/uvx.",
-		Category:    "game",
-		Transport:   "stdio",
-		Command:     "uvx",
-		Args:        []string{"--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"},
-		DefaultName: "unity",
-		DocsURL:     "https://github.com/CoplayDev/unity-mcp",
-		Tags:        []string{"3d", "game-engine", "unity", "csharp", "local"},
-	},
-	{
-		ID:          "godot",
-		Name:        "Godot",
-		Description: "Drive the Godot engine from the CLI: launch the editor, run/stop projects, read debug output, create scenes and nodes, export MeshLibrary. Requires Godot 4.x installed — the server auto-detects common install locations, so point the path at your executable here for portable installs. Needs Node/npx.",
-		Category:    "game",
-		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "@coding-solo/godot-mcp"},
-		DefaultName: "godot",
-		// GODOT_PATH 是"可执行文件在哪"，不是密钥。声明成凭据字段是刻意的：
-		// 空 env 会被运行期当作待填凭据并阻断连接（见 agentplugin/credref.go），
-		// 而不填它 server 也能起来、只是每次调工具都报 "Could not find a valid
-		// Godot executable" —— 那种失败用户无处可改。填错的代价很小：
-		// 探测失败会回落到默认路径并继续起服务。
-		Requires: []Requirement{
-			{
-				Key:         "GODOT_PATH",
-				Label:       "Godot executable path",
-				Where:       WhereEnv,
-				Required:    true,
-				Placeholder: `C:\Godot\Godot_v4.5-stable_win64.exe`,
-				HelpURL:     "https://godotengine.org/download",
-			},
-		},
-		DocsURL: "https://github.com/Coding-Solo/godot-mcp",
-		Tags:    []string{"3d", "game-engine", "godot", "gdscript", "local"},
-	},
+	// --- 这里刻意没有「本地软件桥」条目 ---
+	// Blender / Unity / Godot、Figma 桌面版、即时设计这些 MCP 的 server 侧没问题，
+	// 但真正干活的是**装在同一台机器上**的宿主软件（引擎 / 设计客户端 / 桥接插件）。
+	// go-magic 经常部署在服务器或另一台机器上，内置进目录就等于一条"点了必然连不上"
+	// 的条目——用户只会看到超时或空工具列表，无法自己判断是环境问题。
+	// 这类条目改为随示例插件分发（一个引擎/客户端一个，按需只装自己用的）：
+	//   examples/plugins/06-mcp-blender
+	//   examples/plugins/07-mcp-unity
+	//   examples/plugins/08-mcp-godot
+	//   examples/plugins/09-mcp-local-design-apps   （Figma 桌面版 / 即时设计）
+	// 要加回内置前先想清楚服务端部署场景。Unreal 也在这批里，但理由不同：它要
+	// UE 5.8+ 的内置 ModelContextProtocol 插件，且必须同时启用 All Toolsets
+	// （只开前者时 server 在跑、tools/list 却是空的）再勾 Auto Start Server，
+	// 配置差异太大，只留手填自定义 MCP 的路：Transport=http，
+	// URL=http://127.0.0.1:8000/mcp。
 
 	// --- Browser & Automation ---
 	{

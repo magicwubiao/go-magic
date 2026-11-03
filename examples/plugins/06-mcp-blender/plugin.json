@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-blender",
+  "version": "1.0.0",
+  "description": "Blender MCP bridge — only useful when Blender runs on the same machine as go-magic",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "local", "3d", "blender"],
+  "examples": [
+    "在 Blender 里给我摆一个三件套的静物台并调一下材质",
+    "把当前场景里所有灯光换成三点布光并渲染一张预览"
+  ]
+}

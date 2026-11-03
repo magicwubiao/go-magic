@@ -9,6 +9,13 @@
 | [03-cli-gh](03-cli-gh/) | cli.json 连接器：参数模板 `{{x}}`、条件参数 `{{?x}}`、stdin 传参、凭据占位、raw 逃生工具 | 本机装有 `gh` |
 | [04-mcp-http-remote](04-mcp-http-remote/) | 远程 MCP：streamable-http / sse 两种传输、`${CRED:NAME}` 请求头凭据、OAuth 2.1 免配置授权 | 网络 |
 | [05-media-provider](05-media-provider/) | 扩展命名空间：插件给内置 `image_gen` 工具"换后端"，返回 `b64` 由内核落盘 | Python 3.8+ |
+| [06-mcp-blender](06-mcp-blender/) | 本地桥：Blender。server 只转发，真身是 Blender 里的 add-on（add-on 监听 9876，server 反向连它） | 本机 Blender + add-on、uv/uvx |
+| [07-mcp-unity](07-mcp-unity/) | 本地桥：Unity。server 从 PyPI 拉 `mcpforunityserver`，操作 Editor 的是项目里的 MCP for Unity 包 | 本机 Unity Editor + 项目内桥接包、uv/uvx |
+| [08-mcp-godot](08-mcp-godot/) | 本地桥：Godot。不用 add-on，直接调 Godot CLI；演示 `GODOT_PATH` 空值凭据占位 | 本机 Godot 4.x、Node/npx |
+| [09-mcp-figma-desktop](09-mcp-figma-desktop/) | 本地桥：Figma 桌面版 MCP，`127.0.0.1:3845` 免 token，读 Dev Mode 选中内容 | 本机 Figma 桌面版（Dev Mode） |
+| [10-mcp-jsdesign](10-mcp-jsdesign/) | 本地桥：即时设计画布桥接，stdio 进程 WebSocket 连客户端里的 MCP Bridge 插件 | 本机即时设计客户端 + Bridge 插件、Node/npx |
+
+> 06–10 是**特意没做成内置条目**的：这些 MCP 依赖"宿主软件和 go-magic 在同一台机器上"。内置目录要能用在服务器部署上，放进去就是一条点了必然失败的条目。本地确实要用，装对应那个示例即可——一个软件一个示例，互不牵连。
 
 ## 安装任一示例
 

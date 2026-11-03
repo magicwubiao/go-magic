@@ -1188,6 +1188,8 @@ POST /api/mcp/servers/{name}/oauth/signout 登出（删除本地 token）
 
 Web 页「连接器 → 从目录添加」里内置了一批常见 server（GitHub、Slack、Notion、Postgres、Playwright…），选中后会预填命令与需要的凭据名，填完保存即可。
 
+目录里的条目**一律是纯远程或纯本地进程**，不依赖"同一台机器上还装着某个客户端软件"：go-magic 经常部署在服务器上，那种条目一旦内置，用户在服务端点了就是必然失败。因此 Blender / Unity / Godot、Figma 桌面版（本机 3845 端口）、即时设计画布桥接这类**本地软件桥**不在目录里，而是随示例插件分发（一个软件一个示例，按需只装自己用的）：`examples/plugins/06-mcp-blender`、`07-mcp-unity`、`08-mcp-godot`、`09-mcp-local-design-apps`，本地要用时 `magic plugin install` 装一次即可。
+
 #### 用 JSON 添加（可直接粘贴别家的配置）
 
 Web 页 `MCP 服务器 → 添加服务器 → JSON`、CLI `magic mcp add --json`、以及

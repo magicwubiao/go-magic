@@ -1,6 +1,9 @@
 package connectors
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -77,16 +80,16 @@ func TestDesignCategoryAndEntries(t *testing.T) {
 	}
 
 	design := Search("", "design")
-	if len(design) < 10 {
-		t.Fatalf("design entries = %d, want >= 10", len(design))
+	if len(design) < 8 {
+		t.Fatalf("design entries = %d, want >= 8", len(design))
 	}
 	ids := map[string]bool{}
 	for _, c := range design {
 		ids[c.ID] = true
 	}
 	for _, want := range []string{
-		"figma", "figma-api", "miro", "framer", "spline",
-		"pixso", "mastergo", "modao", "jsdesign", "lanhu",
+		"figma-api", "miro", "framer", "spline",
+		"pixso", "mastergo", "modao", "lanhu",
 	} {
 		if !ids[want] {
 			t.Errorf("design catalog missing %q", want)
@@ -98,82 +101,99 @@ func TestDesignCategoryAndEntries(t *testing.T) {
 	if ids["canva"] {
 		t.Error("canva must not be re-added to the built-in catalog")
 	}
+	// Figma 桌面版 / 即时设计依赖本机客户端，见 TestLocalAppEntriesLiveInExamples。
+	if ids["figma"] || ids["jsdesign"] {
+		t.Error("local-app design entries must not be built in (they break on server deployments)")
+	}
 }
 
-// 3D/游戏引擎分类契约：Blender/Unity/Godot 三条「本地桥」条目必须在目录里，
-// 且形态不能写错。
+// 依赖"同一台机器上装着宿主软件"的条目不再内置，改为随示例插件分发。
 //
-//	blender/unity：stdio + uvx，server 由客户端拉起再反向连宿主软件，
-//	        所以不能写成 http（宿主软件不监听对外端口）。宿主软件里要装
-//	        桥接插件才有工具，因此不需要任何凭据字段。
-//	godot：stdio + npx，server 直接调 Godot CLI，不需要 addon；但它唯一的
-//	        依赖是"可执行文件在哪"，所以必须声明 GODOT_PATH（空 env 会被
-//	        运行期当作待填凭据阻断连接，等于强制用户填对路径）。
+// 这类 MCP（Blender / Unity / Godot、Figma 桌面版、即时设计）server 侧都没问题，
+// 但真正干活的是本机的引擎 / 设计客户端 / 桥接插件。go-magic 经常部署在服务器
+// 或另一台机器上，内置进目录就等于一条"点了必然连不上"的条目——用户看到的只是
+// 超时或空工具列表，没法自己判断是环境问题，只能来问我们。
 //
-// Unreal 已从内置移除（见 connectors.go 的 Game 段注释），这里反向断言防止被
-// 顺手加回来：它的前置条件（UE 5.8+ / ModelContextProtocol + All Toolsets /
-// Auto Start Server）无法在一条目录条目里可靠表达，加回来只会产出"连上了但没有工具"。
-func TestGameEngineEntries(t *testing.T) {
-	hasCat := false
+// 这个测试守两件事：
+//  1. 它们不能回到内置目录（`game` 分类也一并删掉：它下面的条目全属这类，
+//     留着就是点进去一片空白）；
+//  2. 它们必须真的出现在 examples/plugins 的某个 mcp.json 里——移走了却没留下
+//     替代路径，等于静默丢功能。
+func TestLocalAppEntriesLiveInExamples(t *testing.T) {
 	for _, c := range Categories() {
 		if c.ID == "game" {
-			hasCat = true
-		}
-	}
-	if !hasCat {
-		t.Fatal("game category missing from Categories()")
-	}
-
-	game := Search("", "game")
-	ids := map[string]bool{}
-	for _, c := range game {
-		ids[c.ID] = true
-	}
-	for _, want := range []string{"blender", "unity", "godot"} {
-		if !ids[want] {
-			t.Errorf("game catalog missing %q", want)
-		}
-	}
-	if ids["unreal"] {
-		t.Error("unreal must not be re-added to the built-in catalog")
-	}
-
-	for _, id := range []string{"blender", "unity"} {
-		c, ok := Get(id)
-		if !ok {
-			continue
-		}
-		if c.Transport != "stdio" || c.Command != "uvx" || len(c.Args) == 0 {
-			t.Errorf("%s = %s/%s %v, want stdio/uvx with args", id, c.Transport, c.Command, c.Args)
+			t.Fatal("game category should be gone: every entry in it needed local software")
 		}
 	}
 
-	for _, id := range []string{"blender", "unity"} {
-		if c, ok := Get(id); ok && len(c.Requires) != 0 {
-			t.Errorf("%s should not declare credentials (local bridge): %v", id, c.Requires)
+	local := []string{"blender", "unity", "godot", "figma", "jsdesign"}
+	for _, id := range local {
+		if _, ok := Get(id); ok {
+			t.Errorf("%q must not be built in (it needs software on the same machine)", id)
 		}
 	}
 
-	// godot：npx 拉起 + 恰好一个 GODOT_PATH 环境变量，且不能标成密钥。
-	gd, ok := Get("godot")
-	if !ok {
-		t.Fatal("godot entry missing")
+	paths, err := filepath.Glob("../../examples/plugins/*/mcp.json")
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("scan example plugins: %v (matched %d files)", err, len(paths))
 	}
-	if gd.Transport != "stdio" || gd.Command != "npx" || len(gd.Args) == 0 {
-		t.Errorf("godot = %s/%s %v, want stdio/npx with args", gd.Transport, gd.Command, gd.Args)
+
+	type exampleServer struct {
+		Type    string            `json:"type"`
+		Command string            `json:"command"`
+		URL     string            `json:"url"`
+		Env     map[string]string `json:"env"`
 	}
-	if len(gd.Requires) != 1 {
-		t.Fatalf("godot requires = %v, want exactly GODOT_PATH", gd.Requires)
+	// server 键名 → 条目定义 + 所在示例目录（报错时能直接指路）。
+	found := map[string]exampleServer{}
+	dirOf := map[string]string{}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		var doc struct {
+			Servers map[string]exampleServer `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatalf("parse %s: %v", p, err)
+		}
+		dir := filepath.Base(filepath.Dir(p))
+		for name, s := range doc.Servers {
+			found[name] = s
+			dirOf[name] = dir
+		}
 	}
-	req := gd.Requires[0]
-	if req.Key != "GODOT_PATH" || req.Where != WhereEnv {
-		t.Errorf("godot requirement = %s/%s, want GODOT_PATH/env", req.Key, req.Where)
+
+	for _, id := range local {
+		if _, ok := found[id]; !ok {
+			t.Errorf("%q is neither built in nor present in examples/plugins/*/mcp.json", id)
+		}
 	}
-	if req.Secret {
-		t.Error("GODOT_PATH is a file path, not a secret — UI would mask it")
+
+	// stdio 类必须写清 command，http 类必须写清 url——示例就是给用户抄的，
+	// 抄到一条缺字段的条目比没有示例更糟。
+	for name, s := range found {
+		switch s.Type {
+		case "stdio":
+			if s.Command == "" {
+				t.Errorf("example server %q (%s) is stdio without command", name, dirOf[name])
+			}
+		case "streamable-http", "sse":
+			if s.URL == "" {
+				t.Errorf("example server %q (%s) is %s without url", name, dirOf[name], s.Type)
+			}
+		default:
+			t.Errorf("example server %q (%s) has unknown type %q", name, dirOf[name], s.Type)
+		}
 	}
-	if req.HelpURL == "" || req.Placeholder == "" {
-		t.Error("GODOT_PATH needs a download link and a path example, else users cannot fill it")
+
+	// Godot 唯一的配置项就是"可执行文件在哪"，示例里丢了 GODOT_PATH 等于
+	// 让用户拿一条永远找不到引擎的配置去调试。
+	if gd, ok := found["godot"]; ok {
+		if _, has := gd.Env["GODOT_PATH"]; !has {
+			t.Errorf("example godot server must declare GODOT_PATH env (in %s)", dirOf["godot"])
+		}
 	}
 }
 

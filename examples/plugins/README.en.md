@@ -9,6 +9,13 @@ Every subdirectory here is a complete, installable Agent Plugin covering one com
 | [03-cli-gh](03-cli-gh/) | cli.json connector: `{{param}}` templates, `{{?param}}` conditionals, stdin params, credential placeholders, raw escape hatch | local `gh` binary |
 | [04-mcp-http-remote](04-mcp-http-remote/) | Remote MCP: streamable-http and sse transports, `${CRED:NAME}` header credentials, OAuth 2.1 | network |
 | [05-media-provider](05-media-provider/) | Extension namespace: contribute a backend to the built-in `image_gen` tool, return `b64` payloads | Python 3.8+ |
+| [06-mcp-blender](06-mcp-blender/) | Local bridge: Blender. The server only relays — the add-on inside Blender listens on 9876 and the server connects back to it | Blender + add-on locally, uv/uvx |
+| [07-mcp-unity](07-mcp-unity/) | Local bridge: Unity. The server comes from PyPI (`mcpforunityserver`); the Editor side is the MCP for Unity package in your project | Unity Editor + package in project, uv/uvx |
+| [08-mcp-godot](08-mcp-godot/) | Local bridge: Godot. No add-on — it drives the Godot CLI directly. Shows an empty `GODOT_PATH` credential slot | Godot 4.x locally, Node/npx |
+| [09-mcp-figma-desktop](09-mcp-figma-desktop/) | Local bridge: Figma desktop MCP on `127.0.0.1:3845`, no token — reads the selection in Dev Mode | Figma desktop app with Dev Mode |
+| [10-mcp-jsdesign](10-mcp-jsdesign/) | Local bridge: JsDesign canvas bridge — a stdio process talks over WebSocket to the MCP Bridge plugin inside the client | JsDesign client + Bridge plugin, Node/npx |
+
+> 06–10 are deliberately **not** built-in catalog entries: they only work when the host application runs on the same machine as go-magic. The built-in catalog has to stay usable on server deployments, so shipping these there would just add entries that always fail. Install the one you need — one app per example, no coupling.
 
 ## Install
 

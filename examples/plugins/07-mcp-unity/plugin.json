@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-unity",
+  "version": "1.0.0",
+  "description": "Unity MCP bridge — only useful when the Unity Editor with the MCP for Unity package runs on the same machine",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "local", "game-engine", "unity", "csharp"],
+  "examples": [
+    "在 Unity 里新建一个空场景，加个 Cube 和方向光",
+    "给 Player 写一个二段跳的 C# 脚本并挂上去"
+  ]
+}
