@@ -385,10 +385,10 @@ func NewSSETransportWithOptions(url string, headers map[string]string, timeout t
 		}
 	}
 	return &SSETransport{
-		url:    url,
-		client: newConnectTimeoutClient(timeout),
-		closed: false,
-		reconnect: true,
+		url:        url,
+		client:     newConnectTimeoutClient(timeout),
+		closed:     false,
+		reconnect:  true,
 		maxRetries: 3,
 		retryDelay: time.Second,
 		headers:    copied,
