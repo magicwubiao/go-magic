@@ -85,12 +85,18 @@ func TestDesignCategoryAndEntries(t *testing.T) {
 		ids[c.ID] = true
 	}
 	for _, want := range []string{
-		"figma", "figma-api", "canva", "miro", "framer", "spline",
+		"figma", "figma-api", "miro", "framer", "spline",
 		"pixso", "mastergo", "modao", "jsdesign", "lanhu",
 	} {
 		if !ids[want] {
 			t.Errorf("design catalog missing %q", want)
 		}
+	}
+	// Canva 已从内置移除：它的 OAuth 端点本身没问题，但 www.canva.com 对中国
+	// 大陆 IP 一律 302 到 canva.cn，授权页打不开（详见 connectors.go 的
+	// Design 段注释）。别再加回来——加回来就是一条点了必然失败的条目。
+	if ids["canva"] {
+		t.Error("canva must not be re-added to the built-in catalog")
 	}
 }
 

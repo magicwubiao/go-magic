@@ -547,9 +547,16 @@ var catalog = []Connector{
 
 	// --- Design & Creative ---
 	// 端点与授权方式均按官方现状实测（2026-11）：
-	//   - Canva / Miro / Framer / Spline 的远程端点都返回 401 +
+	//   - Miro / Framer / Spline 的远程端点都返回 401 +
 	//     resource_metadata，且 /register（RFC 7591 动态注册）对公共客户端
 	//     实测 201 → 走 go-magic 原生 OAuth，用户点一下授权即可，无需自建应用。
+	//   - Canva 曾按同样方式内置，已于 2026-11 移除：它的发现/注册/授权 URL
+	//     都能走通，但 www.canva.com 对中国大陆 IP 一律 302 到 canva.cn
+	//     （首页、/login、/api/oauth/authorize 三条都跳，与 UA、Accept-Language
+	//     无关），而 canva.cn 是独立运营的中国站、账号不与国际站互通，授权页
+	//     因此根本打不开，表现为"点了授权直接跳 canva.cn 首页"。只有浏览器走
+	//     海外出口那一次才能完成授权，不适合作为开箱即用的内置条目；需要的人
+	//     可以按"自定义 MCP"手填 https://mcp.canva.com/mcp。
 	//   - Figma 的远程端点 https://mcp.figma.com/mcp 虽然在线，但它的 DCR 要
 	//     Figma 白名单审批（POST /v1/oauth/mcp/register 实测 403，官方文档也写明
 	//     "想接入新客户端请申请"），第三方客户端无法自助注册。所以 Figma 给两条
@@ -585,21 +592,6 @@ var catalog = []Connector{
 		}},
 		DocsURL: "https://github.com/GLips/Figma-Context-MCP",
 		Tags:    []string{"design", "ui", "tokens", "api-key"},
-	},
-	{
-		ID:          "canva",
-		Name:        "Canva",
-		Description: "Search, create and edit designs, brand templates, folders and assets in Canva.",
-		Category:    "design",
-		Transport:   "http",
-		URL:         "https://mcp.canva.com/mcp",
-		OAuth: &OAuthRequirement{Scopes: []string{
-			"design:meta:read", "design:content:read", "design:content:write",
-			"folder:read", "asset:read",
-		}},
-		DefaultName: "canva",
-		DocsURL:     "https://www.canva.dev/docs/connect/",
-		Tags:        []string{"design", "graphics", "presentation", "templates"},
 	},
 	{
 		ID:          "miro",
