@@ -51,6 +51,8 @@ export interface ApprovalSettings {
   trustThreshold: number
   enableLearning: boolean
   cliConfirm: boolean
+  // 付费生成（视频等按次计费工具）是否每次都要确认，默认开
+  requirePaidConfirm: boolean
   // 审批请求超时（秒），超时后按 timeoutStrategy 处理
   approvalTimeout: number
   whitelist: string[]
@@ -224,6 +226,8 @@ export async function getSettings(): Promise<ApprovalSettings> {
     trustThreshold: raw.trust_threshold ?? raw.trustThreshold ?? 3,
     enableLearning: raw.enable_learning ?? raw.enableLearning ?? true,
     cliConfirm: raw.cli_confirm ?? raw.cliConfirm ?? false,
+    // 默认 true：后端没返回该字段（老版本）时按"要确认"处理，别静默放开付费调用
+    requirePaidConfirm: raw.require_paid_confirm ?? raw.requirePaidConfirm ?? true,
     approvalTimeout: raw.approval_timeout ?? raw.approvalTimeout ?? 60,
     whitelist: raw.whitelist || [],
   }
@@ -240,6 +244,7 @@ export async function saveSettings(settings: ApprovalSettings): Promise<void> {
       trust_threshold: settings.trustThreshold,
       enable_learning: settings.enableLearning,
       cli_confirm: settings.cliConfirm,
+      require_paid_confirm: settings.requirePaidConfirm,
       approval_timeout: settings.approvalTimeout,
     }),
   })

@@ -333,9 +333,20 @@ type ApprovalConfig struct {
 	EnableLearning    bool     `mapstructure:"enable_learning"`
 	EnableWhitelist   bool     `mapstructure:"enable_whitelist"`
 	EnableCLIConfirm  bool     `mapstructure:"enable_cli_confirm"`
-	GatewayEnabled    bool     `mapstructure:"gateway_enabled"`
-	GatewayURL        string   `mapstructure:"gateway_url"`
-	DangerousPatterns []string `mapstructure:"dangerous_patterns"`
+	// RequirePaidConfirm 控制"付费生成类工具每次调用都要人工确认"
+	// （目前是 video_generate：按渲染秒数计费，单次 1~5 分钟）。
+	//
+	// 默认 true，且与 EnableCLIConfirm 的语义**不同**：那个问的是"CLI 下每条
+	// 命令要不要问"，这个问的是"花钱的调用要不要问"，与通道无关——网关/定时
+	// 任务里没有能点确认的人，关闭前必须意识到那意味着后台可以自己烧钱。
+	//
+	// 用 *bool：nil = 默认开启。不能只靠 bool 零值，否则任何"只填了 strategy 的
+	// 配置字面量"都会静默变成"付费调用不确认"——默认拦不住的开关等于没有。
+	// 读的时候统一走 PaidConfirmRequired()。
+	RequirePaidConfirm *bool    `mapstructure:"require_paid_confirm"`
+	GatewayEnabled     bool     `mapstructure:"gateway_enabled"`
+	GatewayURL         string   `mapstructure:"gateway_url"`
+	DangerousPatterns  []string `mapstructure:"dangerous_patterns"`
 	// HighRiskPatterns 是"高风险但可批准"的模式：命中后风险抬到 Critical 并要求
 	// 询问（AskUser），而不是像 DangerousPatterns 那样无条件拒绝。
 	//
@@ -353,6 +364,18 @@ type ApprovalConfig struct {
 	ChannelOverrides map[string]Strategy `mapstructure:"channel_overrides"`
 }
 
+// PaidConfirmRequired 报告付费生成工具是否必须逐次确认（默认 true）。
+//
+// 唯一读取入口：字段是 *bool 且 nil 表示"没配过"，直接读字段会让 nil / false
+// 在调用点上难以区分，进而把默认拦截写成默认放行。用值接收者是为了能直接
+// 作用在 GetConfig() 的返回值上。
+func (c ApprovalConfig) PaidConfirmRequired() bool {
+	return c.RequirePaidConfirm == nil || *c.RequirePaidConfirm
+}
+
+// boolPtr 返回 v 的指针。配置里用它表达"没设"与"显式设为 false"的差别。
+func boolPtr(v bool) *bool { return &v }
+
 // DefaultConfig returns the default approval configuration.
 //
 // 默认策略是 smart：交互通道（Web / CLI）有审批界面，低风险不打扰、高风险弹卡。
@@ -366,7 +389,10 @@ func DefaultConfig() *ApprovalConfig {
 		EnableLearning:    true,
 		EnableWhitelist:   true,
 		EnableCLIConfirm:  false,
-		GatewayEnabled:    false,
+		// 付费生成默认要确认：这是唯一一个"默认拦一下"的开关。模型重试一次
+		// 就是真金白银，默认放行等于把钱包交给它自己判断。
+		RequirePaidConfirm: boolPtr(true),
+		GatewayEnabled:     false,
 		// 硬性底线：只保留真正灾难性、不可挽回的命令。永远拒绝，不询问。
 		DangerousPatterns: []string{
 			`rm\s+-rf\s+/(?:\*|$|\s)`,
@@ -1476,6 +1502,13 @@ func (m *Manager) SetEnableCLIConfirm(b bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config.EnableCLIConfirm = b
+}
+
+// SetRequirePaidConfirm 更新"付费生成需确认"开关（默认开启）。
+func (m *Manager) SetRequirePaidConfirm(b bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.config.RequirePaidConfirm = boolPtr(b)
 }
 
 // SetApprovalTimeout 更新审批超时（秒）。

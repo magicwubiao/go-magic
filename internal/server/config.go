@@ -521,11 +521,17 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		if v, ok := req["cli_confirm"].(bool); ok {
 			s.cfg.Approval.EnableCLIConfirm = v
 		}
+		// 付费生成确认（默认开）：配置项是指针，这里写入实值——用户在同一页
+		// 把它关掉之后，落盘的必须是 false 而不是"没写"。
+		if v, ok := req["require_paid_confirm"].(bool); ok {
+			s.cfg.Approval.RequirePaidConfirm = &v
+		}
 		if mgr := s.getApprovalManager(); mgr != nil {
 			mgr.SetStrategy(approval.Strategy(s.cfg.Approval.Strategy))
 			mgr.SetTrustThreshold(s.cfg.Approval.TrustThreshold)
 			mgr.SetEnableLearning(s.cfg.Approval.EnableLearning)
 			mgr.SetEnableCLIConfirm(s.cfg.Approval.EnableCLIConfirm)
+			mgr.SetRequirePaidConfirm(s.cfg.Approval.PaidConfirmRequired())
 			if s.cfg.Approval.ApprovalTimeout > 0 {
 				mgr.SetApprovalTimeout(s.cfg.Approval.ApprovalTimeout)
 			}
@@ -968,6 +974,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				}
 				s.approvalMgr.SetEnableLearning(ac.EnableLearning)
 				s.approvalMgr.SetEnableCLIConfirm(ac.EnableCLIConfirm)
+				// nil = 配置文件里没写这项 → 保持默认（开启），别把它读成关闭。
+				if ac.RequirePaidConfirm != nil {
+					s.approvalMgr.SetRequirePaidConfirm(*ac.RequirePaidConfirm)
+				}
 				if ac.ApprovalTimeout > 0 {
 					s.approvalMgr.SetApprovalTimeout(ac.ApprovalTimeout)
 				}

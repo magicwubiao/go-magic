@@ -92,7 +92,9 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 				"public URL for image-to-video while volcengine and runway accept local files. "+
 				"Only the provider configured in Settings has credentials, so do not switch provider "+
 				"on your own to work around a capability limit — report the limit instead. "+
-				"Generation typically takes 1-5 minutes; the tool polls the provider and saves the MP4 locally.",
+				"Generation typically takes 1-5 minutes; the tool polls the provider and saves the MP4 locally. "+
+				"Every call is billed per rendered second and needs an explicit user confirmation, so never "+
+				"retry with a reworded prompt to explore variations — ask the user first.",
 			map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -750,3 +752,21 @@ func (t *VideoGenerationTool) SetConfig(config *VideoGenConfig) { t.config = con
 
 // GetConfig 获取当前配置
 func (t *VideoGenerationTool) GetConfig() *VideoGenConfig { return t.config }
+
+// RequiresApproval 实现 agent 侧的 approvalAware：视频生成**每次**都要人工确认。
+//
+// 判定依据是钱，不是破坏性：内置 provider 都按渲染秒数计费（10 秒 1080p 通常在
+// 几元到十几元），单次调用还要跑 1~5 分钟。模型最典型的失败模式是"不满意就换个
+// prompt 再生成一次"，一次对话能叠出好几倍账单，而用户根本没机会拦。所以这里
+// 用恒真声明，不参与任何风险推断。
+//
+// 注意：RequiresApproval 与 ApprovalSummary 必须成对实现，agent 的 approvalAware
+// 是两方法接口，少一个断言就失败 → 静默变成"不用确认"。
+func (t *VideoGenerationTool) RequiresApproval() bool { return true }
+
+// ApprovalSummary 给审批卡片一句人类可读的动作描述。
+// 计费相关的参数（时长/分辨率/模型/prompt）由 agent 侧的审批钩子从调用参数里
+// 摊开，这里只负责"这是什么工具"。
+func (t *VideoGenerationTool) ApprovalSummary() string {
+	return "video_generate (paid video generation)"
+}

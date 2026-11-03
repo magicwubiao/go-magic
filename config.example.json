@@ -169,6 +169,8 @@
     "enable_learning": true,
     "comment_enable_cli_confirm": "Ask before every tool call in interactive CLI sessions, even when the strategy would auto-approve it (read-only commands and whitelisted patterns are still not re-asked).",
     "enable_cli_confirm": false,
+    "comment_require_paid_confirm": "Ask the user before every billed generation call (video_generate: billed per rendered second, 1-5 minutes each). Default true. Setting it to false lets the model run such calls back to back without asking — including on unattended channels (gateway/bot/cron), which otherwise deny them because nobody can confirm.",
+    "require_paid_confirm": true,
     "comment_approval_timeout": "Seconds to wait for an approval decision (CLI prompt and web card). On timeout timeout_strategy decides.",
     "approval_timeout": 60,
     "comment_timeout_strategy": "What to do on timeout: deny, allow_low_medium, allow_all.",

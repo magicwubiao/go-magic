@@ -199,6 +199,16 @@
                       <n-switch v-model:value="settingsForm.cliConfirm" />
                     </div>
                   </div>
+
+                  <div class="row">
+                    <div class="row-label">
+                      <span class="row-title">{{ t('approval.settings.requirePaidConfirm') }}</span>
+                      <span class="hint">{{ t('approval.settings.requirePaidConfirmHint') }}</span>
+                    </div>
+                    <div class="control">
+                      <n-switch v-model:value="settingsForm.requirePaidConfirm" />
+                    </div>
+                  </div>
                 </n-card>
               </div>
 
@@ -528,6 +538,7 @@ function defaultSettings(): ApprovalSettings {
     trustThreshold: 3,
     enableLearning: true,
     cliConfirm: false,
+    requirePaidConfirm: true,
     approvalTimeout: 60,
     whitelist: [],
   }
@@ -554,6 +565,7 @@ const dirtyFields = computed(() => {
     'trustThreshold',
     'enableLearning',
     'cliConfirm',
+    'requirePaidConfirm',
   ]
   return keys.filter(k => form[k] !== saved[k])
 })

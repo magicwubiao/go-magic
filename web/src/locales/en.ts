@@ -1685,6 +1685,8 @@ export default {
       enableLearningHint: 'Learn command patterns from user approval decisions',
       cliConfirm: 'CLI Confirm',
       cliConfirmHint: 'Require user confirmation before running commands in CLI',
+      requirePaidConfirm: 'Confirm Paid Generation',
+      requirePaidConfirmHint: 'Ask before every billed, multi-minute call such as video generation. Turning this off lets the model run them back to back on your account.',
       timeoutStrategy: 'Timeout Strategy',
       timeoutStrategyHint: 'When an approval request times out (e.g. unattended cron/kanban tasks): deny, or auto-allow low/medium risk',
       timeoutStrategies: {

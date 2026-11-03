@@ -206,6 +206,21 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 		command = describeComputerUseCall(call.ToolArgs)
 		toolDesc = "desktop control"
 		approvalCtx = buildComputerUseContext(call.ToolArgs)
+	case "video_generate":
+		// 付费视频生成：按渲染秒数计费，单次还要跑 1~5 分钟，是整个工具集里
+		// 单次成本最高的一项。风险不在"改坏了什么"，而在"花了多少钱"——
+		// 模型最典型的失败模式是换个 prompt 再生成一次，账单成倍叠上去。
+		// 因此这里不看风险推断，每次调用都要用户点头。
+		//
+		// 设置页关掉"付费生成需确认"（approval.require_paid_confirm=false）时
+		// 故意不填 command：下面 "command == ''" 会直接放行，等价于用户明确
+		// 表态过"这类调用不用问我"。别改成把整个 case 删掉——那样会落到
+		// default 分支，而工具自己声明的 RequiresApproval 还会把请求弹回来。
+		if h.paidConfirmEnabled() {
+			command = describeVideoGenCall(call.ToolArgs)
+			toolDesc = "paid video generation"
+			approvalCtx = buildVideoGenContext(call.ToolArgs)
+		}
 	default:
 		// 连接器工具（mcp_*）：由工具自己声明是否需要确认。以前的 default
 		// 分支直接放行，意味着一个暴露 delete_file 的 MCP server 可以被模型
@@ -301,13 +316,20 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 	// 的内容类工具强制改为询问用户，避免任意代码/文件写入被静默执行。
 	// 白名单/受信 pattern/只读命令 的放行 reason 不同，不受影响。
 	if result.Approved {
-		// computer_use 的合成命令只含"动作 + 坐标"，assessRisk 看不到它真正
-		// 要做什么，只会判低风险并静默放行。桌面控制的爆炸半径远大于任何
-		// 单条命令（可以点掉确认框、往聊天窗口打字），所以只要不是用户显式
-		// 授予过（会话跳过 / 白名单 / 已学习 pattern），就必须先问。
-		// 注意：会话级"全部允许"在 isSessionSkipped 那一步就已经返回了，
-		// 不会落到这里，因此不至于每次点击都弹窗。
-		if call.ToolName == "computer_use" && result.Reason == lowRiskAutoApproveReason {
+		// 付费生成工具（video_generate）：合成命令里的时长/分辨率不含"要花钱"
+		// 这层语义，assessRisk 只会判低风险并静默放行。视频按秒计费，一次
+		// 放过去就是真金白银，所以系统自己的任何自动放行都必须升级成询问。
+		// 只认"用户明确表态过"的三种放行（白名单 / 受信 pattern / strategy=auto），
+		// 见 paidToolNeedsAsk。
+		if isPaidGenerationTool(call.ToolName) && h.paidConfirmEnabled() && paidToolNeedsAsk(result) {
+			result.Approved = false
+			result.AskUser = true
+			result.RiskLevel = approval.RiskHigh
+			result.Reason = "Paid generation requires confirmation — this call costs money and can take minutes"
+			if req.Reason == "" {
+				req.Reason = result.Reason
+			}
+		} else if call.ToolName == "computer_use" && result.Reason == lowRiskAutoApproveReason {
 			result.Approved = false
 			result.AskUser = true
 			result.RiskLevel = approval.RiskHigh
@@ -430,6 +452,12 @@ func (h *ApprovalHook) BeforeTool(ctx context.Context, call *hooks.ToolCallHookR
 			log.Warnf("[Approval] Non-interactive session denied %q (channel=%q, no web approval/promptFunc configured)", command, h.channel)
 			approved = false
 			denyReason = fmt.Sprintf("Denied automatically: this session cannot show an approval prompt (channel=%q, unattended/background mode). File writes inside the session working directory are auto-approved. To let this channel run such operations, set approval.channel_overrides[%q] to \"auto_narrow\" (low/medium risk allowed, high risk still denied) or \"auto\" in config.json; to approve interactively, run the task via the web UI or CLI.", h.channel, h.channel)
+			if isPaidGenerationTool(call.ToolName) && h.paidConfirmEnabled() {
+				// 付费生成不走上面那套"放开 auto_narrow 就好"的建议：auto_narrow
+				// 同样会被升级成询问，改成 auto 才是真的让无人值守通道随便花钱。
+				// 这里只给一条可行动的路径——去能点确认的地方跑。
+				denyReason = fmt.Sprintf("Denied automatically: %s bills per rendered second and this session has no approval prompt (channel=%q). Run it from the web UI or an interactive CLI so the user can confirm the cost; do not retry it in this channel.", call.ToolName, h.channel)
+			}
 			h.manager.Deny(req)
 			h.manager.NotifyApproval(&approval.ApprovalResult{
 				Approved: false,
@@ -735,6 +763,124 @@ func buildComputerUseContext(args map[string]interface{}) string {
 func strArg(args map[string]interface{}, key string) string {
 	s, _ := args[key].(string)
 	return s
+}
+
+// intArgOf 安全取整数参数（JSON 解出来是 float64）。
+func intArgOf(args map[string]interface{}, key string) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
+}
+
+// paidGenerationTools 是"每次调用都直接产生费用"的工具名单。
+//
+// 用显式名单而不是按工具分类猜：图片/TTS 也花钱，但单次几分钱、且常被正常
+// 流程批量调用，逐次确认会把人烦死；视频是按渲染秒数计费，单次还要跑 1~5
+// 分钟，量级差两个数量级。以后要收紧别的付费接口，把名字加进来，并在
+// BeforeTool 的 switch 里给它一个能摊开计费参数的 case。
+var paidGenerationTools = map[string]bool{
+	"video_generate": true,
+}
+
+// isPaidGenerationTool 报告某个工具是否属于"付费生成"（见 paidGenerationTools）。
+func isPaidGenerationTool(name string) bool { return paidGenerationTools[name] }
+
+// paidConfirmEnabled 读设置页的"付费生成需确认"开关
+// （approval.require_paid_confirm，默认 true）。
+//
+// manager 缺失时按**开启**处理：装配缺失是可以修的 bug，钱包漏了修不回来。
+func (h *ApprovalHook) paidConfirmEnabled() bool {
+	if h.manager == nil {
+		return true
+	}
+	return h.manager.GetConfig().PaidConfirmRequired()
+}
+
+// paidToolNeedsAsk 判断一次"已放行"的决策对付费工具是否仍然必须先问人。
+//
+// 只认三种"用户明确表态过"的放行：白名单里的同一条命令、受信 pattern、以及
+// 全局 strategy=auto（= 都别问，包括花钱）。其余自动放行都不算数：
+//   - smart 的"仅因低风险"是系统自己的推断，它看不到"这次要花几块钱"；
+//   - 无人值守通道的 auto_narrow 更是压根没人被问过——视频生成在网关/定时
+//     任务里被自动放行，等于让一个没有审批 UI 的通道替用户花钱。
+func paidToolNeedsAsk(result *approval.ApprovalResult) bool {
+	if result == nil || !result.Approved {
+		return false
+	}
+	switch result.Strategy {
+	case approval.StrategyWhitelist, approval.StrategyAutoApprove:
+		return false
+	}
+	switch result.Reason {
+	case "Trusted command pattern", "Command is whitelisted":
+		return false
+	}
+	return true
+}
+
+// describeVideoGenCall 构造 video_generate 的审批摘要。
+//
+// 审批卡片上必须能看出"这次大概花多少钱"：计费口径是渲染秒数 × 分辨率档位，
+// 所以时长和分辨率要显式写出来（缺省时也要标注是默认值，否则"没写时长"
+// 看起来像"不花钱"）。prompt 放后面——用户靠它认出这是不是自己要的片子。
+func describeVideoGenCall(args map[string]interface{}) string {
+	head := "video_generate"
+	if provider := strArg(args, "provider"); provider != "" {
+		head += " " + provider
+	}
+	if model := strArg(args, "model"); model != "" {
+		head += " " + model
+	}
+	if duration := intArgOf(args, "duration"); duration > 0 {
+		head += fmt.Sprintf(" %ds", duration)
+	} else {
+		head += " (default duration 5s)"
+	}
+	resolution := strArg(args, "resolution")
+	if resolution == "" {
+		resolution = "720p (default)"
+	}
+	head += " " + resolution
+
+	if prompt := strings.TrimSpace(strArg(args, "prompt")); prompt != "" {
+		head += fmt.Sprintf(" — %q", truncateCommand(prompt, 120))
+	}
+	return head
+}
+
+// buildVideoGenContext 给审批卡片说明"为什么这步要问"以及完整的生成参数。
+//
+// 与 computer_use 同一个思路：审批层只拿得到这段文字，而视频生成的成本藏在
+// 参数里（多长的片子、什么分辨率、一张首帧图）。模型最典型的浪费是换个措辞
+// 再生成一次，卡片上把 prompt 原样摊开，用户才看得出这是第几次重试。
+func buildVideoGenContext(args map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString("This call renders a video on a paid provider: billing is per rendered\n")
+	b.WriteString("second and one render takes 1-5 minutes. Each approved call is money\n")
+	b.WriteString("spent, so approve only if you actually asked for this clip.")
+
+	if prompt := strings.TrimSpace(strArg(args, "prompt")); prompt != "" {
+		fmt.Fprintf(&b, "\n\n--- prompt ---\n%s", truncateCommand(prompt, 600))
+	}
+	if negative := strings.TrimSpace(strArg(args, "negative_prompt")); negative != "" {
+		fmt.Fprintf(&b, "\n\n--- negative prompt ---\n%s", truncateCommand(negative, 200))
+	}
+	if url := strArg(args, "image_url"); url != "" {
+		fmt.Fprintf(&b, "\n\nfirst frame (url): %s", truncateCommand(url, 200))
+	}
+	if path := strArg(args, "image_path"); path != "" {
+		fmt.Fprintf(&b, "\nfirst frame (local): %s", truncateCommand(path, 200))
+	}
+	if out := strArg(args, "output_path"); out != "" {
+		fmt.Fprintf(&b, "\noutput: %s", truncateCommand(out, 200))
+	}
+	return b.String()
 }
 
 // buildConnectorCallContext 构造 MCP 连接器工具的审批上下文。

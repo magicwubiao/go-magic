@@ -30,6 +30,13 @@ func NewManagerFromAppConfig(ac *config.ApprovalConfig) (*Manager, error) {
 		}
 		approvalCfg.EnableLearning = ac.EnableLearning
 		approvalCfg.EnableCLIConfirm = ac.EnableCLIConfirm
+		// 付费生成确认默认开启：只有配置文件里显式写了 false 才关。
+		// 拷贝一份值而不是共享指针：pkg/config 那边可能在热加载时原地改这个指针
+		// 指向的值，审批引擎手里必须是一份稳定的快照。
+		if ac.RequirePaidConfirm != nil {
+			v := *ac.RequirePaidConfirm
+			approvalCfg.RequirePaidConfirm = &v
+		}
 		// 仅在显式设置时覆盖 timeout_strategy，否则保留 DefaultConfig 的 deny。
 		if ac.TimeoutStrategy != "" {
 			approvalCfg.TimeoutStrategy = TimeoutStrategy(ac.TimeoutStrategy)

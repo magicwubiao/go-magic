@@ -69,3 +69,39 @@ func TestNewManagerFromAppConfigZeroValuesKeepDefaults(t *testing.T) {
 		t.Errorf("timeout_strategy = %q, want default %q", got.TimeoutStrategy, TimeoutStrategyDeny)
 	}
 }
+
+// 付费生成确认开关默认必须是 true：旧配置文件里没有这一项（nil），
+// 读成 false 等于升级后静默放开付费调用。
+func TestNewManagerFromAppConfigPaidConfirmDefaultsOn(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+
+	mgr, err := NewManagerFromAppConfig(&config.ApprovalConfig{Strategy: "smart"})
+	if err != nil {
+		t.Fatalf("NewManagerFromAppConfig error: %v", err)
+	}
+	if !mgr.GetConfig().PaidConfirmRequired() {
+		t.Error("require_paid_confirm missing in config must still require confirmation")
+	}
+}
+
+func TestNewManagerFromAppConfigPaidConfirmExplicitOff(t *testing.T) {
+	t.Setenv("GO_MAGIC_HOME", t.TempDir())
+
+	off := false
+	mgr, err := NewManagerFromAppConfig(&config.ApprovalConfig{
+		Strategy:           "smart",
+		RequirePaidConfirm: &off,
+	})
+	if err != nil {
+		t.Fatalf("NewManagerFromAppConfig error: %v", err)
+	}
+	if mgr.GetConfig().PaidConfirmRequired() {
+		t.Error(`require_paid_confirm=false was ignored`)
+	}
+
+	// 设置页保存后走的是 SetRequirePaidConfirm，两条路径必须同源。
+	mgr.SetRequirePaidConfirm(true)
+	if !mgr.GetConfig().PaidConfirmRequired() {
+		t.Error("SetRequirePaidConfirm(true) did not take effect")
+	}
+}

@@ -1689,6 +1689,8 @@ export default {
       enableLearningHint: '从用户审批决策中学习命令模式',
       cliConfirm: 'CLI 确认',
       cliConfirmHint: '在 CLI 中执行命令前要求用户确认',
+      requirePaidConfirm: '付费生成需确认',
+      requirePaidConfirmHint: '视频生成这类按次计费、耗时数分钟的调用，每次执行前都先问你（关闭后模型可自行连续生成，等于让它直接花你的钱）',
       timeoutStrategy: '超时策略',
       timeoutStrategyHint: '审批请求超时（如无人值守的 cron/kanban 任务）后的处理方式',
       timeoutStrategies: {

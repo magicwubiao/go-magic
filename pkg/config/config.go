@@ -589,8 +589,14 @@ type ApprovalConfig struct {
 	TrustThreshold   int    `json:"trust_threshold"`    // Auto-approve after N trusted uses
 	EnableLearning   bool   `json:"enable_learning"`    // Learn from user decisions
 	EnableCLIConfirm bool   `json:"enable_cli_confirm"` // Enable CLI confirmation prompt
-	ApprovalTimeout  int    `json:"approval_timeout"`   // Approval timeout in seconds
-	TimeoutStrategy  string `json:"timeout_strategy"`   // "deny", "allow_low_medium", "allow_all"
+	// RequirePaidConfirm 控制"付费生成工具（video_generate 等）每次调用都要确认"。
+	//
+	// 用 *bool 而不是 bool：默认值是 **true**，而 bool 零值 false 会让"配置文件里
+	// 没写这一项"被读成"用户主动关掉了确认"，直接导致升级后老配置静默放行付费调用。
+	// nil = 用默认（true），显式 false 才是关掉。
+	RequirePaidConfirm *bool  `json:"require_paid_confirm,omitempty"`
+	ApprovalTimeout    int    `json:"approval_timeout"` // Approval timeout in seconds
+	TimeoutStrategy    string `json:"timeout_strategy"` // "deny", "allow_low_medium", "allow_all"
 	// DangerousPatterns 追加到内置硬性底线之上（不替换）。
 	DangerousPatterns []string `json:"dangerous_patterns,omitempty"`
 	// HighRiskPatterns 追加到内置"高风险但可批准"列表之上（不替换）。
@@ -601,18 +607,28 @@ type ApprovalConfig struct {
 	ChannelOverrides map[string]string `json:"channel_overrides,omitempty"`
 }
 
+// PaidConfirmRequired 报告付费生成工具是否必须逐次确认（默认 true）。
+//
+// 字段是可空指针（nil = "配置文件里没写" = 默认开启），所有读取点都该走这里：
+// 直接读字段会把 nil 和显式 false 混成一件，静默放开付费调用。
+func (c *ApprovalConfig) PaidConfirmRequired() bool {
+	return c == nil || c.RequirePaidConfirm == nil || *c.RequirePaidConfirm
+}
+
 // DefaultApprovalConfig returns default approval configuration.
 //
 // 这里的默认值必须与 internal/approval.DefaultConfig 保持一致：两处各写一套
 // 会直接变成"设置页显示 300s、CLI 提示 60s 就超时"这种自相矛盾的行为。
 func DefaultApprovalConfig() *ApprovalConfig {
+	requirePaidConfirm := true
 	return &ApprovalConfig{
-		Strategy:         "smart",
-		TrustThreshold:   3,
-		EnableLearning:   true,
-		EnableCLIConfirm: false,
-		ApprovalTimeout:  60,
-		TimeoutStrategy:  "deny",
+		Strategy:           "smart",
+		TrustThreshold:     3,
+		EnableLearning:     true,
+		EnableCLIConfirm:   false,
+		RequirePaidConfirm: &requirePaidConfirm,
+		ApprovalTimeout:    60,
+		TimeoutStrategy:    "deny",
 	}
 }
 

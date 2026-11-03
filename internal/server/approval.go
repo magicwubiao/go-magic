@@ -346,6 +346,10 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 			EnableLearning  bool   `json:"enable_learning"`
 			TimeoutStrategy string `json:"timeout_strategy"`
 			ApprovalTimeout int    `json:"approval_timeout"`
+			// 指针：null/缺省 = 不更新。这个开关默认 true，用 bool 没法区分
+			// "没带这个字段"和"用户关掉了"——老客户端不带它时会被读成 false，
+			// 一保存就把确认开关悄悄关掉。
+			RequirePaidConfirm *bool `json:"require_paid_confirm"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -383,6 +387,9 @@ func (s *Server) handleApprovalSettings(w http.ResponseWriter, r *http.Request) 
 		}
 		mgr.SetEnableCLIConfirm(req.CLIPrompt)
 		mgr.SetEnableLearning(req.EnableLearning)
+		if req.RequirePaidConfirm != nil {
+			mgr.SetRequirePaidConfirm(*req.RequirePaidConfirm)
+		}
 
 		// 持久化到主配置文件
 		s.syncApprovalToMainConfig(mgr)
@@ -403,6 +410,7 @@ func (s *Server) respondApprovalSettings(w http.ResponseWriter, mgr *approval.Ma
 		"timeout_strategy":     cfg.TimeoutStrategy,
 		"enable_learning":      cfg.EnableLearning,
 		"cli_confirm":          cfg.EnableCLIConfirm,
+		"require_paid_confirm": cfg.PaidConfirmRequired(),
 		"trust_threshold":      cfg.TrustThreshold,
 		"approval_timeout":     cfg.ApprovalTimeout,
 		"enable_whitelist":     cfg.EnableWhitelist,
@@ -474,14 +482,24 @@ func (s *Server) syncApprovalToMainConfig(mgr *approval.Manager) {
 	defer s.unlockCfgForWrite()
 	// lockCfgForWrite 保证 s.cfg 非 nil（nil 时会补 DefaultConfig）。
 	ac := mgr.GetConfig()
-	s.cfg.Approval = &appconfig.ApprovalConfig{
-		Strategy:         string(ac.Strategy),
-		TrustThreshold:   ac.TrustThreshold,
-		EnableLearning:   ac.EnableLearning,
-		EnableCLIConfirm: ac.EnableCLIConfirm,
-		ApprovalTimeout:  ac.ApprovalTimeout,
-		TimeoutStrategy:  string(ac.TimeoutStrategy),
+	// 在现有结构上原地改，而不是新建一个字面量：字面量只带 PUT 支持的几个字段，
+	// 会把 channel_overrides / dangerous_patterns / high_risk_patterns 一起冲掉
+	// ——用户点一次"保存设置"就静默丢了按通道策略和自定义危险模式。
+	next := &appconfig.ApprovalConfig{}
+	if s.cfg.Approval != nil {
+		*next = *s.cfg.Approval
 	}
+	next.Strategy = string(ac.Strategy)
+	next.TrustThreshold = ac.TrustThreshold
+	next.EnableLearning = ac.EnableLearning
+	next.EnableCLIConfirm = ac.EnableCLIConfirm
+	next.ApprovalTimeout = ac.ApprovalTimeout
+	next.TimeoutStrategy = string(ac.TimeoutStrategy)
+	// 指针字段写实值而不是留着 nil：用户关掉之后重启还得是关着的，
+	// "nil = 默认 true" 只适用于从来没表过态的配置。
+	requirePaidConfirm := ac.PaidConfirmRequired()
+	next.RequirePaidConfirm = &requirePaidConfirm
+	s.cfg.Approval = next
 	// persistConfig(true) 刷新磁盘上的 gateway 段（网关进程扫码写入的凭据
 	// 可能比 server 内存副本新），避免全量落盘把新凭据还原成旧值。
 	_ = s.persistConfig(true)
