@@ -9,6 +9,11 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@file-viewer/core": "^3.3.3",
+    "@file-viewer/renderer-presentation": "^3.3.3",
+    "@file-viewer/renderer-spreadsheet": "^3.3.3",
+    "@file-viewer/renderer-word": "^3.3.3",
+    "@file-viewer/vue3": "^3.3.3",
     "@vicons/ionicons5": "^0.12.0",
     "highlight.js": "^11.9.0",
     "marked": "^12.0.0",

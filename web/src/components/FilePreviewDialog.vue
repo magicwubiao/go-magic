@@ -280,6 +280,17 @@
           </template>
         </div>
 
+        <!-- Office 文档（docx/xlsx/pptx/odt/ods/odp）：Flyfish 渲染器在浏览器端
+             解析。渲染失败或解析出错时整体切到错误态（含下载出口）。 -->
+        <OfficeFilePreview
+          v-else-if="kind === 'office' && officeFile"
+          :file="officeFile"
+          :filename="officeFile.name"
+          :name="name"
+          :type="ext"
+          @failed="onOfficeFailed"
+        />
+
         <div v-else-if="kind === 'binary'" class="binary-preview-wrapper">
           <n-icon size="48" depth="3"><DocumentOutline /></n-icon>
           <n-text depth="3" class="binary-preview-text">{{ t('chat.binaryFilePreview') }}</n-text>
@@ -324,7 +335,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
 import { NButton, NIcon, NModal, NSpin, NTag, NText } from 'naive-ui'
@@ -348,6 +359,10 @@ import {
 } from '@vicons/ionicons5'
 import { marked } from 'marked'
 import * as sessionsApi from '@/api/sessions'
+
+// Office 文档预览（Flyfish 渲染器）按需加载：体积不小，只有真的预览到
+// docx/xlsx/pptx 等格式时才拉取这一块代码。
+const OfficeFilePreview = defineAsyncComponent(() => import('./OfficeFilePreview.vue'))
 
 // ===== Syntax highlighting (highlight.js, GitHub Light palette) =====
 import hljs from 'highlight.js/lib/core'
@@ -425,14 +440,21 @@ const visible = computed({
   set: (value: boolean) => emit('update:show', value),
 })
 
-type Kind = 'none' | 'text' | 'image' | 'web' | 'binary'
+type Kind = 'none' | 'text' | 'image' | 'web' | 'office' | 'binary'
 
 // 图片：浏览器可直接渲染（ico 归入图片，与既有行为一致）
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico']
 // 浏览器原生可预览：HTML / PDF / 视频 / 音频，走托管地址由 iframe 或原生控件加载
 const WEB_EXTS = ['html', 'htm', 'pdf', 'mp4', 'webm', 'mov', 'm4v', 'mpg', 'mpeg', 'ogv', 'mp3', 'wav', 'm4a', 'flac', 'aac', 'oga', 'ogg']
+// Office Open XML / OpenDocument：交给 Flyfish 渲染器在浏览器端解析预览。
+// 老 .doc/.xls/.ppt 二进制格式不在其中——保真度差（.ppt 公开版还带水印），
+// 保持走 binary 分支给出明确的下载出口更诚实。
+const OFFICE_EXTS = ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp']
+// Office 预览的体积护栏：渲染器在前端解析整个文件，几十 MB 的表格会拖垮
+// 标签页。超过这个值直接提示下载，而不是让用户对着白屏等崩溃。
+const MAX_OFFICE_PREVIEW_BYTES = 64 * 1024 * 1024
 // 无法在浏览器渲染、仅提供下载的类型
-const BINARY_EXTS = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'avi', 'mkv', 'wmv', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
+const BINARY_EXTS = ['exe', 'dll', 'so', 'dylib', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'doc', 'xls', 'ppt', 'avi', 'mkv', 'wmv', 'woff', 'woff2', 'ttf', 'eot', 'class', 'jar', 'war', 'pyc', 'o', 'a', 'lib', 'bin', 'dat', 'db', 'sqlite', 'wasm']
 
 // 可被 <video> 播放的容器。mkv 已从列表移除：Chrome 不支持 Matroska 容器，
 // 命中它只会渲染出一个永远播不起来的播放器（死条目），不如落到 BINARY_EXTS
@@ -493,6 +515,9 @@ const error = ref('')
 const content = ref('')
 const originalContent = ref('')
 const kind = ref<Kind>('none')
+// office 分支的完整二进制：Flyfish 渲染器需要整个文件，不能走 2MB 上限的
+// 正文读取接口，用下载票据拉 blob 后交给 OfficeFilePreview。
+const officeFile = ref<File | null>(null)
 const isEditing = ref(false)
 const editingContent = ref('')
 const saving = ref(false)
@@ -665,6 +690,7 @@ function reset() {
   content.value = ''
   originalContent.value = ''
   kind.value = 'none'
+  officeFile.value = null
   isEditing.value = false
   editingContent.value = ''
   saving.value = false
@@ -830,6 +856,26 @@ async function load() {
       }, 6000)
       return
     }
+    if (OFFICE_EXTS.includes(e)) {
+      if (typeof props.size === 'number' && props.size > MAX_OFFICE_PREVIEW_BYTES) {
+        error.value = t('chat.tooLargeToPreview', { size: formatSize(MAX_OFFICE_PREVIEW_BYTES) })
+        return
+      }
+      // 渲染器要整个文件：下载票据没有 2MB 限制，一次拉全量
+      const res = await fetch(downloadUrl.value)
+      if (seq !== loadSeq) return
+      if (!res.ok) {
+        error.value = `${t('files.previewError')}: ${res.statusText}`
+        return
+      }
+      const blob = await res.blob()
+      if (seq !== loadSeq) return
+      officeFile.value = new File([blob], props.name || props.typeName || `file.${e}`, {
+        type: blob.type || 'application/octet-stream',
+      })
+      kind.value = 'office'
+      return
+    }
     if (BINARY_EXTS.includes(e)) {
       kind.value = 'binary'
       return
@@ -871,6 +917,11 @@ function onWebError() {
   clearWebTimer()
   webLoading.value = false
   webError.value = t('files.previewError')
+}
+
+// Office 渲染失败：切到错误态。error 分支自带下载出口，用户不至于卡死。
+function onOfficeFailed(message: string) {
+  error.value = message || t('files.previewError')
 }
 
 // ===== 图片缩放 =====
