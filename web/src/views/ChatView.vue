@@ -7185,56 +7185,59 @@ onActivated(() => {
 }
 
 /* 上下文用量浮层：n-popover teleport 到 body，样式必须写在全局区
-   （scoped 样式缺 data-v-xxx 会完全失效，见文件末尾说明）。 */
+   （scoped 样式缺 data-v-xxx 会完全失效，见文件末尾说明）。
+   紧凑版式：260px 宽，窄屏整体收窄。上限取 calc(100vw - 72px)：
+   popover 自身被媒体查询限到 calc(100vw - 40px)，再扣掉 popover 左右
+   内边距与边框（约 30px），面板必须落在 popover 内容区之内——面板比
+   popover 内容区宽是上一版移动端右侧被裁的直接原因。 */
 .ctx-usage-panel {
-  width: 300px;
-  /* 移动端浮层被媒体查询限到 calc(100vw - 40px)，面板自身也要跟着收窄，
-     否则固定 300px 会把右侧的百分比/token 数裁掉（popover 还有内边距，多留 16px）。 */
-  max-width: calc(100vw - 56px);
+  width: 260px;
+  max-width: calc(100vw - 72px);
   box-sizing: border-box;
-  padding: 2px 4px;
-  font-size: 13px;
+  padding: 2px;
+  font-size: 12px;
 }
 .ctx-usage-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #333;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 .ctx-usage-total {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-bottom: 6px;
   /* 窄屏放不下时副文案换行，别把百分比挤变形 */
   flex-wrap: wrap;
 }
 .ctx-usage-percent {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
   color: #333;
   line-height: 1;
 }
 .ctx-usage-sub {
-  font-size: 12px;
+  font-size: 11px;
   color: #999;
 }
 .ctx-usage-bar {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .ctx-usage-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 .ctx-usage-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  font-size: 12px;
 }
 .ctx-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex: none;
 }
