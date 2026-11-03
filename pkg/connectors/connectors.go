@@ -565,10 +565,12 @@ var catalog = []Connector{
 	//
 	// 只保留"纯远程"条目：内置目录要能用在服务器端部署上（go-magic 经常跑在
 	// 远端），而下面两类依赖"同一台机器上装着那个客户端"的条目一旦内置，在
-	// 服务端就是必然失败——用户看到的只是"连不上"。它们已移到
-	// examples/plugins/09-mcp-local-design-apps（跟着示例走，本地装才用）：
+	// 服务端就是必然失败——用户看到的只是"连不上"。它们已移到示例插件
+	// （跟着示例走，本地装才用，一个软件一个示例）：
 	//   - Figma 桌面版 MCP（127.0.0.1:3845，需 Figma 客户端开着 Dev Mode）
+	//     → examples/plugins/09-mcp-figma-desktop
 	//   - 即时设计画布桥接（本地进程 WebSocket 连客户端里的 MCP Bridge 插件）
+	//     → examples/plugins/10-mcp-jsdesign
 	{
 		ID:          "figma-api",
 		Name:        "Figma (API token)",
@@ -637,7 +639,7 @@ var catalog = []Connector{
 	//     x-mg-useraccesstoken（缺 token 时它自己会在响应里提示这个头名）。
 	//   - 即时设计（js.design）没有公共远程端点，官方给的是"画布桥接"：
 	//     本地 npx 进程用 WebSocket 连设计端里的 MCP Bridge 插件。它依赖本机
-	//     装着客户端，已移到 examples/plugins/09-mcp-local-design-apps（实测
+	//     装着客户端，已移到 examples/plugins/10-mcp-jsdesign（实测
 	//     `npx -y jsdesign-mcp` 的 initialize/tools 都正常，但没开插件时工具
 	//     调用会失败）。
 	//   - 蓝湖官方没有 MCP，社区 mcp-lanhu 用浏览器 Cookie 读设计稿；实测
@@ -728,7 +730,8 @@ var catalog = []Connector{
 	//   examples/plugins/06-mcp-blender
 	//   examples/plugins/07-mcp-unity
 	//   examples/plugins/08-mcp-godot
-	//   examples/plugins/09-mcp-local-design-apps   （Figma 桌面版 / 即时设计）
+	//   examples/plugins/09-mcp-figma-desktop
+	//   examples/plugins/10-mcp-jsdesign
 	// 要加回内置前先想清楚服务端部署场景。Unreal 也在这批里，但理由不同：它要
 	// UE 5.8+ 的内置 ModelContextProtocol 插件，且必须同时启用 All Toolsets
 	// （只开前者时 server 在跑、tools/list 却是空的）再勾 Auto Start Server，
