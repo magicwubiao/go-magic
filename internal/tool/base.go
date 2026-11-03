@@ -19,6 +19,19 @@ type Tool interface {
 	Execute(ctx context.Context, params map[string]interface{}) (interface{}, error)
 }
 
+// TimeoutProvider 是工具可选实现的接口：自己声明执行超时预算。
+//
+// 不用 Tool 的方法而是拆成可选接口：Tool 是几百个实现的公共契约，加一个
+// 方法会让所有测试桩集体失效，而绝大多数工具 60s 的默认值完全够用。
+//
+// 需要它的典型是远程 MCP 工具——读一篇 wiki、跑一次代码扫描、操作浏览器
+// 本来就要几十上百秒，按 DefaultTimeout(60s) 判超时等于把正常慢调用报成
+// 失败（实测 deepwiki 读 facebook/react 的 wiki 要 79s）。返回值超过
+// MaxTimeout 时仍按 MaxTimeout 截断。
+type TimeoutProvider interface {
+	Timeout() time.Duration
+}
+
 // BaseTool 提供工具的默认实现基础类
 type BaseTool struct {
 	name        string

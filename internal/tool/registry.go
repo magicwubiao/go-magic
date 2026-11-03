@@ -404,6 +404,15 @@ func (r *Registry) Register(t Tool) {
 		log.Printf("[Tool] duplicate tool name %q: %T replaced by %T", t.Name(), prev, t)
 	}
 	r.tools[t.Name()] = t
+
+	// 工具自带超时预算（见 TimeoutProvider）：注册时落到 timeouts 表，
+	// 这样 GetTimeout 不必知道工具类型。显式 SetTimeout 仍可覆盖它——
+	// 调用点通常注册完再调 SetTimeout，因此顺序天然正确。
+	if tp, ok := t.(TimeoutProvider); ok {
+		if d := tp.Timeout(); d > 0 {
+			r.timeouts[t.Name()] = d
+		}
+	}
 }
 
 // Unregister 注销一个工具

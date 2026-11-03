@@ -563,6 +563,11 @@ func (t *MCPPluginTool) Execute(ctx context.Context, args map[string]any) (any, 
 	return t.runtime.CallTool(ctx, t.serverName, t.tool.Name, args)
 }
 
+// Timeout 实现 tool.TimeoutProvider：插件 MCP 工具与内置 MCP 工具同一口径
+// （见 mcp.MCPTool.Timeout）。远程工具的耗时由上游服务决定，60s 的默认值
+// 会把正常的慢查询（读 wiki、代码扫描）误判成失败。
+func (t *MCPPluginTool) Timeout() time.Duration { return tool.MaxTimeout }
+
 // RequiresApproval 恒为 true：插件 MCP 工具的 annotations 是插件作者自声明的，
 // 不是信任根——把 destructive 工具标成 readOnlyHint 就能免审批直接执行。
 // 与插件 CLI 工具同一口径（见 cliPluginTool.RequiresApproval）。

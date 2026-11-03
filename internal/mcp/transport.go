@@ -339,12 +339,21 @@ type SSETransport struct {
 	auth AuthTokenProvider
 }
 
-// defaultSSEConnectTimeout 是 SSE/Streamable-HTTP 传输单次 HTTP 请求的超时。
+// defaultSSEConnectTimeout 是 SSE/Streamable-HTTP 传输"等到响应头"的超时，
+// **不是**整次请求的超时。
 //
 // 这个值必须**明显小于**前端 request() 的 30s AbortController 超时，
 // 否则两端同时踩线：后端还在等握手、前端已经 abort，用户看到"保存转圈
 // 到失败"，且拿不到任何原因。留出 2 倍余量后，后端总能在前端超时前
 // 返回一条带原因的错误。
+//
+// 早期实现把它当成 http.Client.Timeout（整次请求，含读完 body），结果
+// 所有"服务端先回 200 再慢慢吐 SSE"的工具调用都被 15s 掐断：
+// deepwiki 的 read_wiki_contents 对中大型仓库要 60~90s（实测
+// facebook/react 79s / 1.3MB），报出来的一句话却是
+// "failed to read SSE response: context deadline exceeded"——用户以为是
+// 网络问题，其实是我们自己提前挂了电话。远程 MCP 工具的耗时由调用方
+// ctx（工具超时预算）决定，传输层只负责"对端是否还活着"。
 const defaultSSEConnectTimeout = 15 * time.Second
 
 // NewSSETransport creates a new SSE transport
@@ -376,14 +385,35 @@ func NewSSETransportWithOptions(url string, headers map[string]string, timeout t
 		}
 	}
 	return &SSETransport{
-		url:        url,
-		client:     &http.Client{Timeout: timeout},
-		closed:     false,
-		reconnect:  true,
+		url:    url,
+		client: newConnectTimeoutClient(timeout),
+		closed: false,
+		reconnect: true,
 		maxRetries: 3,
 		retryDelay: time.Second,
 		headers:    copied,
 	}, nil
+}
+
+// newConnectTimeoutClient 构造一个"只在等响应头阶段设限"的 HTTP client。
+//
+// 这里刻意不给 http.Client 设 Timeout：Timeout 是**整次请求**的硬上限，
+// 命中后在读 body 半路掐断连接，把服务端正常的慢响应伪装成网络故障
+// （症状就是 "failed to read SSE response: context deadline exceeded"）。
+// 远程 MCP 调用多慢是业务属性——读一篇 wiki、跑一次代码扫描本来就要几十
+// 上百秒——只能由调用方 ctx（工具超时预算）决定；传输层唯一该管的是
+// "对端迟迟不说话"。
+//
+// 复用 http.DefaultTransport.Clone() 而不是裸 &http.Transport{}：后者会
+// 丢掉 ProxyFromEnvironment（企业代理、本机 Clash 全指望它）、连接池参数
+// 和 ForceAttemptHTTP2，等于让所有远程连接器退回直连 + 每次新建 TCP。
+func newConnectTimeoutClient(timeout time.Duration) *http.Client {
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		clone := base.Clone()
+		clone.ResponseHeaderTimeout = timeout
+		return &http.Client{Transport: clone}
+	}
+	return &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: timeout}}
 }
 
 // AuthTokenProvider 为传输层供给 OAuth 凭据（oauth.go 的 oauthProvider 实现）。
@@ -433,10 +463,11 @@ func (t *SSETransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCR
 		maxAttempts = t.maxRetries
 	}
 
-	// 重试共享调用方的超时预算（ctx），而每次 doRequest 自己还有 15s 的
-	// client.Timeout。若不设防，3 次重试最坏会花掉 3×15s + 退避，把
-	// initialize 的整体预算吃光，最终只吐出一句 "context deadline exceeded"
-	// ——用户看不出到底是 DNS、超时还是服务端拒绝。
+	// 重试共享调用方的超时预算（ctx）；单次请求只有在"等响应头"阶段
+	// 受 defaultSSEConnectTimeout 约束（见 newConnectTimeoutClient）。
+	// 若不在每次尝试前检查剩余预算，3 次重试可能把 initialize 的整体预算
+	// 吃光，最终只吐出一句 "context deadline exceeded"——用户看不出到底
+	// 是 DNS、超时还是服务端拒绝。
 	//
 	// 这里要求每次尝试前 ctx 至少还剩 attemptBudget：不够就停止重试并
 	// 原样返回上一次的真实错误，让"连接超时"这类可操作信息活到最后。

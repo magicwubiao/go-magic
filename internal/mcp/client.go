@@ -1232,6 +1232,18 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (int
 	return t.manager.CallTool(ctx, t.serverName, t.tool.Name, args)
 }
 
+// mcpToolTimeout 是远程 MCP 工具的执行预算，取执行器的硬上限
+// （tool.MaxTimeout=300s）。这里不能复用 tool 包常量：internal/mcp 被 tool
+// 的上层依赖，反向 import 会成环。
+//
+// 为什么必须比 60s 大：远程工具的耗时由上游业务决定，不由我们定。实测
+// deepwiki 的 read_wiki_contents 读 facebook/react 要 79s、1.3MB；按默认
+// 60s 判超时，用户看到的永远是"工具失败"，而服务端其实还在正常干活。
+const mcpToolTimeout = 300 * time.Second
+
+// Timeout 实现 tool.TimeoutProvider：远程 MCP 工具按 300s 预算执行。
+func (t *MCPTool) Timeout() time.Duration { return mcpToolTimeout }
+
 // RequiresApproval 实现 tool.ApprovalAware：报告这次调用是否需要人工确认。
 //
 // 判定依据是 MCP 的 tool annotations（2025-03-26 引入，可选字段）：
@@ -1672,9 +1684,18 @@ func (m *Manager) HealthCheck(name string) error {
 }
 
 // Reconnect attempts to reconnect to an MCP server
+//
+// 采用"先建新、再原子替换、最后关旧"的顺序，而不是"先断开再连"。
+//
+// 旧实现是 Disconnect → connect，中间那段空窗期 clients 里没有这个条目，
+// 任何并发的工具调用都会拿到 "MCP server 'xxx' not found"；更糟的是续接
+// 的 connect 一旦失败（服务端抖动、鉴权过期），条目就永久消失，后续所有
+// 调用全是 not found，只能靠用户手动重连复活。串到日志里就是"一次超时
+// 之后连环报错"，且最后一句错误完全指错方向（说没有这个 server，其实
+// 是它连不上）。
 func (m *Manager) Reconnect(name string) error {
 	m.mu.RLock()
-	client, exists := m.clients[name]
+	old, exists := m.clients[name]
 	if !exists {
 		m.mu.RUnlock()
 		return fmt.Errorf("MCP server '%s' not found", name)
@@ -1682,15 +1703,38 @@ func (m *Manager) Reconnect(name string) error {
 	// config 是构造后不再改写的只读字段，在 Manager 读锁内取值即可。
 	// 旧实现在这里额外调了一次 client.mu.RUnlock() 却没有先 RLock，
 	// 对已连接的 server 重连必然触发 "sync: RUnlock of unlocked RWMutex".
-	config := client.config
+	config := old.config
 	m.mu.RUnlock()
 
-	// 先断开旧连接(失败可忽略：目标就是重建)，再走统一的连接路径。
-	if err := m.Disconnect(name); err != nil {
-		log.Warnf("[MCP] reconnect: disconnect %q before reconnect failed: %v", name, err)
+	client, err := m.buildClient(name, config)
+	if err != nil {
+		// 旧条目原样保留：宁可让用户看到"连不上 + 真实原因"，也不能把
+		// 条目删掉变成"没有这个 server"。旧 transport 若还活着，下一次
+		// 调用仍有机会成功。
+		m.recordFailure(name, err)
+		log.Warnf("[MCP] reconnect %q failed, keeping previous entry: %v", name, err)
+		return err
 	}
 
-	return m.connect(name, config)
+	m.mu.Lock()
+	if cur, ok := m.clients[name]; !ok || cur != old {
+		// 并发窗口里别人已经换上了新连接（或用户主动断开），放弃这次结果，
+		// 否则会泄漏一条没人持有的 transport（stdio 还会残留子进程）。
+		m.mu.Unlock()
+		_ = client.transport.Close()
+		return fmt.Errorf("MCP server '%s' already reconnected", name)
+	}
+	m.clearFailureLocked(name)
+	m.clients[name] = client
+	tools := client.snapshotTools()
+	m.mu.Unlock()
+
+	// 关旧连接放在替换之后、锁外：stdio 的 Close 要等子进程退出（最长 5s），
+	// 绝不能攥着 Manager.mu 做。
+	_ = old.transport.Close()
+	m.rememberTools(name, tools)
+	log.Infof("[MCP] server %q reconnected", name)
+	return nil
 }
 
 // RefreshTools rediscovers tools from a connected MCP server
