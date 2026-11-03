@@ -102,6 +102,7 @@ func Categories() []Category {
 		{ID: "data", Label: "Data & Databases"},
 		{ID: "productivity", Label: "Productivity"},
 		{ID: "design", Label: "Design & Creative"},
+		{ID: "game", Label: "3D & Game Engines"},
 		{ID: "automation", Label: "Browser & Automation"},
 		{ID: "home", Label: "Home & Devices"},
 		{ID: "local", Label: "Local & Files"},
@@ -732,6 +733,73 @@ var catalog = []Connector{
 		}},
 		DocsURL: "https://github.com/MrDgbot/lanhu-mcp",
 		Tags:    []string{"design", "handoff", "design-to-code", "cn"},
+	},
+
+	// --- 3D & Game Engines ---
+	// 这几条都是「本地桥」：MCP server 自身不碰引擎，真正干活的是宿主软件；
+	// 条目只负责把 server 拉起来。所以宿主软件没开、或桥接插件没启用时，
+	// 表现是工具调用失败/空工具列表，而不是连接失败——描述里必须写清这个前置条件，
+	// 否则用户会以为是 go-magic 连不上。
+	//   - Blender：addon 在 Blender 里点 Connect 后监听 127.0.0.1:9876，server 反向连它。
+	//   - Unity：CoplayDev 的 Unity 包（v10）负责与 Editor 通信，server 从 PyPI 用 uvx 拉。
+	//   - Godot：不需要任何 addon，server 直接调 Godot 的 CLI（--headless --script），
+	//     所以唯一的依赖是"能找到一个可用的 Godot 可执行文件"。
+	//
+	// Unreal 已从内置移除：它依赖 UE 5.8+ 的内置 ModelContextProtocol 插件，且必须
+	// 同时启用 All Toolsets（只开前者时 server 在跑但 tools/list 为空），还要手动
+	// 打开 Auto Start Server；实验性功能、工具在 game thread 串行执行，版本与配置
+	// 差异太大，内置一条"装完还得改四处设置"的条目只会变成"连上了却没有工具"的
+	// 投诉源。需要的人手填自定义 MCP：Transport=http，URL=http://127.0.0.1:8000/mcp。
+	{
+		ID:          "blender",
+		Name:        "Blender",
+		Description: "Prompt-assisted 3D modeling, scene building and material editing in Blender. Requires the MCP for Blender add-on installed in Blender and its Connect button pressed (the add-on listens on 127.0.0.1:9876); needs uv/uvx.",
+		Category:    "game",
+		Transport:   "stdio",
+		Command:     "uvx",
+		Args:        []string{"mcp-for-blender"},
+		DefaultName: "blender",
+		DocsURL:     "https://github.com/ahujasid/blender-mcp",
+		Tags:        []string{"3d", "modeling", "blender", "local"},
+	},
+	{
+		ID:          "unity",
+		Name:        "Unity",
+		Description: "Create scenes and GameObjects, edit C# scripts, manage assets and run tests in the Unity Editor. Requires the \"MCP for Unity\" package added to the project via Unity Package Manager; needs uv/uvx.",
+		Category:    "game",
+		Transport:   "stdio",
+		Command:     "uvx",
+		Args:        []string{"--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"},
+		DefaultName: "unity",
+		DocsURL:     "https://github.com/CoplayDev/unity-mcp",
+		Tags:        []string{"3d", "game-engine", "unity", "csharp", "local"},
+	},
+	{
+		ID:          "godot",
+		Name:        "Godot",
+		Description: "Drive the Godot engine from the CLI: launch the editor, run/stop projects, read debug output, create scenes and nodes, export MeshLibrary. Requires Godot 4.x installed — the server auto-detects common install locations, so point the path at your executable here for portable installs. Needs Node/npx.",
+		Category:    "game",
+		Transport:   "stdio",
+		Command:     "npx",
+		Args:        []string{"-y", "@coding-solo/godot-mcp"},
+		DefaultName: "godot",
+		// GODOT_PATH 是"可执行文件在哪"，不是密钥。声明成凭据字段是刻意的：
+		// 空 env 会被运行期当作待填凭据并阻断连接（见 agentplugin/credref.go），
+		// 而不填它 server 也能起来、只是每次调工具都报 "Could not find a valid
+		// Godot executable" —— 那种失败用户无处可改。填错的代价很小：
+		// 探测失败会回落到默认路径并继续起服务。
+		Requires: []Requirement{
+			{
+				Key:         "GODOT_PATH",
+				Label:       "Godot executable path",
+				Where:       WhereEnv,
+				Required:    true,
+				Placeholder: `C:\Godot\Godot_v4.5-stable_win64.exe`,
+				HelpURL:     "https://godotengine.org/download",
+			},
+		},
+		DocsURL: "https://github.com/Coding-Solo/godot-mcp",
+		Tags:    []string{"3d", "game-engine", "godot", "gdscript", "local"},
 	},
 
 	// --- Browser & Automation ---
