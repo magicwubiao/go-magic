@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "media-provider-demo",
+  "version": "1.0.0",
+  "description": "Contributes a make-believe image backend to the built-in image_gen tool",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "extension", "media", "image"],
+  "examples": ["用 stub 后端画一张渐变图"],
+  "extensions": {
+    "io.github.magicwubiao.media-provider": {
+      "image": [
+        {
+          "name": "stub",
+          "server": "stubgen",
+          "tool": "generate_image"
+        }
+      ]
+    }
+  }
+}

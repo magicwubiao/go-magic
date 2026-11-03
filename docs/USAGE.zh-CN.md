@@ -1394,6 +1394,8 @@ magic plugin remove  github-workflow --purge        # 连数据目录一起删
 
 升级语义：新版本先解压到扫描目录下的隐藏临时目录，校验清单通过后**整体换名**替换旧目录（失败时旧版本原样保留）；数据目录在 `agent-plugins-data/` 下，不在替换范围内，因此升级不丢 `PLUGIN_DATA`。卸载默认也保留数据，只有 `--purge` 才删除。
 
+> **完整可安装的示例**：[`examples/plugins/`](../examples/plugins/README.md) 下有 5 个覆盖不同组件类型的插件——纯技能、自带 stdio MCP server、cli.json 连接器、远程 http + `${CRED:}` 凭据与 OAuth、媒体后端扩展——每个都带 README 逐字段拆解。`internal/agentplugin/examples_test.go` 会在 `go test` 里持续校验这些示例仍然合法。
+
 网页「插件」页做同样的事：上传 zip、启用/禁用、卸载、填凭据、单独重连某个 MCP 条目。
 
 ```

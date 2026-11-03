@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "http-mcp-demo",
+  "version": "1.0.0",
+  "description": "Remote MCP servers over streamable-http and sse, with a token header and an OAuth entry",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "http", "oauth"],
+  "examples": ["用 deepwiki 查一下某个仓库的架构"]
+}

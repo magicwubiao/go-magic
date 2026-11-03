@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "skill-only-demo",
+  "version": "1.0.0",
+  "description": "Changelog and PR review playbooks, packaged as skills only",
+  "author": {
+    "name": "go-magic",
+    "url": "https://github.com/magicwubiao/go-magic"
+  },
+  "homepage": "https://github.com/magicwubiao/go-magic/tree/main/examples/plugins/01-skill-only",
+  "license": "MIT",
+  "keywords": ["example", "skill", "changelog", "code-review"],
+  "icon": "assets/icon.svg",
+  "examples": [
+    "帮我把这周的提交整理成 CHANGELOG",
+    "按仓库规范审一下这个 PR"
+  ]
+}

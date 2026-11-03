@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "gh-cli-demo",
+  "version": "1.0.0",
+  "description": "Wraps the GitHub CLI into three declared tools plus a raw escape hatch",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "cli", "github"],
+  "examples": [
+    "列一下待审的 PR",
+    "在 12 号 PR 下回复一段评审意见"
+  ]
+}

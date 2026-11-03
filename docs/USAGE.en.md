@@ -1416,6 +1416,8 @@ magic plugin remove  github-workflow --purge        # directory + data dir
 
 Upgrade semantics: the new version is unpacked into a hidden staging directory inside the scan dir, validated, then renamed into place (the old directory is moved aside first and restored if the swap fails). `PLUGIN_DATA` lives under `agent-plugins-data/`, outside the replaced tree, so upgrading never loses it. Uninstall keeps it too unless `--purge` is passed.
 
+> **Complete installable examples**: [`examples/plugins/`](../examples/plugins/README.en.md) contains 5 plugins covering every component type — skills only, a bundled stdio MCP server, a cli.json connector, remote http + `${CRED:}` credentials and OAuth, and a media-provider extension — each with a README that explains the fields. `internal/agentplugin/examples_test.go` keeps validating them on every `go test` run.
+
 The Plugins page does the same thing in the browser: upload a zip, enable/disable, uninstall, fill in credentials, reconnect a single MCP entry.
 
 ```

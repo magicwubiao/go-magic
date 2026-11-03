@@ -1,0 +1,92 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "connectors": {
+    "gh": {
+      "command": "gh",
+      "description": "GitHub CLI",
+      "env": ["GH_TOKEN="],
+      "timeout_seconds": 30,
+      "max_output_bytes": 65536,
+      "raw": true,
+      "raw_max_args": 32,
+      "tools": [
+        {
+          "name": "pr_list",
+          "description": "List pull requests of the current repository. Returns number, title, state, author, url and updatedAt as JSON by default.",
+          "read_only": true,
+          "args": [
+            "pr",
+            "list",
+            "--limit",
+            "{{limit}}",
+            "--state",
+            "{{state}}",
+            "{{?json}}--json",
+            "{{?json}}number,title,state,author,url,updatedAt"
+          ],
+          "params": [
+            {
+              "name": "limit",
+              "type": "integer",
+              "description": "Maximum number of PRs to return (1-100)",
+              "default": 20
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "description": "PR state filter",
+              "default": "open",
+              "enum": ["open", "closed", "merged", "all"]
+            },
+            {
+              "name": "json",
+              "type": "boolean",
+              "description": "Return structured JSON instead of a table",
+              "default": true
+            }
+          ]
+        },
+        {
+          "name": "pr_view",
+          "description": "Show one pull request with body and comments as JSON.",
+          "read_only": true,
+          "args": [
+            "pr",
+            "view",
+            "{{number}}",
+            "--json",
+            "number,title,state,body,author,comments,url"
+          ],
+          "params": [
+            {
+              "name": "number",
+              "type": "integer",
+              "description": "Pull request number",
+              "required": true
+            }
+          ]
+        },
+        {
+          "name": "pr_comment",
+          "description": "Post a comment on a pull request. The body is passed through stdin so it never shows up in the process list.",
+          "args": ["pr", "comment", "{{number}}", "--body-file", "-"],
+          "stdin_param": "body",
+          "params": [
+            {
+              "name": "number",
+              "type": "integer",
+              "description": "Pull request number",
+              "required": true
+            },
+            {
+              "name": "body",
+              "type": "string",
+              "description": "Comment body in Markdown",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

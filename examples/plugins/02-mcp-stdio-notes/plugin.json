@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "notes-mcp-demo",
+  "version": "1.0.0",
+  "description": "A self-contained stdio MCP server that keeps searchable notes in PLUGIN_DATA",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "notes"],
+  "examples": [
+    "把「周五前确认灰度名单」记到笔记里",
+    "在笔记里搜一下灰度相关的记录"
+  ]
+}
