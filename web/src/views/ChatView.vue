@@ -7188,6 +7188,10 @@ onActivated(() => {
    （scoped 样式缺 data-v-xxx 会完全失效，见文件末尾说明）。 */
 .ctx-usage-panel {
   width: 300px;
+  /* 移动端浮层被媒体查询限到 calc(100vw - 40px)，面板自身也要跟着收窄，
+     否则固定 300px 会把右侧的百分比/token 数裁掉（popover 还有内边距，多留 16px）。 */
+  max-width: calc(100vw - 56px);
+  box-sizing: border-box;
   padding: 2px 4px;
   font-size: 13px;
 }
@@ -7202,6 +7206,8 @@ onActivated(() => {
   align-items: baseline;
   gap: 8px;
   margin-bottom: 8px;
+  /* 窄屏放不下时副文案换行，别把百分比挤变形 */
+  flex-wrap: wrap;
 }
 .ctx-usage-percent {
   font-size: 22px;
@@ -7240,6 +7246,9 @@ onActivated(() => {
 .ctx-value {
   color: #333;
   font-variant-numeric: tabular-nums;
+  /* 数值列不参与压缩，空间不足时让左侧标签（flex:1 + min-width:0）让位 */
+  flex: none;
+  white-space: nowrap;
 }
 
 /* 加号下拉菜单里的「计划模式」行已于 2026-09-29 冻结并全量删除，对应的
