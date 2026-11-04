@@ -14,8 +14,9 @@
 | [08-mcp-godot](08-mcp-godot/) | 本地桥：Godot。不用 add-on，直接调 Godot CLI；演示 `GODOT_PATH` 空值凭据占位 | 本机 Godot 4.x、Node/npx |
 | [09-mcp-figma-desktop](09-mcp-figma-desktop/) | 本地桥：Figma 桌面版 MCP，`127.0.0.1:3845` 免 token，读 Dev Mode 选中内容 | 本机 Figma 桌面版（Dev Mode） |
 | [10-mcp-jsdesign](10-mcp-jsdesign/) | 本地桥：即时设计画布桥接，stdio 进程 WebSocket 连客户端里的 MCP Bridge 插件 | 本机即时设计客户端 + Bridge 插件、Node/npx |
+| [11-mcp-freecad](11-mcp-freecad/) | 本地桥：FreeCAD。add-on 在 `127.0.0.1:9875` 起 XML-RPC，server 只转发（注意 9875 不是 MCP 端口）；含远程访问的 token/隧道说明 | 本机 FreeCAD 1.1+ + add-on、uv/uvx |
 
-> 06–10 是**特意没做成内置条目**的：这些 MCP 依赖"宿主软件和 go-magic 在同一台机器上"。内置目录要能用在服务器部署上，放进去就是一条点了必然失败的条目。本地确实要用，装对应那个示例即可——一个软件一个示例，互不牵连。
+> 06–11 是**特意没做成内置条目**的：这些 MCP 依赖"宿主软件和 go-magic 在同一台机器上"。内置目录要能用在服务器部署上，放进去就是一条点了必然失败的条目。本地确实要用，装对应那个示例即可——一个软件一个示例，互不牵连。
 
 ## 安装任一示例
 

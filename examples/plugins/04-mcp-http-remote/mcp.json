@@ -4,24 +4,8 @@
     "deepwiki": {
       "type": "streamable-http",
       "url": "https://mcp.deepwiki.com/mcp",
-      "headers": {
-        "X-Client": "go-magic-agent-plugin-example"
-      }
-    },
-    "private-docs": {
-      "type": "streamable-http",
-      "url": "https://mcp.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer ${CRED:DOCS_TOKEN}",
-        "X-Client": "go-magic-agent-plugin-example"
-      }
-    },
-    "issues": {
-      "type": "sse",
-      "url": "https://issues.example.com/sse",
-      "oauth": {
-        "scopes": ["read:issues", "write:issues"]
-      }
+      
     }
+    
   }
 }

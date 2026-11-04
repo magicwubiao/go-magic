@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-freecad",
+  "version": "1.0.0",
+  "description": "FreeCAD MCP bridge — the server relays to an add-on inside a running FreeCAD instance on the same machine",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "local", "cad", "freecad", "3d", "mechanical"],
+  "examples": [
+    "在 FreeCAD 里建一个 50×30×20 的方块，四条立边倒 2mm 圆角",
+    "打开当前文档，把草图的宽度改成 60mm，然后截个图给我确认"
+  ]
+}

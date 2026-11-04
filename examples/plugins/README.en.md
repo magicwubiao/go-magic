@@ -14,8 +14,9 @@ Every subdirectory here is a complete, installable Agent Plugin covering one com
 | [08-mcp-godot](08-mcp-godot/) | Local bridge: Godot. No add-on — it drives the Godot CLI directly. Shows an empty `GODOT_PATH` credential slot | Godot 4.x locally, Node/npx |
 | [09-mcp-figma-desktop](09-mcp-figma-desktop/) | Local bridge: Figma desktop MCP on `127.0.0.1:3845`, no token — reads the selection in Dev Mode | Figma desktop app with Dev Mode |
 | [10-mcp-jsdesign](10-mcp-jsdesign/) | Local bridge: JsDesign canvas bridge — a stdio process talks over WebSocket to the MCP Bridge plugin inside the client | JsDesign client + Bridge plugin, Node/npx |
+| [11-mcp-freecad](11-mcp-freecad/) | Local bridge: FreeCAD. The add-on listens on `127.0.0.1:9875` over XML-RPC and the server only relays (9875 is not an MCP endpoint); includes token/tunnel notes for remote access | FreeCAD 1.1+ + add-on locally, uv/uvx |
 
-> 06–10 are deliberately **not** built-in catalog entries: they only work when the host application runs on the same machine as go-magic. The built-in catalog has to stay usable on server deployments, so shipping these there would just add entries that always fail. Install the one you need — one app per example, no coupling.
+> 06–11 are deliberately **not** built-in catalog entries: they only work when the host application runs on the same machine as go-magic. The built-in catalog has to stay usable on server deployments, so shipping these there would just add entries that always fail. Install the one you need — one app per example, no coupling.
 
 ## Install
 
