@@ -549,7 +549,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useMessage } from 'naive-ui'
+import { useMessage, useDialog } from 'naive-ui'
 import {
   NAlert,
   NButton,
@@ -589,6 +589,7 @@ import { getFSReadUrl } from '@/api/sessions'
 
 const { t, te } = useI18n()
 const message = useMessage()
+const dialog = useDialog()
 
 const loading = ref(false)
 const loadError = ref('')
@@ -745,9 +746,28 @@ const voiceDirty = computed(() => {
 })
 const anyDirty = computed(() => imageDirty.value || videoDirty.value || voiceDirty.value)
 
+// 离开确认必须用 naive-ui 的 dialog 而不是 window.confirm：打包进桌面壳
+// （WebView）后 confirm/alert 这类原生阻塞对话框可能根本不弹——JS 线程
+// 卡在导航守卫上，表现为"整个程序卡死"。dialog 返回的是 Promise 化的
+// 异步确认，浏览器与桌面壳行为一致。
+function confirmLeave(): Promise<boolean> {
+  return new Promise((resolve) => {
+    dialog.warning({
+      title: t('common.confirm'),
+      content: t('media.unsavedConfirm'),
+      positiveText: t('common.confirm'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: () => resolve(true),
+      onNegativeClick: () => resolve(false),
+      onClose: () => resolve(false),
+      onMaskClick: () => resolve(false),
+    })
+  })
+}
+
 onBeforeRouteLeave(() => {
   if (!anyDirty.value) return true
-  return window.confirm(t('media.unsavedConfirm'))
+  return confirmLeave()
 })
 
 function onBeforeUnload(e: BeforeUnloadEvent) {

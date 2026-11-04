@@ -859,3 +859,131 @@ func TestMinimaxSpeechFormatFallback(t *testing.T) {
 		t.Errorf("flac -> %q, want flac", got)
 	}
 }
+
+// ---- MiniMax 语音识别（ASR）----
+
+// S2T 的契约：/v1/speech_to_text、multipart（model + response_format + file）、
+// Bearer 鉴权、language 走请求头——最关键的是**不需要 GroupId**（那是 T2A 专属）。
+func TestMinimaxASRTranscribes(t *testing.T) {
+	wantAudio := []byte("fake-mp3-bytes")
+	var gotModel, gotFormat, gotFileName string
+	var gotFile []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/speech_to_text" {
+			t.Errorf("path = %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mm-key" {
+			t.Errorf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("Language"); got != "zh" {
+			t.Errorf("Language header = %q, want zh", got)
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Errorf("multipart parse: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		gotModel = r.FormValue("model")
+		gotFormat = r.FormValue("response_format")
+		f, fh, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("file part missing: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer f.Close()
+		gotFileName = fh.Filename
+		gotFile, _ = io.ReadAll(f)
+		io.WriteString(w, `{"text":"你好世界","duration":1.5,"base_resp":{"status_code":0}}`)
+	}))
+	defer srv.Close()
+
+	cfg := &voice.VoiceConfig{
+		Providers: map[string]voice.ProviderCredentials{"minimax": {APIKey: "mm-key"}},
+		APIURL:    srv.URL,
+	}
+	text, err := minimaxSpeechBackend{}.Transcribe(context.Background(), cfg, TranscriptionRequest{
+		Audio: wantAudio, FileName: "clip.wav", Language: "zh",
+	})
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+
+	if gotModel != "asr-1.0" {
+		t.Errorf("model = %q, want asr-1.0 (ASR has its own default, not the TTS one)", gotModel)
+	}
+	if gotFormat != "json" {
+		t.Errorf("response_format = %q, want json", gotFormat)
+	}
+	if gotFileName != "clip.wav" {
+		t.Errorf("file name = %q, want clip.wav", gotFileName)
+	}
+	if string(gotFile) != string(wantAudio) {
+		t.Errorf("audio bytes = %q, want %q", gotFile, wantAudio)
+	}
+	if text != "你好世界" {
+		t.Errorf("text = %q, want 你好世界", text)
+	}
+
+	// 无扩展名/空的文件名要回落成 audio.mp3：工具层对 base64 来源传的是
+	// "base64 data" 这类描述文本，原样发出去服务端识别不了容器格式。
+	if _, err := (minimaxSpeechBackend{}).Transcribe(context.Background(), cfg, TranscriptionRequest{
+		Audio: wantAudio, FileName: "base64 data", Language: "zh",
+	}); err != nil {
+		t.Fatalf("second Transcribe: %v", err)
+	}
+	if gotFileName != "audio.mp3" {
+		t.Errorf("fallback file name = %q, want audio.mp3", gotFileName)
+	}
+}
+
+// base_resp.status_code 非 0 必须报错——MiniMax 的业务失败包在 HTTP 200 里。
+func TestMinimaxASRAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"base_resp":{"status_code":1039,"status_msg":"audio too long"}}`)
+	}))
+	defer srv.Close()
+
+	cfg := &voice.VoiceConfig{
+		Providers: map[string]voice.ProviderCredentials{"minimax": {APIKey: "k"}},
+		APIURL:    srv.URL,
+	}
+	_, err := minimaxSpeechBackend{}.Transcribe(context.Background(), cfg, TranscriptionRequest{
+		Audio: []byte("x"), FileName: "a.mp3",
+	})
+	if err == nil || !strings.Contains(err.Error(), "1039") || !strings.Contains(err.Error(), "audio too long") {
+		t.Fatalf("err = %v, want status_code 1039 with message", err)
+	}
+}
+
+// 超 50MB 在客户端拦下，并把"转码或切段"的修复动作直接告诉模型。
+func TestMinimaxASRRejectsOversizeAudio(t *testing.T) {
+	cfg := &voice.VoiceConfig{APIKey: "k"}
+	_, err := minimaxSpeechBackend{}.Transcribe(context.Background(), cfg, TranscriptionRequest{
+		Audio: make([]byte, minimaxASRMaxAudioBytes+1), FileName: "big.wav",
+	})
+	if err == nil || !strings.Contains(err.Error(), "50MB") {
+		t.Fatalf("err = %v, want a 50MB limit hint", err)
+	}
+}
+
+// 同一个 minimax 后端必须同时进 TTS 与 ASR 两张表；空文件名/无扩展名要回落。
+func TestMinimaxSpeechBackendHasBothCapabilities(t *testing.T) {
+	if _, ok := LookupTTSBackend("minimax"); !ok {
+		t.Error("minimax must remain registered as a TTS backend")
+	}
+	asr, ok := LookupASRBackend("minimax")
+	if !ok {
+		t.Fatal("minimax must be registered as an ASR backend")
+	}
+	if asr == nil {
+		t.Fatal("ASR backend must not be nil")
+	}
+	hasTTS, hasASR := SpeechCapability("minimax")
+	if !hasTTS || !hasASR {
+		t.Errorf("SpeechCapability(minimax) = (%v,%v), want (true,true)", hasTTS, hasASR)
+	}
+}

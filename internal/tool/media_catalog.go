@@ -276,16 +276,17 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	},
 	{
 		Kind: MediaKindSpeech, Name: "minimax", Label: "MiniMax 语音",
-		DefaultModel:   "speech-02-hd",
-		Models:         []string{"speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"},
+		DefaultModel: "speech-02-hd",
+		Models:       []string{"speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo", "asr-1.0"},
 		DefaultBaseURL: "https://api.minimaxi.com",
 		ConsoleURL:     "https://platform.minimaxi.com/user-center/basic-information/interface-key",
 		DocsURL:        "https://platform.minimaxi.com/docs/guides/text-to-speech",
 		KeyHint:        "MiniMax API key + GroupId（控制台接口密钥页同一页；海外账号把接口地址改成 https://api.minimax.io）",
-		Capabilities:   []string{CapTextToSpeech},
+		Capabilities:   []string{CapTextToSpeech, CapSpeechToText},
 		DefaultVoice:   "male-qn-qingse",
-		Notes: "GroupId is required (voice.providers.minimax.group_id or MINIMAX_GROUP_ID env); " +
-			"response audio is hex-encoded and decoded by the kernel.",
+		Notes: "GroupId is required for TTS only (voice.providers.minimax.group_id or MINIMAX_GROUP_ID env); " +
+			"TTS response audio is hex-encoded and decoded by the kernel. ASR uses model asr-1.0 via /v1/speech_to_text " +
+			"(no GroupId; audio up to 500s and 50MB per request).",
 	},
 }
 

@@ -23,7 +23,7 @@ func NewASRTool() *ASRTool {
 	return &ASRTool{
 		BaseTool: *NewBaseTool(
 			"asr",
-			"Convert speech/audio to text using various ASR providers (OpenAI Whisper, Azure Speech, Google Speech-to-Text). Transcribe audio files or audio data to text with language support.",
+			"Convert speech/audio to text using various ASR providers (OpenAI Whisper, Azure Speech, Google Speech-to-Text, MiniMax ASR). Transcribe audio files or audio data to text with language support.",
 			map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -46,8 +46,8 @@ func NewASRTool() *ASRTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "ASR provider to use: openai, azure, google, whisper",
-						"enum":        []string{"openai", "azure", "google", "whisper"},
+						"description": "ASR provider to use: openai, azure, google, whisper, minimax",
+						"enum":        []string{"openai", "azure", "google", "whisper", "minimax"},
 						"default":     "openai",
 					},
 					"model": map[string]interface{}{
