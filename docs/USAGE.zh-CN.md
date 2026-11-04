@@ -1261,6 +1261,7 @@ magic acp disconnect helper
       "max_output_bytes": 32768,             // 可选：单次回传输出上限（默认 32KB，硬上限 1MB）
       "raw": false,                          // true = 额外注册 cli_gh_raw（任意子命令，见下）
       "raw_max_args": 64,                    // 可选：raw 工具单次参数个数上限（默认 64，硬上限 256）
+      "compact_tools": false,                // true = 把下面的 tools 收成一个 cli_gh_call 调度工具（省上下文，见下）
       "tools": [{
         "name": "pr_list",
         "description": "List pull requests of a repository",
@@ -1309,7 +1310,7 @@ magic cli add "docker ps -a" --force
 magic cli remove gh      # 删整个连接器（连同它下面的工具）
 ```
 
-`--read-only` 表示这条命令只读（免审批），`--timeout` 覆盖超时，`--tool` / `--name` / `--desc` 覆盖自动推导的名字与描述。
+`--read-only` 表示这条命令只读（免审批），`--timeout` 覆盖超时，`--tool` / `--name` / `--desc` 覆盖自动推导的名字与描述，`--compact` 把该连接器切成紧凑模式（见下）。
 
 参数模板的两种写法：
 
@@ -1324,6 +1325,8 @@ magic cli remove gh      # 删整个连接器（连同它下面的工具）
 
 **审批**：默认每次调用都要人工确认，只有声明了 `read_only: true` 的工具才免确认；连接器级 `require_approval` 优先于工具级声明（`false` 可整体放开，慎用）。**插件来源的 CLI 工具不受 `read_only` 信任**——`cli.json` 里的声明是第三方作者写的，插件注册的所有 CLI 工具一律逐次确认（只有内置目录条目才信任该声明）。
 
+审批卡片展示的不是工具名，而是**脱敏后的真实命令行**（`gh pr list --repo owner/name --limit 20`，工具名在上下文里单列）：`{{env:}}` 展开出的凭据替换成 `***`，`{{envfile:}}` 显示为 `<secret-file:NAME>`（预览阶段不会真的创建临时文件）。刻意不加工具名前缀——审批层按"首个 token 是可执行文件"做风险分类与模式学习，前缀会让两者同时失效。副作用是正向的：风险关键字分析终于能看到 `delete`、`force` 这类动作，而不是一个中性的工具名。参数不合法时回落到静态摘要，真正的参数错误留给执行阶段报。
+
 **command 固定**：保存连接器时会把 `command` 解析成绝对路径持久化（解析失败保留原名，由就绪探测报错）。执行不再依赖 PATH，防止保存后 PATH 被劫持换二进制。
 
 **raw 逃生工具**：连接器加上 `"raw": true` 后，会额外注册一个 `cli_<连接器>_raw` 工具——模型可以对该命令执行**任意**未声明的子命令，覆盖目录和声明没管到的长尾（`gh api ...`、`kubectl describe ...`）。要点：
@@ -1333,7 +1336,24 @@ magic cli remove gh      # 删整个连接器（连同它下面的工具）
 - 允许只写 `"raw": true`、不声明任何 tools（纯 raw 接入）；
 - 参数个数上限 64（`raw_max_args` 可放宽到 256）、stdin 上限 1MB；凭据注入、argv 脱敏、截断（`max_output_bytes` 可覆盖）与超时和声明式工具同一套链路。
 
+**上下文预算与 compact 模式**：每个声明工具在模型上下文里都是一份完整的 name + description + JSON Schema。一个连接器声明 5 条子命令、装三个连接器，就是十几份定义常驻 prompt——这是 CLI 连接器相对 MCP 最不对称的一处成本（MCP 至少能把"连接"推后，CLI 没有连接可推，能省的只有定义本身）。连接器加 `"compact_tools": true` 后，N 条声明工具收成**一个**调度工具：
+
+```
+cli_gh_call({"tool": "pr_list", "params": {"repo": "owner/name", "limit": 20}})
+```
+
+描述里给每条子命令一行紧凑签名（`pr_list(repo*, limit:integer)`，`*` 表示必填），`tool` 是 enum，`params` 是自由对象。取舍要清楚：
+
+- **省的是上下文**：N 份 schema 变成 1 份；
+- **弱化的是 schema 约束**：必填、类型、enum 仍然在同一套 `ResolveParams` 里校验，但错误从"模型侧 schema 拦截"退化成"工具返回一句明确的报错"；
+- **审批粒度变粗**：调度工具的 `RequiresApproval` 不带参数，只能保守取并集——只要有一条子命令需要确认，整个调度工具就都要确认（全只读的连接器仍然免审批）；
+- 保留了 `raw` 的声明名规则：`call` 与 `raw` 一样是保留工具名，声明工具不能占用。
+
+因此它默认关闭，适合"工具多、上下文紧"的连接器，而不是所有连接器。
+
 **结果**：非零退出码不算失败，工具返回 `{exit_code, stdout, stderr, duration_ms}` 交给模型判断；输出超过上限（默认 32KB，连接器 `max_output_bytes` 可覆盖，硬上限 1MB）会截断并提示收窄查询；真超时返回 `exit_code: 124` 加一句建议。
+
+**超时与取消会回收整棵进程树**：Windows 上每次调用把子进程放进一个 job object（`KILL_ON_JOB_CLOSE`），Unix 上放进独立进程组并向 `-pgid` 发信号。`exec.CommandContext` 只杀直接子进程，而 `command: "cmd"` + `/c foo.bat` 这类包装下真正干活的是孙进程——不回收的话，超时后它还在跑，还会一直占着输出管道。job 创建失败时退化为"只杀直接子进程"，不影响命令本身。
 
 单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。`cli.json` 是唯一的手写入口（与 `config.json` 同级），改完重启服务端或运行 `magic` 重新加载；排查"模型为什么看不到某个工具"先跑 `magic cli list`。
 

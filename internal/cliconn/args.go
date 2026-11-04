@@ -141,7 +141,24 @@ func stringifyParam(p ParamSpec, raw any) (string, error) {
 		case json.Number:
 			return v.String(), nil
 		case string:
-			return strings.TrimSpace(v), nil
+			// 模型经常把数字写成字符串（"20"），这种要接受；但 "abc" 不能
+			// 原样拼进 argv——声明成 integer 就是承诺"这里只出现数字"，
+			// 放行任意字符串等于 schema 形同虚设（`--limit abc` 在多数 CLI
+			// 上只会得到一句难懂的参数错误）。
+			s := strings.TrimSpace(v)
+			if s == "" {
+				return "", nil
+			}
+			if p.Type == "integer" {
+				if _, err := strconv.ParseInt(s, 10, 64); err != nil {
+					return "", fmt.Errorf("parameter %q must be an integer (got %q)", p.Name, s)
+				}
+				return s, nil
+			}
+			if _, err := strconv.ParseFloat(s, 64); err != nil {
+				return "", fmt.Errorf("parameter %q must be a number (got %q)", p.Name, s)
+			}
+			return s, nil
 		default:
 			return "", fmt.Errorf("parameter %q must be a number", p.Name)
 		}

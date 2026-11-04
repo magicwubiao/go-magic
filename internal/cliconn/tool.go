@@ -189,6 +189,25 @@ func (t *Tool) ApprovalSummary() string {
 	return fmt.Sprintf("CLI %s → %s", t.connector, t.spec.Name)
 }
 
+// ApprovalSummaryWith 在拿到本次参数后给出"真正会跑的那条命令"（已脱敏）。
+//
+// 静态摘要只说"某个连接器的某个工具名"，用户点同意时看不到会删哪个仓库、
+// 推哪个分支、发到哪个群——而审批卡片恰恰只在这一刻有意义。
+//
+// 刻意**不加工具名前缀**：审批层是按"首个 token 是可执行文件"解析命令来做
+// 风险分类与模式学习的，`cli_gh_pr_list: gh pr list ...` 会让它把工具名当成
+// 可执行文件，风险识别和"信任这个模式"同时失效。工具名在审批上下文里本来
+// 就单列了一行。
+//
+// 展开失败（缺必填、env 引用为空）时退回静态摘要：审批流程不该因为"参数不
+// 完整"而中断，真正的参数错误留给执行阶段报。
+func (t *Tool) ApprovalSummaryWith(params map[string]interface{}) string {
+	if cmd := PreviewCommand(t.conn, t.spec, params); cmd != "" {
+		return cmd
+	}
+	return t.ApprovalSummary()
+}
+
 // ConnectorName 返回所属连接器名（供测试接口/UI 反查）。
 func (t *Tool) ConnectorName() string { return t.connector }
 
@@ -325,8 +344,14 @@ func (m *Manager) ToolsForProfile(profile string) []RegisteredTool {
 				continue
 			}
 		}
-		for _, spec := range c.Tools {
-			out = append(out, NewTool(name, c, spec))
+		if c.Compact {
+			// 紧凑模式：N 条声明工具换成 1 个调度入口（省上下文，
+			// 参数约束挪到执行时校验，见 CompactTool 的注释）。
+			out = append(out, NewCompactTool(name, c))
+		} else {
+			for _, spec := range c.Tools {
+				out = append(out, NewTool(name, c, spec))
+			}
 		}
 		// raw 逃生工具：开启后每个连接器额外获得一个"任意子命令"入口。
 		// 永远带审批（见 RawTool.RequiresApproval），因此不会被准入策略之外的

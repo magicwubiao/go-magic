@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,6 +53,29 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Print("中")
 		}
 	case "slow":
+		time.Sleep(5 * time.Second)
+	case "spawn_child":
+		// 父进程：拉起一个"孙进程"后自己长睡。超时若只杀直接子进程，
+		// 孙进程会活下来并在稍后写出标记文件（见 marker_child）。
+		child := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--", "spawn_child")
+		child.Env = mergeEnv(os.Environ(), []string{
+			"CLICONN_HELPER=1",
+			"CLICONN_HELPER_MODE=marker_child",
+		})
+		// stdio 置空：孙进程不继承父进程的输出管道，否则父进程被杀后
+		// Wait 仍会因为管道未关闭而阻塞——那是另一个问题，会掩盖这里的判据。
+		child.Stdout = nil
+		child.Stderr = nil
+		if err := child.Start(); err != nil {
+			fmt.Print("ERR:" + err.Error())
+			os.Exit(1)
+		}
+		time.Sleep(5 * time.Second)
+	case "marker_child":
+		time.Sleep(1500 * time.Millisecond)
+		if p := os.Getenv("CLICONN_MARKER"); p != "" {
+			_ = os.WriteFile(p, []byte("alive"), 0o600)
+		}
 		time.Sleep(5 * time.Second)
 	case "slurp":
 		// 打印最后一个参数指向的文件内容（envfile 物化验证用）。
@@ -239,6 +263,30 @@ func TestRunPassesArgsWithoutShellParsing(t *testing.T) {
 	}
 }
 
+func TestRunKillsProcessTreeOnTimeout(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "grandchild-marker")
+	t.Setenv("CLICONN_MARKER", marker)
+
+	conn := helperConnector("spawn_child")
+	conn.Args = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	res, err := Run(ctx, conn, ToolSpec{Name: "tree", Description: "d", Args: []string{"x"}}, nil)
+	if err != nil {
+		t.Fatalf("timeout should be reported in Result, not as error: %v", err)
+	}
+	if !res.TimedOut {
+		t.Fatalf("expected timeout, got exit code %d", res.ExitCode)
+	}
+
+	// 孙进程若逃过回收，会在 1.5s 后写出标记文件。
+	time.Sleep(3 * time.Second)
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("grandchild survived the timeout: process tree was not reaped")
+	}
+}
+
 func TestRunStdinEnvAndExitCode(t *testing.T) {
 	conn := helperConnector("echo_stdin")
 	conn.Args = nil
@@ -395,6 +443,19 @@ type approvalAwareShape interface {
 }
 
 var _ approvalAwareShape = (*Tool)(nil)
+
+// approvalDetailAware 与 internal/agent 里的可选扩展 approvalDetailAware 同形：
+// 工具拿到本次参数后能给出"真正会跑的命令"。
+type approvalDetailAware interface {
+	ApprovalSummaryWith(args map[string]interface{}) string
+}
+
+var (
+	_ approvalDetailAware = (*Tool)(nil)
+	_ approvalDetailAware = (*RawTool)(nil)
+	_ approvalDetailAware = (*CompactTool)(nil)
+	_ approvalAwareShape  = (*CompactTool)(nil)
+)
 
 func TestToolApprovalInterfaceShape(t *testing.T) {
 	tool := NewTool("gh", Connector{Command: "gh"}, ToolSpec{Name: "pr_list", Description: "d", Args: []string{"pr", "list"}})

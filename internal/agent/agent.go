@@ -4036,6 +4036,14 @@ func (a *Agent) executeSingleToolWithHooks(ctx context.Context, tc types.ToolCal
 			if aw, ok := t.(approvalAware); ok && aw.RequiresApproval() {
 				callReq.RequiresApproval = true
 				callReq.ApprovalSummary = aw.ApprovalSummary()
+				// 可选扩展：工具能拿到本次参数时给出"真正会跑的命令"。
+				// 静态摘要（工具名）不足以让人判断该不该同意，尤其是 CLI
+				// 连接器的 raw 工具（任意子命令）。
+				if detail, ok := t.(approvalDetailAware); ok {
+					if s := detail.ApprovalSummaryWith(toolArgs); strings.TrimSpace(s) != "" {
+						callReq.ApprovalSummary = s
+					}
+				}
 			}
 		}
 	}

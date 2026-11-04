@@ -32,6 +32,16 @@ type approvalAware interface {
 	ApprovalSummary() string
 }
 
+// approvalDetailAware 是 approvalAware 的**可选**扩展：拿到本次参数后给出
+// 更具体的动作描述。
+//
+// 静态摘要做不到"会删哪个仓库 / 推哪个分支"，而这两条恰恰是用户点同意时
+// 唯一关心的信息。CLI 连接器实现它来展示脱敏后的真实命令行；不实现的工具
+// （MCP、付费生成等）沿用静态摘要，行为不变。
+type approvalDetailAware interface {
+	ApprovalSummaryWith(args map[string]interface{}) string
+}
+
 // userAction represents the user's decision during interactive CLI confirmation.
 type userAction int
 

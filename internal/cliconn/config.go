@@ -103,6 +103,17 @@ type Connector struct {
 	// 上限 MaxRawArgsCap（256）。`kubectl apply -f` 拼长参数链的场景偶尔会
 	// 撞默认值，由连接器作者按需放宽。
 	RawMaxArgs int `json:"raw_max_args,omitempty"`
+	// Compact 把全部声明工具收成一个调度工具 cli_<connector>_call：
+	// `tool` 用 enum 列出子命令，`params` 是自由对象，签名写进描述。
+	//
+	// 用途只有一个：省上下文。每个声明工具在 prompt 里都是一份完整 schema，
+	// 连接器一多就是十几份常驻定义。代价是参数约束从"schema 拦截"退化成
+	// "执行时报错"（必填/类型/enum 仍在 ResolveParams 里照旧校验），
+	// 因此默认关闭，由连接器作者按"这个连接器的工具数会不会撑爆上下文"决定。
+	//
+	// 审批语义：调度工具的 RequiresApproval 不带参数，只能保守取并集——
+	// 只要有一条子命令需要确认，整个调度工具就都要确认。
+	Compact bool `json:"compact_tools,omitempty"`
 	// Tools 是从该程序暴露出去的子命令。
 	Tools []ToolSpec `json:"tools,omitempty"`
 }
@@ -361,6 +372,18 @@ func (c Connector) Validate() error {
 		for _, spec := range c.Tools {
 			if spec.Name == RawToolName {
 				return fmt.Errorf("tool name %q is reserved for the raw escape-hatch tool (connector raw=true)", RawToolName)
+			}
+		}
+	}
+	// "call" 是 compact 调度工具的保留名，理由同上；另外 compact 模式没有
+	// 声明工具就没有可调度的东西（纯 raw 接入请用 raw=true，不要开 compact）。
+	if c.Compact {
+		if len(c.Tools) == 0 {
+			return fmt.Errorf("compact_tools requires at least one declared tool (use raw=true for a pure raw connector)")
+		}
+		for _, spec := range c.Tools {
+			if spec.Name == CompactToolName {
+				return fmt.Errorf("tool name %q is reserved for the compact dispatcher (connector compact_tools=true)", CompactToolName)
 			}
 		}
 	}

@@ -57,6 +57,7 @@ var (
 	cliAddTimeout  int
 	cliAddDryRun   bool
 	cliAddForce    bool
+	cliAddCompact  bool
 
 	cliAddCmd = &cobra.Command{
 		Use:   "add <command line>",
@@ -98,6 +99,8 @@ func init() {
 	cliAddCmd.Flags().IntVar(&cliAddTimeout, "timeout", 0, "per-call timeout in seconds (0 = connector default)")
 	cliAddCmd.Flags().BoolVar(&cliAddDryRun, "dry-run", false, "print the resulting JSON without saving")
 	cliAddCmd.Flags().BoolVarP(&cliAddForce, "force", "f", false, "replace an existing tool with the same name")
+	cliAddCmd.Flags().BoolVar(&cliAddCompact, "compact", false,
+		"collapse this connector's tools into one dispatcher tool (cli_<name>_call) to save context")
 }
 
 // runCLIAdd 是 `magic cli add` 的执行体：解析命令 → 合并进连接器 → 落盘。
@@ -168,6 +171,9 @@ func runCLIAdd(commandLine string) error {
 	if !replaced {
 		conn.Tools = append(conn.Tools, spec)
 	}
+	if cliAddCompact {
+		conn.Compact = true
+	}
 	if err := conn.Validate(); err != nil {
 		return fmt.Errorf("invalid connector: %w", err)
 	}
@@ -191,6 +197,10 @@ func runCLIAdd(commandLine string) error {
 		fmt.Println("  read-only: calls skip the approval prompt")
 	} else {
 		fmt.Println("  approval required: every call asks for confirmation")
+	}
+	if conn.Compact {
+		fmt.Printf("  compact: %d declared tool(s) are exposed as one dispatcher %s\n",
+			len(conn.Tools), cliconn.ToolName(connectorName, cliconn.CompactToolName))
 	}
 	if len(spec.Params) > 0 {
 		fmt.Println("  parameters:")
@@ -318,6 +328,11 @@ func runCLIList(cmd *cobra.Command, args []string) {
 			fmt.Printf("  %s: blocked by policy\n", name)
 			continue
 		}
+		if c.Compact {
+			fmt.Printf("  %-40s dispatcher for %d subcommand(s): %s\n",
+				cliconn.ToolName(name, cliconn.CompactToolName), len(c.Tools), joinToolNames(c.Tools))
+			continue
+		}
 		for _, spec := range c.Tools {
 			timeout := c.EffectiveTimeout(spec)
 			fmt.Printf("  %-40s %s (%ds%s)\n",
@@ -350,6 +365,15 @@ func connectorCommand(c cliconn.Connector) string {
 		return c.Command
 	}
 	return c.Command + " " + strings.Join(c.Args, " ")
+}
+
+// joinToolNames 供 compact 连接器的 list 输出引用它的子命令清单。
+func joinToolNames(specs []cliconn.ToolSpec) string {
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		names = append(names, spec.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func boolLabel(v bool) string {

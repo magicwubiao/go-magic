@@ -1281,6 +1281,7 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
       "max_output_bytes": 32768,             // optional: per-call output cap (default 32KB, hard cap 1MB)
       "raw": false,                          // true = also register cli_gh_raw (arbitrary subcommands, see below)
       "raw_max_args": 64,                    // optional: raw tool arg count cap (default 64, hard cap 256)
+      "compact_tools": false,                // true = collapse the tools below into one cli_gh_call dispatcher (saves context)
       "tools": [{
         "name": "pr_list",
         "description": "List pull requests of a repository",
@@ -1329,7 +1330,7 @@ magic cli add "docker ps -a" --force
 magic cli remove gh      # delete the whole connector (and its tools)
 ```
 
-`--read-only` marks the command as read-only (skips approval), `--timeout` overrides the timeout, `--tool` / `--name` / `--desc` override the derived names.
+`--read-only` marks the command as read-only (skips approval), `--timeout` overrides the timeout, `--tool` / `--name` / `--desc` override the derived names, and `--compact` switches the connector to compact mode (see below).
 
 Two template forms:
 
@@ -1344,6 +1345,8 @@ Two template forms:
 
 **Approval**: every call asks for confirmation by default; only tools marked `read_only: true` skip it, and the connector-level `require_approval` wins over the per-tool flag (set it to `false` to disable globally for that connector — use with care). **Plugin-sourced CLI tools do not get `read_only` trust** — the declaration in a plugin's `cli.json` is written by a third-party author, so every CLI tool registered from a plugin asks for confirmation on every call (only built-in catalog entries honor the flag).
 
+The approval card shows the **masked command line** rather than just the tool name (`gh pr list --repo owner/name --limit 20`; the tool name has its own line in the context): values expanded from `{{env:}}` become `***`, and `{{envfile:}}` renders as `<secret-file:NAME>` (the preview never creates a real temp file). It deliberately carries no tool-name prefix — the approval layer parses "first token = executable" for risk classification and pattern learning, and a prefix breaks both. The side effect is positive: keyword risk analysis finally sees `delete` or `force` instead of a neutral tool name. Invalid parameters fall back to the static summary; the real parameter error is left to the execution stage.
+
 **Pinned command**: when a connector is saved, `command` is resolved to an absolute path and persisted (if resolution fails the bare name is kept and the readiness probe reports it). Execution no longer depends on PATH, so a later PATH hijack cannot swap the binary.
 
 **The raw escape hatch**: set `"raw": true` on a connector and an extra `cli_<connector>_raw` tool is registered — the model can run **any** undeclared subcommand of that command, covering the long tail the catalog and your declarations do not spell out (`gh api ...`, `kubectl describe ...`). Key points:
@@ -1353,7 +1356,24 @@ Two template forms:
 - `"raw": true` with no declared tools is valid (pure raw connector);
 - Limits: 64 args by default (`raw_max_args` can raise it to 256), 1 MB stdin; credential injection, argv masking, output truncation (overridable via `max_output_bytes`) and timeouts are shared with declared tools.
 
+**Context budget and compact mode**: every declared tool occupies a full name + description + JSON Schema in the model context. A connector with 5 subcommands, times three connectors, means a dozen definitions resident in the prompt — the most lopsided cost of CLI connectors versus MCP (MCP can at least defer the *connection*; CLI has no connection to defer, only the definitions themselves). Setting `"compact_tools": true` collapses the N declared tools into one dispatcher:
+
+```
+cli_gh_call({"tool": "pr_list", "params": {"repo": "owner/name", "limit": 20}})
+```
+
+The description carries one compact signature per subcommand (`pr_list(repo*, limit:integer)`, `*` = required), `tool` is an enum and `params` is a free-form object. Know the trade-offs:
+
+- **What you save** is context: N schemas become one;
+- **What you weaken** is schema enforcement: required fields, types and enums are still validated by the same `ResolveParams`, but the error moves from "blocked model-side by the schema" to "the tool returns a clear error";
+- **Approval granularity gets coarser**: `RequiresApproval` takes no arguments, so the dispatcher conservatively takes the union — if any one subcommand needs confirmation, the whole dispatcher does (an all-read-only connector stays pre-approved);
+- `call` is reserved, exactly like `raw`.
+
+It is therefore off by default and intended for connectors with many tools in a tight context budget, not for every connector.
+
 **Results**: a non-zero exit code is not a failure — the tool returns `{exit_code, stdout, stderr, duration_ms}` and lets the model judge. Output above the limit (default 32KB, overridable via connector `max_output_bytes`, hard cap 1MB) is truncated with a hint; a real timeout returns `exit_code: 124` plus advice. Per-tool timeout is capped at 300s (matching `MaxTimeout` in the tool layer).
+
+**Timeouts and cancellation reap the whole process tree**: on Windows every call places the child in a job object (`KILL_ON_JOB_CLOSE`); on Unix it gets its own process group and cancellation signals `-pgid`. `exec.CommandContext` only kills the direct child, while with a `command: "cmd"` + `/c foo.bat` wrapper the work happens in a grandchild — leave it running and it keeps executing and holds the output pipe after the timeout. If the job cannot be created the code degrades to killing the direct child only; the command itself still runs.
 
 `cli.json` is the only hand-written entry point (next to `config.json`); restart the server or run `magic` to reload it, and start with `magic cli list` when debugging "why can't the model see this tool".
 

@@ -3,9 +3,7 @@
   "mcpServers": {
     "deepwiki": {
       "type": "streamable-http",
-      "url": "https://mcp.deepwiki.com/mcp",
-      
+      "url": "https://mcp.deepwiki.com/mcp"
     }
-    
   }
 }

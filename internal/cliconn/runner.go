@@ -215,15 +215,40 @@ func executeArgv(ctx context.Context, conn Connector, envList []string, oauthTok
 
 	setProcAttrs(cmd)
 
+	// 回显的 argv 必须脱敏：{{env:NAME}} 展开后就是明文凭据，而这条命令
+	// 会进模型上下文、会话历史和日志（Tool.Execute 的 "command" 字段）。
+	// 真实的 argv 只用于 exec，不往外带。启动失败的分支也要用它。
+	maskedArgv := MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMapFromList(envList), oauthToken))
+
 	start := time.Now()
-	runErr := cmd.Run()
+	// 不走 cmd.Run()：需要先 Start 才能把进程放进 job object / 进程组。
+	guard, startErr := startCommand(cmd)
+	if startErr != nil {
+		// ctx 在 Start 之前就到期时，错误信息是 "context deadline exceeded"。
+		// 保持与正常路径一致的语义（超时=124 而不是 Go error），否则调用方
+		// 会把"排队排到超时"当成命令本身跑不起来。
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return &Result{Argv: maskedArgv, ExitCode: 124, TimedOut: true, OutputLimit: outputLimit}, nil
+		case errors.Is(ctx.Err(), context.Canceled):
+			return nil, fmt.Errorf("command cancelled: %w", ctx.Err())
+		}
+		// 启动失败（权限不足、不是可执行文件等）：这类问题重试无意义，
+		// 交给调用方按错误展示。
+		return nil, fmt.Errorf("failed to run %q: %w", conn.Command, startErr)
+	}
+	// ctx 取消时 exec.CommandContext 只杀直接子进程；这里补一刀把整棵树收掉
+	// （Windows job object / Unix 进程组）。AfterFunc 在 ctx 已取消时立即执行。
+	stopWatch := context.AfterFunc(ctx, guard.Kill)
+	runErr := cmd.Wait()
+	stopWatch()
+	// 正常结束也要 Close：Windows 上 KILL_ON_JOB_CLOSE 会顺手收掉孙进程
+	// （`cmd /c foo.bat` 这类包装里，真正干活的进程在 cmd.exe 之下）。
+	guard.Close()
 	elapsed := time.Since(start)
 
 	res := &Result{
-		// 回显的 argv 必须脱敏：{{env:NAME}} 展开后就是明文凭据，而这条命令
-		// 会进模型上下文、会话历史和日志（Tool.Execute 的 "command" 字段）。
-		// 真实的 argv 只用于上面的 exec，不往外带。
-		Argv:        MaskArgv(append([]string{conn.Command}, argv...), SecretEnvValues(envMapFromList(envList), oauthToken)),
+		Argv:        maskedArgv,
 		Stdout:      decodeOutput(stdout.Bytes()),
 		Stderr:      decodeOutput(stderr.Bytes()),
 		Duration:    elapsed,
@@ -245,8 +270,8 @@ func executeArgv(ctx context.Context, conn Connector, envList []string, oauthTok
 			res.ExitCode = exitErr.ExitCode()
 			return res, nil
 		default:
-			// 启动失败（权限不足、不是可执行文件等）：这类问题重试无意义，
-			// 交给调用方按错误展示。
+			// Wait 的其它错误（不是退出码、也不是取消）：极少见（句柄异常等），
+			// 同样按"没跑起来"处理，让调用方看到原文而不是空结果。
 			return res, fmt.Errorf("failed to run %q: %w", conn.Command, runErr)
 		}
 	}

@@ -176,5 +176,17 @@ func (t *RawTool) ApprovalSummary() string {
 	return fmt.Sprintf("CLI %s → arbitrary subcommand (raw)", t.connector)
 }
 
+// ApprovalSummaryWith 把模型给的 argv 原样摊到审批卡片上。
+//
+// raw 的同意按钮等于"允许在这个二进制上执行任意子命令"，而卡片只写
+// "arbitrary subcommand" 时，用户根本无从判断这次是 `gh pr list` 还是
+// `gh repo delete`。这里不读文件、不取 token，只拼字符串。
+func (t *RawTool) ApprovalSummaryWith(params map[string]interface{}) string {
+	if cmd := PreviewRawCommand(t.conn, params); cmd != "" {
+		return cmd
+	}
+	return t.ApprovalSummary()
+}
+
 // ConnectorName 返回所属连接器名（与 Tool 保持一致的查询口）。
 func (t *RawTool) ConnectorName() string { return t.connector }

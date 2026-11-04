@@ -129,6 +129,10 @@ func (t *cliPluginTool) Name() string {
 func (t *cliPluginTool) RequiresApproval() bool { return true }
 
 // ApprovalSummary 在原有描述前补上插件名，审批卡片上能看出是谁带的工具。
+//
+// ApprovalSummaryWith（拿到参数后的真实命令行）不覆盖：审批层按"首个 token
+// 是可执行文件"做风险分类与模式学习，任何前缀都会让它解析错。插件名在审批
+// 上下文里由工具名（ap_<plugin>_cli_...）体现。
 func (t *cliPluginTool) ApprovalSummary() string {
 	return fmt.Sprintf("CLI %s (plugin %s) → %s", t.Tool.ConnectorName(), t.plugin, t.Tool.Spec().Name)
 }
