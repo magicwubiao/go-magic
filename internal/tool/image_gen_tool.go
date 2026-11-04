@@ -83,20 +83,20 @@ func NewImageGenerationTool(config *ImageGenConfig) *ImageGenerationTool {
 					},
 					"style": map[string]interface{}{
 						"type":        "string",
-						"description": "Art style: realistic, anime, cartoon, watercolor, digital-art, photo, etc.",
+						"description": "Art style: realistic, anime, cartoon, watercolor, digital-art, photo, etc. Omit to use the configured default style (Settings > Media).",
 						"enum":        []string{"realistic", "anime", "cartoon", "watercolor", "digital-art", "photo", "abstract", "impressionist", "cyberpunk", "fantasy", "oil-painting", "sketch"},
-						"default":     "digital-art",
 					},
 					"size": map[string]interface{}{
 						"type":        "string",
-						"description": "Image size: 256x256, 512x512, 1024x1024, 1024x576, 576x1024, 1792x1024, 1024x1792",
-						"enum":        []string{"256x256", "512x512", "1024x1024", "1024x576", "576x1024", "1792x1024", "1024x1792"},
-						"default":     "1024x1024",
+						"description": "Image size (aspect ratio: 1:1, 16:9, 9:16). Omit to use the configured default size (Settings > Media).",
+						// enum 收敛到默认模型 dall-e-3 实际接受的三个值。SD / Together
+						// 等后端支持任意像素，但走 config 的 default_size（不过 enum），
+						// 这里列别的值只会诱导模型传一个默认 provider 直接拒的尺寸。
+						"enum": []string{"1024x1024", "1792x1024", "1024x1792"},
 					},
 					"count": map[string]interface{}{
 						"type":        "number",
-						"description": "Number of images to generate (1-4)",
-						"default":     1,
+						"description": "Number of images to generate (1-4). Note: dall-e-3 only supports 1.",
 						"minimum":     1,
 						"maximum":     4,
 					},
@@ -844,14 +844,12 @@ func NewImageEditTool(config *ImageGenConfig) *ImageEditTool {
 					},
 					"size": map[string]interface{}{
 						"type":        "string",
-						"description": "Output image size",
+						"description": "Output image size. Omit to use the backend default.",
 						"enum":        []string{"256x256", "512x512", "1024x1024"},
-						"default":     "1024x1024",
 					},
 					"count": map[string]interface{}{
 						"type":        "number",
 						"description": "Number of variations to generate (1-4)",
-						"default":     1,
 						"minimum":     1,
 						"maximum":     4,
 					},
