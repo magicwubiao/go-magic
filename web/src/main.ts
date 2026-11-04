@@ -60,8 +60,8 @@ const router = createRouter({
     { path: '/config', component: ConfigView },
     { path: '/models-providers', component: ModelsProvidersView },
     { path: '/tools', component: ToolsView },
-    // 媒体能力（生图 / 生视频 / 语音）的设置页。放在工具旁边：它是"让某类工具
-    // 真正可用"的前置配置，而不是系统级开关。
+    // 媒体能力（生图 / 生视频 / 语音）的设置页。入口在左下角"设置"下拉里
+    // （与自定义连接器同组），不占主导航：它填的是外部厂商凭据，配一次长期不动。
     { path: '/media', component: MediaView },
     { path: '/skills', component: SkillsView },
     { path: '/cron', component: CronView },

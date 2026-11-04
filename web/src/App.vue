@@ -239,21 +239,19 @@ const menuOptions = computed(() => [
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
   { label: t('peers.title'), key: '/peers', icon: renderIcon(ShareSocialOutline) },
   { type: 'divider' as const },
-  // 资源与环境段放在最下面：供应商（模型 + 媒体）、网关、文件、分身 —— 都是"跑一次
-  // 任务需要配齐的东西"（用哪个模型 / 从哪进来 / 数据放哪 / 以谁的身份），配置频次低，
-  // 沉到菜单底部不占视线。
+  // 资源与环境段放在最下面：供应商（模型）、网关、文件、分身 —— 都是"跑一次
+  // 任务需要配齐的东西"（用哪个模型 / 从哪进来 / 数据放哪 / 以谁的身份），配置
+  // 频次低，沉到菜单底部不占视线。
   //
-  // 媒体能力紧跟在模型与供应商下面：两者回答的是同一个问题 —— "任务跑起来要连哪些
-  // 外部厂商、凭据填在哪"。模型页管文本模型的 provider 与模型清单，媒体页管生图/
-  // 生视频/语音的 provider 与密钥，都是按厂商组织的接入配置，配完模型顺手就能配媒体。
+  // 媒体能力（生图/生视频/语音的厂商与密钥）已移到左下角"设置"下拉：与自定义
+  // 连接器同类，属于低频的接入口配置，不需要常驻主导航。
   { label: t('models.title'), key: '/models-providers', icon: renderIcon(CubeOutline) },
-  { label: t('nav.media'), key: '/media', icon: renderIcon(ImageOutline) },
   { label: t('nav.gateway'), key: '/gateway', icon: renderIcon(GitNetworkOutline) },
   { label: t('nav.files'), key: '/files', icon: renderIcon(FolderOutline) },
   { label: t('nav.profiles'), key: '/profiles', icon: renderIcon(PersonOutline) },
 ])
 
-// 左下角"设置"上拉菜单:管理类(审批/日志/用量) + 接入与系统类(自定义连接器/系统/配置) + 退出
+// 左下角"设置"上拉菜单:管理类(审批/日志/用量) + 接入与系统类(自定义连接器/媒体能力/系统/配置) + 退出
 const headerOptions = computed(() => [
   { label: t('nav.approval'), key: '/approval', icon: renderIcon(ShieldCheckmarkOutline) },
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
@@ -262,6 +260,9 @@ const headerOptions = computed(() => [
   // 自定义连接器（MCP / CLI）从主导航移到这里：属于"接外部软件"的配置动作，
   // 低频且与系统/配置同类，不再占主菜单位置。
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
+  // 媒体能力与连接器同类：填的是外部厂商（生图/生视频/语音）的密钥与默认参数，
+  // 配一次长期不动，放在"接入配置"这一组里。
+  { label: t('nav.media'), key: '/media', icon: renderIcon(ImageOutline) },
   { label: t('nav.system'), key: 'system', icon: renderIcon(HardwareChipOutline) },
   { label: t('nav.config'), key: 'config', icon: renderIcon(SettingsOutline) },
   { type: 'divider' as const },

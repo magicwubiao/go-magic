@@ -2320,6 +2320,11 @@ export default {
   media: {
     title: '媒体能力',
     subtitle: '生图、生视频、语音的密钥与默认参数。保存后立即生效，无需重启。',
+    sectionDesc: {
+      image: '文生图服务商、密钥与默认出图参数',
+      video: '文生视频服务商、密钥与默认画幅时长',
+      voice: '语音合成 / 识别服务商、密钥与默认音色',
+    },
     available: '已配置',
     notConfigured: '未配置',
     provider: '服务商',

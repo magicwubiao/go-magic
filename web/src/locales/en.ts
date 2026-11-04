@@ -2314,6 +2314,11 @@ export default {
   media: {
     title: 'Media',
     subtitle: 'Keys and defaults for image generation, video generation and speech. Changes apply immediately.',
+    sectionDesc: {
+      image: 'Image providers, keys and default output settings',
+      video: 'Video providers, keys and default aspect ratio / duration',
+      voice: 'Speech (TTS/ASR) providers, keys and default voice',
+    },
     available: 'Configured',
     notConfigured: 'Not configured',
     provider: 'Provider',
