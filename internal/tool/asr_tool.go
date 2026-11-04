@@ -46,9 +46,8 @@ func NewASRTool() *ASRTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "ASR provider to use: openai, azure, google, whisper, minimax",
+						"description": "ASR provider to use: openai, azure, google, whisper, minimax. Omit to use the configured default provider (Settings > Media).",
 						"enum":        []string{"openai", "azure", "google", "whisper", "minimax"},
-						"default":     "openai",
 					},
 					"model": map[string]interface{}{
 						"type":        "string",

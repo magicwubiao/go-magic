@@ -116,19 +116,17 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"duration": map[string]interface{}{
 						"type":        "number",
-						"description": "Video length in seconds (3-15). Runway snaps to 5 or 10. Default 5.",
+						"description": "Video length in seconds (3-15). Runway snaps to 5 or 10. Default comes from config (video_gen.default_duration).",
 					},
 					"ratio": map[string]interface{}{
 						"type":        "string",
-						"description": "Aspect ratio. dashscope supports 16:9, 9:16 and 1:1 (720p only); volcengine also supports 4:3, 3:4 and 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Unsupported values fall back to 16:9 and the actual value is reported back.",
+						"description": "Aspect ratio. dashscope supports 16:9, 9:16 and 1:1 (720p only); volcengine also supports 4:3, 3:4 and 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Omit to use the configured default ratio (Settings > Media). Unsupported values fall back to 16:9 and the actual value is reported back.",
 						"enum":        []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
-						"default":     "16:9",
 					},
 					"resolution": map[string]interface{}{
 						"type":        "string",
-						"description": "Resolution tier: 480p, 720p (default) or 1080p. Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
+						"description": "Resolution tier: 480p, 720p or 1080p. Omit to use the configured default resolution (Settings > Media). Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
 						"enum":        []string{"480p", "720p", "1080p"},
-						"default":     "720p",
 					},
 					"negative_prompt": map[string]interface{}{
 						"type":        "string",

@@ -42,9 +42,8 @@ func NewTTSTool() *TTSTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "TTS provider to use: openai, azure, google, elevenlabs, cosyvoice (Alibaba), minimax",
+						"description": "TTS provider to use: openai, azure, google, elevenlabs, cosyvoice (Alibaba), minimax. Omit to use the configured default provider (Settings > Media).",
 						"enum":        []string{"openai", "azure", "google", "elevenlabs", "cosyvoice", "minimax"},
-						"default":     "openai",
 					},
 					"speed": map[string]interface{}{
 						"type":        "number",
