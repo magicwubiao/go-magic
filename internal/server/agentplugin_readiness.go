@@ -56,6 +56,7 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 	}
 
 	creds := s.agentPluginCredentials(name)
+	filled := filledCredKeys(creds)
 	// 凭据的"去哪里拿"元数据（目录登记的 label / help_url）。
 	credFields := agentplugin.CredentialFields(p)
 	// 条目状态在后台连接期间会变化，走锁内快照。
@@ -69,7 +70,10 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 		}
 		var missing []string
 		for _, k := range agentplugin.SpecCredentialKeys(ms.Spec) {
-			if strings.TrimSpace(creds[k]) == "" {
+			// 大小写不敏感：Windows 环境变量名不分大小写，凭据表单里
+			// 写 gh_token 与清单里的 GH_TOKEN 是同一个键（与
+			// withCLICredentials 的匹配口径一致）。
+			if !filled[strings.ToUpper(strings.TrimSpace(k))] {
 				missing = append(missing, k)
 			}
 		}
@@ -128,6 +132,36 @@ func (s *Server) pluginBlockers(name string, mp *agentplugin.ManagedPlugin) []pl
 	return out
 }
 
+// filledCredKeys 返回"已填了值"的凭据 key 集合（去空白、大写）。
+// 环境变量名在 Windows 上不分大小写，与 withCLICredentials 的匹配口径一致。
+func filledCredKeys(creds map[string]string) map[string]bool {
+	out := make(map[string]bool, len(creds))
+	for k, v := range creds {
+		if strings.TrimSpace(v) != "" {
+			out[strings.ToUpper(strings.TrimSpace(k))] = true
+		}
+	}
+	return out
+}
+
+// pruneFilledRequiredEnv 从 required_env 里去掉用户已经填过的 key。
+//
+// required_env 表达的是"清单里声明了待填位置"（mcp.json / cli.json 里留空的
+// env 占位），不代表"还缺"——凭据补上之后 UI 不该再喊"缺少凭据"。
+// Summary 在 agentplugin 包里拿不到凭据存储，所以这个装饰放在 server 层做。
+func pruneFilledRequiredEnv(keys []string, filled map[string]bool) []string {
+	if len(keys) == 0 || len(filled) == 0 {
+		return keys
+	}
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if !filled[strings.ToUpper(strings.TrimSpace(k))] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // missingCredentialFields 从整组字段里挑出"确实缺的"几项（保持字段自己的顺序）。
 func missingCredentialFields(fields []agentplugin.CredentialField, missing []string) []agentplugin.CredentialField {
 	if len(fields) == 0 || len(missing) == 0 {
@@ -160,6 +194,18 @@ func (s *Server) decoratePluginSummaries(list []map[string]any, plugins map[stri
 		blockers := s.pluginBlockers(name, mp)
 		item["blockers"] = blockers
 		item["ready"] = len(blockers) == 0
+		// required_env 只保留"确实还没填"的 key：已填的凭据不再让 UI 亮
+		// "缺少凭据"警告（cli.json / mcp.json 里的留空占位是静态声明，
+		// 不随凭据保存而更新，必须在这里剪）。
+		filled := filledCredKeys(s.agentPluginCredentials(name))
+		for _, groupKey := range []string{"mcp_servers", "cli_connectors"} {
+			entries, _ := item[groupKey].([]map[string]any)
+			for _, e := range entries {
+				if req, ok := e["required_env"].([]string); ok {
+					e["required_env"] = pruneFilledRequiredEnv(req, filled)
+				}
+			}
+		}
 		// CLI 连接器的 OAuth 状态（已登录 / 未登录 / 等待授权）只有
 		// server 知道：Manager 不持有 OAuth 管理器。
 		s.decorateCLIConnectorOAuth(item, mp)
