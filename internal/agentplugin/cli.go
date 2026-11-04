@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/magicwubiao/go-magic/internal/cliconn"
+	"github.com/magicwubiao/go-magic/internal/tool"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -154,8 +155,79 @@ func (t *cliPluginRawTool) ApprovalSummary() string {
 	return fmt.Sprintf("CLI %s (plugin %s) → arbitrary subcommand (raw)", t.RawTool.ConnectorName(), t.plugin)
 }
 
+// cliPluginCompactTool 是插件内 compact 调度工具的适配器。
+//
+// 调度工具能触发该连接器的任意子命令，所以审批只能取并集、且恒真：第三方作者
+// 把整包声明成 read_only 就能免审批，这比单条 read_only 的口子更大。
+type cliPluginCompactTool struct {
+	*cliconn.CompactTool
+	plugin string
+}
+
+// Name 返回 ap_<plugin>_cli_<connector>_call。
+func (t *cliPluginCompactTool) Name() string {
+	return PluginCLIToolName(t.plugin, t.CompactTool.ConnectorName(), cliconn.CompactToolName)
+}
+
+// RequiresApproval 恒真：与 cliPluginTool 同一口径（插件声明不是信任根）。
+func (t *cliPluginCompactTool) RequiresApproval() bool { return true }
+
+// ApprovalSummary 补上插件名。ApprovalSummaryWith（真实命令行）由内嵌类型提升，
+// 不再插入任何前缀——审批层按"首 token 是可执行文件"解析命令。
+func (t *cliPluginCompactTool) ApprovalSummary() string {
+	return fmt.Sprintf("CLI %s (plugin %s) → all subcommands (compact)", t.CompactTool.ConnectorName(), t.plugin)
+}
+
+// pluginCLITool 是三种插件 CLI 适配器的公共视图：注册表要的 tool.Tool 加上
+// 超时（tool.Tool 不含 Timeout，而插件必须把连接器的 timeout_seconds 写进
+// 注册表，否则执行器会套默认 60s）。
+type pluginCLITool interface {
+	tool.Tool
+	Timeout() time.Duration
+}
+
+// wrapPluginCLITool 给 cliconn 产出的工具套上插件命名空间。
+//
+// 按类型分支而不是套一个"只改 Name"的通用壳：三种工具的审批语义各不相同
+// （声明工具恒真、raw 恒真、compact 取并集），通用壳会丢掉 RequiresApproval
+// 的覆盖，等于让第三方声明的 read_only 重新生效。
+//
+// default 打日志而不是静默跳过：新增工具类型时这里必须跟着改，静默跳过会让
+// "工具凭空消失"没有任何线索。
+func wrapPluginCLITool(t cliconn.RegisteredTool, pluginName string) pluginCLITool {
+	switch v := t.(type) {
+	case *cliconn.Tool:
+		return &cliPluginTool{Tool: v, plugin: pluginName}
+	case *cliconn.RawTool:
+		return &cliPluginRawTool{RawTool: v, plugin: pluginName}
+	case *cliconn.CompactTool:
+		return &cliPluginCompactTool{CompactTool: v, plugin: pluginName}
+	default:
+		log.Warnf("[AgentPlugin] %s: unsupported CLI tool type %T skipped", pluginName, t)
+		return nil
+	}
+}
+
+// PluginCLIToolNames 返回一个插件连接器会注册出的工具全名（已考虑 compact / raw）。
+//
+// 从 cliconn.ToolsForConnector 反推而不是重写一遍判断：插件详情页的工具清单
+// 必须等于实际注册结果，否则开了 compact 之后页面还列着 5 个工具、实际只有 1 个。
+func PluginCLIToolNames(pluginName string, conn cliconn.Connector, connectorName string) []string {
+	tools := cliconn.ToolsForConnector(connectorName, conn)
+	out := make([]string, 0, len(tools))
+	prefix := cliconn.ToolPrefix(connectorName)
+	for _, t := range tools {
+		short := strings.TrimPrefix(t.Name(), prefix)
+		if short == "" {
+			continue
+		}
+		out = append(out, PluginCLIToolName(pluginName, connectorName, short))
+	}
+	return out
+}
+
 // timeoutSetter 是 *tool.Registry 上设置单工具超时的方法。
-// 不直接依赖 internal/tool：本包已通过 tool.Tool 命名接口做到最薄耦合，
+// 不直接依赖 internal/tool 的注册表实现：本包只需要 tool.Tool 这一层命名接口，
 // 超时注册也走可选接口，注册表不支持时静默跳过。
 type timeoutSetter interface {
 	SetTimeout(name string, d time.Duration)
@@ -185,6 +257,11 @@ type CLIRegisterOptions struct {
 	// 而 policy 开篇就把"装插件"列为威胁模型。返回错误时该连接器整体
 	// 不注册，并把它记进条目状态（UI 能看见，不是凭空消失）。
 	AllowCommand func(connectorName, command string) error
+	// Profile 是当前分身名，用于过滤声明了 profiles 的连接器（空串 = 不过滤）。
+	//
+	// 与全局连接器同一语义：团队把插件连同 cli.json 一起分发时，
+	// "这条命令只在某个分身里生效"是合理需求。
+	Profile string
 }
 
 // RegisterCLITools 把插件声明的 CLI 工具注册到注册表（跳过被禁用的插件与校验失败的条目）。
@@ -234,25 +311,28 @@ func RegisterCLIToolsWithOptions(plugins map[string]*ManagedPlugin, reg ToolRegi
 					continue
 				}
 			}
+			// 与全局连接器同一套生效规则：enabled=false、或不在当前分身里，就整体
+			// 跳过。此前这里直接遍历 conn.Tools，导致这两个字段在 cli.json 里
+			// "能写、能通过校验、但不生效"，与 compact 是同一类静默失效。
+			if !st.Connector.AutoConnect() || !st.Connector.AppliesToProfile(opts.Profile) {
+				continue
+			}
 			conn := withCLICredentials(st.Connector, pluginCreds)
 			conn = withCLITokenSource(conn, pluginName, st.Name, opts.TokenSources)
 			// 插件连接器同样在注册时固定 command 绝对路径（防 PATH 劫持；
 			// 二进制未安装时保留原名，由探测报错）。
 			conn = conn.PinCommandPath()
-			for _, spec := range conn.Tools {
-				t := &cliPluginTool{Tool: cliconn.NewTool(st.Name, conn, spec), plugin: pluginName}
+			// 工具清单由 cliconn.ToolsForConnector 统一决定（含 compact / raw）：
+			// 插件侧不再自己展开 Tools，否则 compact 在插件里必然又漏一次。
+			for _, lt := range cliconn.ToolsForConnector(st.Name, conn) {
+				t := wrapPluginCLITool(lt, pluginName)
+				if t == nil {
+					continue
+				}
 				reg.Register(t)
 				if setter != nil {
 					// 不注册的话执行器会套 tool.DefaultTimeout（60s），
 					// 连接器里配的 timeout_seconds 就永远不生效。
-					setter.SetTimeout(t.Name(), t.Timeout())
-				}
-			}
-			// raw 逃生工具与声明式工具同权注册：名称可完全由插件定义推导。
-			if conn.Raw {
-				t := &cliPluginRawTool{RawTool: cliconn.NewRawTool(st.Name, conn), plugin: pluginName}
-				reg.Register(t)
-				if setter != nil {
 					setter.SetTimeout(t.Name(), t.Timeout())
 				}
 			}
@@ -277,15 +357,14 @@ func UnregisterCLITools(plugins map[string]*ManagedPlugin, reg ToolRegistrar) {
 			continue
 		}
 		for _, st := range mp.Plugin.CLIConnectors {
-			if st.Error != "" {
-				continue
-			}
 			for _, spec := range st.Connector.Tools {
 				u.Unregister(PluginCLIToolName(pluginName, st.Name, spec.Name))
 			}
-			if st.Connector.Raw {
-				u.Unregister(PluginCLIToolName(pluginName, st.Name, cliconn.RawToolName))
-			}
+			// 不看 enabled / profiles / compact：注销要覆盖"上次注册时用的是另一套
+			// 配置"（刚关掉 compact、刚从启用到禁用），按当前配置推导必然漏掉那批
+			// 僵尸工具。注册表注销不存在的名字是空操作，全删一遍最省心。
+			u.Unregister(PluginCLIToolName(pluginName, st.Name, cliconn.CompactToolName))
+			u.Unregister(PluginCLIToolName(pluginName, st.Name, cliconn.RawToolName))
 		}
 	}
 }

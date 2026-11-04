@@ -106,6 +106,8 @@ func (s *Server) cliRegisterOptions() agentplugin.CLIRegisterOptions {
 	return agentplugin.CLIRegisterOptions{
 		Creds:        s.agentPluginCredentials,
 		TokenSources: s.pluginCLITokenSource,
+		// 与全局连接器同一套 profiles 语义：插件里的 cli.json 也可能只在某个分身生效。
+		Profile: s.activeProfile(),
 		AllowCommand: func(connectorName, command string) error {
 			return s.policySnapshot().CheckCLI(connectorName, command)
 		},

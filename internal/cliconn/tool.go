@@ -323,6 +323,37 @@ type RegisteredTool interface {
 	Timeout() time.Duration
 }
 
+// ToolsForConnector 枚举单个连接器会产出哪些工具（含 compact / raw 展开）。
+//
+// 这是"一个连接器产出哪些工具"的唯一实现，三处消费者共用：Manager.ToolsForProfile
+// （web / chat / gateway 的全局连接器）、agentplugin.RegisterCLIToolsWithOptions
+// （插件的 cli.json 组件）、插件详情页的工具清单。此前是三份各自维护的循环，
+// 插件那份漏了 compact，于是 cli.json 里 `"compact_tools": true` 属于
+// "校验通过、保存成功、却不生效"——比拒绝保存更难排查。
+//
+// 刻意不在这里判 enabled / profiles：那是"这个连接器要不要生效"的策略，
+// 调用方各有额外动作（Manager 要记录被策略拦下的原因，插件侧要把拒绝写回
+// 条目状态）。调用方在遍历前各自判一次 AutoConnect / AppliesToProfile。
+func ToolsForConnector(connector string, c Connector) []RegisteredTool {
+	var out []RegisteredTool
+	if c.Compact {
+		// 紧凑模式：N 条声明工具换成 1 个调度入口（省上下文，
+		// 参数约束挪到执行时校验，见 CompactTool 的注释）。
+		out = append(out, NewCompactTool(connector, c))
+	} else {
+		for _, spec := range c.Tools {
+			out = append(out, NewTool(connector, c, spec))
+		}
+	}
+	// raw 逃生工具：开启后每个连接器额外获得一个"任意子命令"入口。
+	// 永远带审批（见 RawTool.RequiresApproval），因此不会被准入策略之外的
+	// 路径静默放行。
+	if c.Raw {
+		out = append(out, NewRawTool(connector, c))
+	}
+	return out
+}
+
 // ToolsForProfile 枚举在给定分身下应当注册的全部工具（已按 enabled / profiles 过滤）。
 func (m *Manager) ToolsForProfile(profile string) []RegisteredTool {
 	if m == nil {
@@ -344,21 +375,7 @@ func (m *Manager) ToolsForProfile(profile string) []RegisteredTool {
 				continue
 			}
 		}
-		if c.Compact {
-			// 紧凑模式：N 条声明工具换成 1 个调度入口（省上下文，
-			// 参数约束挪到执行时校验，见 CompactTool 的注释）。
-			out = append(out, NewCompactTool(name, c))
-		} else {
-			for _, spec := range c.Tools {
-				out = append(out, NewTool(name, c, spec))
-			}
-		}
-		// raw 逃生工具：开启后每个连接器额外获得一个"任意子命令"入口。
-		// 永远带审批（见 RawTool.RequiresApproval），因此不会被准入策略之外的
-		// 路径静默放行。
-		if c.Raw {
-			out = append(out, NewRawTool(name, c))
-		}
+		out = append(out, ToolsForConnector(name, c)...)
 	}
 	m.blocked = blocked
 	return out

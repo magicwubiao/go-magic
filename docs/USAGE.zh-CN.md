@@ -1402,6 +1402,8 @@ cli_gh_call({"tool": "pr_list", "params": {"repo": "owner/name", "limit": 20}})
 }
 ```
 
+**插件里的 CLI 与全局连接器共用同一套生效规则**：`enabled`、`profiles`、`compact_tools`、`raw`、`timeout_seconds`、`max_output_bytes` 语义完全一致（工具清单由 `cliconn.ToolsForConnector` 统一展开，插件侧不再自己遍历 `tools`，所以 compact 在两边同时生效）。差异只有三处，且都是刻意的：工具名带 `ap_<plugin>_cli_` 前缀，避免与全局同名连接器撞名；`read_only` 不被信任——插件注册的所有 CLI 工具（含 `raw` 与 compact 调度工具）逐次审批；凭据来自插件凭据弹窗存下的 `agent_plugins.credentials`，而不是 `${ENV}` 引用。
+
 ```bash
 magic plugin list                      # 名称/版本/状态/技能数/MCP/CLI
 magic plugin install ./my-plugin       # 目录（开发用）或 .zip（分发用）

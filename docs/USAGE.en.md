@@ -1422,6 +1422,8 @@ A plugin is not a new runtime concept: a plugin is a **directory** holding skill
 }
 ```
 
+**Plugin CLI connectors follow the same activation rules as global ones**: `enabled`, `profiles`, `compact_tools`, `raw`, `timeout_seconds` and `max_output_bytes` behave identically (the tool list is expanded by `cliconn.ToolsForConnector`, so both paths honour `compact_tools`). Only three differences remain, all deliberate: tool names carry the `ap_<plugin>_cli_` prefix so they cannot collide with a global connector of the same name; `read_only` is not trusted — every plugin CLI tool (including `raw` and the compact dispatcher) asks for confirmation on each call; and credentials come from `agent_plugins.credentials` (collected by the plugin's credential dialog) rather than `${ENV}` references.
+
 ```bash
 magic plugin list                      # name/version/status/skills/mcp/cli
 magic plugin install ./my-plugin       # a directory (dev) or a .zip (distribution)

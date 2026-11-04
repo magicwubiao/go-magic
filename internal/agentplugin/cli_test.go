@@ -209,3 +209,107 @@ func demoConnector(t *testing.T) cliconn.Connector {
 	t.Fatal("gitdemo connector not found")
 	return cliconn.Connector{}
 }
+
+// 插件 cli.json 与全局连接器必须共用同一套"生效规则"：enabled=false 与
+// profiles 在插件侧曾经被完全忽略（配置通过校验、保存成功、工具照样注册）。
+func TestPluginCLIConnectorHonorsEnabledAndProfiles(t *testing.T) {
+	const cliJSON = `{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "connectors": {
+    "off": {"command": "git", "enabled": false, "tools": [{"name": "s", "description": "s", "args": ["status"]}]},
+    "workonly": {"command": "git", "profiles": ["work"], "tools": [{"name": "w", "description": "w", "args": ["status"]}]},
+    "always": {"command": "git", "tools": [{"name": "a", "description": "a", "args": ["status"]}]}
+  }
+}`
+	dir := t.TempDir()
+	writePlugin(t, dir, cliJSON)
+	p := Load(dir, filepath.Join(dir, "data"))
+	plugins := map[string]*ManagedPlugin{"demo": {Plugin: p}}
+
+	home := tool.NewRegistry()
+	RegisterCLIToolsWithOptions(plugins, home, CLIRegisterOptions{Profile: "home"})
+	defer UnregisterCLITools(plugins, home)
+
+	for _, name := range []string{"ap_demo_cli_off_s", "ap_demo_cli_workonly_w"} {
+		if _, err := home.Get(name); err == nil {
+			t.Fatalf("%q must not register when disabled or outside its profile", name)
+		}
+	}
+	if _, err := home.Get("ap_demo_cli_always_a"); err != nil {
+		t.Fatalf("unrestricted connector should register: %v", err)
+	}
+
+	// 同一份定义在它声明的分身里必须生效（否则 profiles 成了"永久禁用"）。
+	work := tool.NewRegistry()
+	RegisterCLIToolsWithOptions(plugins, work, CLIRegisterOptions{Profile: "work"})
+	defer UnregisterCLITools(plugins, work)
+	if _, err := work.Get("ap_demo_cli_workonly_w"); err != nil {
+		t.Fatalf("profile-scoped connector should register in its profile: %v", err)
+	}
+}
+
+// compact_tools 在插件侧曾经被忽略：配置校验认这个字段，注册却仍然展开 N 个
+// 工具，等于"写了不生效"。这里验证它真的收成一个调度入口。
+func TestPluginCLICompactRegistersDispatcher(t *testing.T) {
+	const cliJSON = `{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "connectors": {
+    "g": {
+      "command": "git",
+      "compact_tools": true,
+      "raw": true,
+      "tools": [
+        {"name": "status", "description": "show status", "args": ["status"]},
+        {"name": "log", "description": "show log", "args": ["log", "--oneline"], "read_only": true}
+      ]
+    }
+  }
+}`
+	dir := t.TempDir()
+	writePlugin(t, dir, cliJSON)
+	p := Load(dir, filepath.Join(dir, "data"))
+	plugins := map[string]*ManagedPlugin{"demo": {Plugin: p}}
+	reg := tool.NewRegistry()
+	RegisterCLITools(plugins, reg, nil)
+
+	for _, gone := range []string{"ap_demo_cli_g_status", "ap_demo_cli_g_log"} {
+		if _, err := reg.Get(gone); err == nil {
+			t.Fatalf("%q should be collapsed into the dispatcher", gone)
+		}
+	}
+
+	tl, err := reg.Get("ap_demo_cli_g_call")
+	if err != nil {
+		t.Fatalf("compact dispatcher not registered: %v", err)
+	}
+	aw, ok := tl.(interface {
+		RequiresApproval() bool
+		ApprovalSummary() string
+	})
+	if !ok {
+		t.Fatalf("dispatcher %T lost the approval interface (silently unapproved)", tl)
+	}
+	// 调度工具能触发任意子命令，第三方声明不可信 → 恒真审批。
+	if !aw.RequiresApproval() {
+		t.Fatal("plugin compact dispatcher must always require approval")
+	}
+	if !strings.Contains(aw.ApprovalSummary(), "(plugin demo)") {
+		t.Fatalf("summary should name the plugin: %q", aw.ApprovalSummary())
+	}
+
+	// UI 的工具清单必须与注册结果一致（页面用它列出"这个插件带了哪些工具"）。
+	if _, err := reg.Get("ap_demo_cli_g_raw"); err != nil {
+		t.Fatalf("raw tool lost: %v", err)
+	}
+	names := PluginCLIToolNames("demo", p.CLIConnectors[0].Connector, "g")
+	if len(names) != 2 || names[0] != "ap_demo_cli_g_call" || names[1] != "ap_demo_cli_g_raw" {
+		t.Fatalf("tool names = %v", names)
+	}
+
+	UnregisterCLITools(plugins, reg)
+	for _, name := range []string{"ap_demo_cli_g_call", "ap_demo_cli_g_raw"} {
+		if _, err := reg.Get(name); err == nil {
+			t.Fatalf("%q must be unregistered", name)
+		}
+	}
+}

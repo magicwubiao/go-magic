@@ -371,9 +371,12 @@ func Summary(plugins map[string]*ManagedPlugin) []map[string]any {
 
 		cliEntries := make([]map[string]any, 0, len(p.CLIConnectors))
 		for _, cs := range p.CLIConnectors {
-			names := make([]string, 0, len(cs.Connector.Tools))
-			for _, spec := range cs.Connector.Tools {
-				names = append(names, PluginCLIToolName(name, cs.Name, spec.Name))
+			// 工具清单必须等于实际注册结果：开了 compact 就只有 _call，开了 raw
+			// 会多一个 _raw（见 PluginCLIToolNames）。禁用后不注册任何工具，
+			// 也不要再列清单，否则页面会显示一批根本不存在的工具名。
+			var names []string
+			if cs.Connector.AutoConnect() {
+				names = PluginCLIToolNames(name, cs.Connector, cs.Name)
 			}
 			sort.Strings(names)
 			cliEntry := map[string]any{
