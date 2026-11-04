@@ -276,8 +276,8 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	},
 	{
 		Kind: MediaKindSpeech, Name: "minimax", Label: "MiniMax 语音",
-		DefaultModel: "speech-02-hd",
-		Models:       []string{"speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo", "asr-1.0"},
+		DefaultModel:   "speech-02-hd",
+		Models:         []string{"speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo", "asr-1.0"},
 		DefaultBaseURL: "https://api.minimaxi.com",
 		ConsoleURL:     "https://platform.minimaxi.com/user-center/basic-information/interface-key",
 		DocsURL:        "https://platform.minimaxi.com/docs/guides/text-to-speech",
