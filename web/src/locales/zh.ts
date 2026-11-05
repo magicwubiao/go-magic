@@ -431,6 +431,8 @@ export default {
     contentCopied: '内容已复制',
     fullscreen: '全屏',
     exitFullscreen: '退出全屏',
+    minimize: '收起到角落',
+    restorePreview: '展开预览窗口',
     unsavedChanges: '未保存的更改',
     binaryFilePreview: '二进制文件，不支持预览',
     tooLargeToPreview: '文件超过 {size}，无法预览，请下载后查看',

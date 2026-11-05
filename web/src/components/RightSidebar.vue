@@ -530,15 +530,8 @@
       </template>
     </n-modal>
 
-    <!-- 文件预览：公共组件（与 FilesView 复用），内置高亮/编辑/全屏与移动端适配 -->
-    <FilePreviewDialog
-      v-model:show="showFilePreview"
-      :name="previewFile?.name || ''"
-      :size="previewFile?.size"
-      :fs-path="previewFile?.path || ''"
-      :session-id="chatStore.activeSessionId || undefined"
-      @saved="loadFiles"
-    />
+    <!-- 文件预览不再自带弹窗：统一塞进全局 previewStore，由 ChatView 渲染成
+         对话区右侧的并排面板（预览时对话照常可用）。 -->
   </div>
 </template>
 
@@ -582,8 +575,9 @@ import type { Goal } from '@/api/goals'
 import { getGoalSessions } from '@/api/goals'
 import * as sessionsApi from '@/api/sessions'
 
-// 文件预览（含高亮）已抽为公共组件，RightSidebar 与 FilesView 复用
-import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
+// 文件预览（含高亮）已抽为公共组件 FilePreviewPanel；右栏只往
+// previewStore 里塞目标，面板由 ChatView 并排渲染
+import { usePreviewStore } from '@/stores/preview'
 import * as terminalApi from '@/api/terminal'
 
 const props = defineProps<{
@@ -918,9 +912,9 @@ const renameNewName = ref('')
 const showDeleteModal = ref(false)
 const deleteTarget = ref<sessionsApi.FSEntry | null>(null)
 
-// File preview state（加载/类型判定/高亮/编辑已收敛到公共组件 FilePreviewDialog）
-const showFilePreview = ref(false)
-const previewFile = ref<sessionsApi.FSEntry | null>(null)
+// 文件预览：状态在全局 previewStore 里（ChatView 渲染并排面板），本组件只负责
+// 把点击的文件塞进去。不在这里挂 FilePreviewDialog 的原因见 stores/preview.ts。
+const previewStore = usePreviewStore()
 
 const dirParent = computed(() => {
   if (!dirCurrentPath.value) return ''
@@ -1024,6 +1018,14 @@ watch(() => chatStore.currentWorkDir, (newDir) => {
 
 watch(() => chatStore.activeSessionId, () => {
   try { loadTodos() } catch (e) {}
+})
+
+// 预览面板里保存成功后刷新文件列表：名称/大小/修改时间都变了，
+// 不刷新的话树里还显示旧大小（以前是弹窗 @saved 直接回调 loadFiles）。
+watch(() => previewStore.savedTick, () => {
+  if (activeTab.value === 'files') {
+    void loadFiles(dirCurrentPath.value || undefined)
+  }
 })
 
 // Goals functions
@@ -1261,11 +1263,16 @@ async function handleFileClick(entry: sessionsApi.FSEntry) {
   }
 }
 
-// 打开预览：只负责把目标文件交给公共预览组件；类型判定、内容加载、
-// 高亮、编辑保存、全屏与移动端适配都在 FilePreviewDialog 内部完成。
+// 打开预览：只负责把目标文件交给全局预览状态；类型判定、内容加载、
+// 高亮、编辑保存、全屏都在 FilePreviewPanel 内部完成。
 function openFilePreview(entry: sessionsApi.FSEntry) {
-  previewFile.value = entry
-  showFilePreview.value = true
+  previewStore.open({
+    name: entry.name,
+    size: entry.size,
+    fsPath: entry.path,
+    sessionId: chatStore.activeSessionId || undefined,
+    editable: true,
+  })
 }
 
 function startNewFolder() {

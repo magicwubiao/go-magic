@@ -249,7 +249,8 @@
                 <!-- File attachments in message：统一渲染成「图标 + 文件名」小 chip。
                      图片不再画大图缩略——气泡宽度有限，img 被 max-width/max-height
                      两头钳制后纵横比失真（用户截图报过），缩略图换弹窗原比例看。
-                     点击任意附件打开预览弹窗（FilePreviewDialog）。
+                     点击任意附件在右侧并排面板里预览（FilePreviewPanel），
+                     预览期间对话照常可用。
                      正文里带 [[att:n]] 占位标记的附件已在下方文字流原位置渲染，
                      这里只兜底显示没被标记引用到的附件（老消息 / 标记残缺）。 -->
                 <div v-if="msgFilesWithoutMarker(msg).length" class="message-files">
@@ -1114,18 +1115,70 @@
       </div>
     </div>
 
+    <!-- 预览浮窗：可拖动、右下角可缩放、可收成一条。
+         不占布局空间是这一版的关键——并排三栏在 1440 以下会把对话区挤成一条缝。
+         仍然没有遮罩、不锁 body 滚动、不抢焦点，预览期间对话照常可用。
+         移动端由 CSS 降级成整屏覆盖（见 .preview-dock 的 media query）。 -->
+    <aside
+      v-if="previewStore.visible && previewStore.target && (!previewDockMinimized || isMobile)"
+      class="preview-dock"
+      :style="previewDockStyle"
+      @mousedown.self="startPreviewDrag"
+    >
+      <FilePreviewPanel
+        :active="previewStore.visible"
+        variant="panel"
+        :name="previewStore.target.name || ''"
+        :type-name="previewStore.target.typeName || ''"
+        :size="previewStore.target.size"
+        :url="previewStore.target.url || ''"
+        :fs-path="previewStore.target.fsPath || ''"
+        :session-id="previewStore.target.sessionId"
+        :editable="previewStore.target.editable !== false"
+        @dragstart="startPreviewDrag"
+        @close="previewStore.close()"
+        @saved="previewStore.markSaved()"
+      >
+        <template #actions>
+          <!-- 小屏下浮窗本来就是整屏，没有"收到角落"这回事，直接不给入口，
+               否则点了会变成一条看不见的胶囊（mini 条在移动端也隐藏） -->
+          <n-button
+            v-if="!isMobile"
+            size="small"
+            quaternary
+            :title="t('chat.minimize')"
+            @click="togglePreviewMinimize"
+          >
+            <template #icon><n-icon :component="RemoveOutline" /></template>
+          </n-button>
+        </template>
+      </FilePreviewPanel>
+      <!-- 右下角缩放手柄 -->
+      <div class="preview-dock-resize" @mousedown="startPreviewResize"></div>
+    </aside>
+
+    <!-- 最小化条：36px 高的小胶囊钉在右下角，点标题展开、点叉关掉 -->
+    <div
+      v-if="previewStore.visible && previewStore.target && previewDockMinimized && !isMobile"
+      class="preview-dock-mini"
+    >
+      <button
+        class="preview-dock-mini-main"
+        :title="t('chat.restorePreview')"
+        @click="togglePreviewMinimize"
+      >
+        <n-icon :component="DocumentOutline" :size="14" />
+        <span class="preview-dock-mini-name">
+          {{ previewStore.target.name || previewStore.target.typeName || '' }}
+        </span>
+      </button>
+      <button class="preview-dock-mini-close" :title="t('common.close')" @click="previewStore.close()">
+        <n-icon :component="CloseOutline" :size="13" />
+      </button>
+    </div>
+
     <!-- Goal Sidebar -->
     <RightSidebar v-model:mobile-visible="rightSidebarMobileVisible" />
-
-    <!-- 消息附件预览：公共组件（url 票据来源，禁用编辑） -->
-    <FilePreviewDialog
-      v-model:show="showAttachmentPreview"
-      :name="previewAttachment ? attachmentLabel(previewAttachment) : ''"
-      :type-name="previewAttachment ? (previewAttachment.name || previewAttachment.filename || '') : ''"
-      :size="previewAttachment?.size"
-      :url="previewAttachment?.url || ''"
-      :editable="false"
-    />
 
     <!-- Mobile right sidebar toggle: edge handle embedded into the screen's right edge
          (mirrors the left session-sidebar handle), half inside/half outside, so it
@@ -1299,10 +1352,11 @@ import ChatClarificationCard from '@/components/ChatClarificationCard.vue'
 import FileChangesBlock from '@/components/FileChangesBlock.vue'
 import TimelineMessage from '@/components/TimelineMessage.vue'
 import ComposerEditor from '@/components/ComposerEditor.vue'
-import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
+import FilePreviewPanel from '@/components/FilePreviewPanel.vue'
+import { usePreviewStore } from '@/stores/preview'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline, PieChartOutline } from '@vicons/ionicons5'
+import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline, PieChartOutline, RemoveOutline, CloseOutline } from '@vicons/ionicons5'
 import type { DropdownOption, UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -1365,6 +1419,188 @@ const rightSidebarMobileVisible = ref(false)
 const mobileSessionExpanded = ref(false)
 const sidebarSearchInput = ref<{ focus: () => void } | null>(null)
 const isMobile = ref(window.innerWidth <= 768)
+
+// ========== 预览浮窗（可拖 / 可缩放 / 可最小化） ==========
+// 三栏并排（会话｜对话｜预览｜文件树）在 1440 以下就把对话区挤成一条缝，
+// 所以预览改成浮动窗口：默认不占布局空间，对话区永远全宽；需要对照时把窗口
+// 拖到不挡事的位置，或者缩到一条。仍然没有遮罩、不锁滚动、不抢焦点。
+const previewStore = usePreviewStore()
+
+interface DockRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+const PREVIEW_DOCK_KEY = 'chat-preview-dock-rect'
+const PREVIEW_DOCK_MIN_W = 320
+const PREVIEW_DOCK_MIN_H = 220
+
+function defaultDockRect(): DockRect {
+  const vw = window.innerWidth || 1440
+  const vh = window.innerHeight || 900
+  const width = Math.min(560, Math.max(PREVIEW_DOCK_MIN_W, vw - 80))
+  const height = Math.min(660, Math.max(PREVIEW_DOCK_MIN_H, vh - 180))
+  // 默认靠右上：避开输入框（左下），也不压住右侧文件树
+  return {
+    left: Math.max(12, vw - width - 300),
+    top: 64,
+    width,
+    height,
+  }
+}
+
+function loadDockRect(): DockRect {
+  try {
+    const raw = localStorage.getItem(PREVIEW_DOCK_KEY)
+    if (!raw) return defaultDockRect()
+    const p = JSON.parse(raw) as Partial<DockRect>
+    if (
+      typeof p.left !== 'number' || typeof p.top !== 'number'
+      || typeof p.width !== 'number' || typeof p.height !== 'number'
+    ) {
+      return defaultDockRect()
+    }
+    return { left: p.left, top: p.top, width: p.width, height: p.height }
+  } catch {
+    return defaultDockRect()
+  }
+}
+
+// clampDockRect 把窗口夹回视口内：换过分辨率、或者上次贴在右下角而后窗口变小，
+// 存下来的坐标可能整块落在屏幕外——不夹一下会出现"点开预览什么都没有"。
+function clampDockRect(r: DockRect): DockRect {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const margin = 8
+  const maxW = Math.max(PREVIEW_DOCK_MIN_W, vw - margin * 2)
+  const maxH = Math.max(PREVIEW_DOCK_MIN_H, vh - margin * 2)
+  const width = Math.min(Math.max(PREVIEW_DOCK_MIN_W, r.width), maxW)
+  const height = Math.min(Math.max(PREVIEW_DOCK_MIN_H, r.height), maxH)
+  return {
+    width,
+    height,
+    left: Math.min(Math.max(margin, r.left), Math.max(margin, vw - width - margin)),
+    top: Math.min(Math.max(margin, r.top), Math.max(margin, vh - height - margin)),
+  }
+}
+
+const previewDock = ref<DockRect>(clampDockRect(loadDockRect()))
+const previewDockMinimized = ref(false)
+
+const previewDockStyle = computed(() => ({
+  left: `${previewDock.value.left}px`,
+  top: `${previewDock.value.top}px`,
+  width: `${previewDock.value.width}px`,
+  height: `${previewDock.value.height}px`,
+}))
+
+function persistDockRect() {
+  try {
+    localStorage.setItem(PREVIEW_DOCK_KEY, JSON.stringify(previewDock.value))
+  } catch {
+    // 隐私模式写不进去就算了
+  }
+}
+
+// installDragSession 统一管理"按下 → 移动 → 松开"的全局监听与清理。
+// 拖拽期间必须给 body 加类并禁掉预览 iframe 的 pointer-events，否则鼠标一旦
+// 滑进 iframe 就收不到 mousemove，窗口像被粘住一样跟不动。
+let dockSessionCleanup: (() => void) | null = null
+function installDragSession(
+  cursor: string,
+  onMove: (ev: MouseEvent) => void,
+  onEnd?: () => void,
+) {
+  dockSessionCleanup?.()
+  const prevCursor = document.body.style.cursor
+  const prevSelect = document.body.style.userSelect
+  document.body.style.cursor = cursor
+  document.body.style.userSelect = 'none'
+  document.body.classList.add('preview-dock-dragging')
+
+  const move = (ev: MouseEvent) => {
+    ev.preventDefault()
+    onMove(ev)
+  }
+  const end = () => {
+    document.body.style.cursor = prevCursor
+    document.body.style.userSelect = prevSelect
+    document.body.classList.remove('preview-dock-dragging')
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', end)
+    dockSessionCleanup = null
+    onEnd?.()
+  }
+  dockSessionCleanup = end
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', end)
+}
+
+// 拖动：预览面板工具栏的空白处（或浮窗自身的留白）按下即可拖走整个窗口
+function startPreviewDrag(e: MouseEvent) {
+  if (isMobile.value || previewDockMinimized.value) return
+  if (e.button !== 0) return
+  e.preventDefault()
+  const startX = e.clientX
+  const startY = e.clientY
+  const origin = { ...previewDock.value }
+  installDragSession('grabbing', (ev) => {
+    previewDock.value = clampDockRect({
+      ...origin,
+      left: origin.left + (ev.clientX - startX),
+      top: origin.top + (ev.clientY - startY),
+    })
+  }, persistDockRect)
+}
+
+// 缩放：右下角手柄
+function startPreviewResize(e: MouseEvent) {
+  if (isMobile.value) return
+  if (e.button !== 0) return
+  e.preventDefault()
+  e.stopPropagation()
+  const startX = e.clientX
+  const startY = e.clientY
+  const origin = { ...previewDock.value }
+  installDragSession('nwse-resize', (ev) => {
+    previewDock.value = clampDockRect({
+      ...origin,
+      width: origin.width + (ev.clientX - startX),
+      height: origin.height + (ev.clientY - startY),
+    })
+  }, persistDockRect)
+}
+
+function togglePreviewMinimize() {
+  previewDockMinimized.value = !previewDockMinimized.value
+}
+
+// 视口变化只做夹取，不写回存储：用户没主动调整过，别用某次小窗口的尺寸
+// 覆盖掉他自己拖好的位置
+function clampDockOnResize() {
+  previewDock.value = clampDockRect(previewDock.value)
+}
+
+onMounted(() => {
+  window.addEventListener('resize', clampDockOnResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', clampDockOnResize)
+  dockSessionCleanup?.()
+})
+
+// 每次重新打开预览都展开（上次可能被收成了一条）
+watch(() => previewStore.visible, (v) => {
+  if (v) previewDockMinimized.value = false
+})
+
+// 切会话就关预览：面板里可能还挂着上一个会话的文件（尤其是会话 A 的工作区文件），
+// 留着会让人以为它属于当前会话。
+watch(() => chatStore.activeSessionId, () => {
+  previewStore.close()
+})
 
 // ========== 上下文用量浮层 ==========
 // 数据源是 GET /api/sessions/{id}/context：服务端按分类估算发往模型的
@@ -3358,15 +3594,18 @@ function attachmentLabel(file: Partial<sessionsApi.UploadedFile>): string {
 }
 
 // ===== 消息附件预览 =====
-// 点击气泡里的附件条目打开公共预览弹窗（FilePreviewDialog 走 props.url 的
-// uploads 票据来源，编辑已禁用；预览/下载/新标签打开都在弹窗内完成）。
-const showAttachmentPreview = ref(false)
-const previewAttachment = ref<Partial<sessionsApi.UploadedFile> | null>(null)
-
+// 点击气泡里的附件条目打开右侧并排预览面板（走 props.url 的 uploads 票据来源，
+// 编辑已禁用）。预览状态放在全局 store 里，右栏文件树也往同一份状态里塞目标，
+// 保证同一时刻只有一个预览面板。
 function openAttachmentPreview(file: Partial<sessionsApi.UploadedFile>) {
   if (!file.url) return
-  previewAttachment.value = file
-  showAttachmentPreview.value = true
+  previewStore.open({
+    name: attachmentLabel(file),
+    typeName: file.name || file.filename || '',
+    size: file.size,
+    url: file.url,
+    editable: false,
+  })
 }
 
 // Work directory functions
@@ -4816,6 +5055,137 @@ onActivated(() => {
   flex-direction: column;
   min-width: 360px;
   background: #fff;
+}
+
+/* ========== 预览浮窗 ==========
+   用 fixed 而不是占一列：并排三栏（会话｜对话｜预览｜文件树）在 1440 以下
+   会把对话区挤成一条缝。浮窗默认不占布局空间，对话区永远全宽。
+   注意：没有遮罩、不动 body overflow —— 预览打开时对话区必须完全可交互。 */
+.preview-dock {
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 10px 10px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+  /* 圆角内侧不能露出内容的直角 */
+  overflow: hidden;
+}
+
+/* 面板本体吃掉浮窗扣掉内边距后的全部高度；不写死 height 免得和内边距打架 */
+.preview-dock > .file-preview-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 右下角缩放手柄：16px 命中区 + 两道斜线。压在内容之上但不挡工具栏按钮 */
+.preview-dock-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  z-index: 3;
+  cursor: nwse-resize;
+}
+
+.preview-dock-resize::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #c9c9c9;
+  border-bottom: 2px solid #c9c9c9;
+  border-bottom-right-radius: 2px;
+}
+
+.preview-dock-resize:hover::after {
+  border-color: #2d8cf0;
+}
+
+/* 最小化后的小胶囊：钉在右下角，避开输入区。点标题展开、点叉关闭 */
+.preview-dock-mini {
+  position: fixed;
+  right: 16px;
+  bottom: 96px;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 320px;
+  height: 36px;
+  padding: 0 4px 0 10px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 18px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+.preview-dock-mini-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: #333;
+}
+
+.preview-dock-mini-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.preview-dock-mini-main:hover .preview-dock-mini-name {
+  color: #2d8cf0;
+}
+
+.preview-dock-mini-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: #999;
+  cursor: pointer;
+}
+
+.preview-dock-mini-close:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+/* 小屏：浮窗退化成整屏覆盖（塞不下两个窗口），仍不是模态——关掉就回到对话 */
+@media (max-width: 768px) {
+  .preview-dock {
+    inset: 0 !important;
+    width: auto !important;
+    height: 100dvh !important;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .preview-dock-resize {
+    display: none;
+  }
 }
 
 /* 滚动区的外壳：只用来给"回到底部"按钮提供定位上下文（滚动容器内部的
@@ -7111,6 +7481,17 @@ onActivated(() => {
   不撑宽、不产生横向滚动，scrollW 恢复 375、面板完整落屏内（无需 JS translateX 校正）。
 -->
 <style>
+/* 预览浮窗拖动/缩放中：阻止预览内容里的 iframe 抢走 mousemove。
+   iframe 是子文档，鼠标进入后 window 上的 mousemove 会断流，窗口看起来就"粘住"了。
+   这条规则必须先命中 body（全局区），scoped 里写 body.xxx iframe 拿不到 data-v。 */
+body.preview-dock-dragging iframe {
+  pointer-events: none;
+}
+
+/* 拖动中整个页面都不该被选中/出现文本光标 */
+body.preview-dock-dragging {
+  user-select: none;
+}
 /* 会话重命名弹窗：n-modal 会被 teleport 到 body，身上没有 data-v-xxx，
    scoped 规则一条都不生效（曾导致 width:460px 失效、卡片被撑满整屏）。
    必须写在全局区。 */

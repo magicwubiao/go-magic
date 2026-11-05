@@ -427,6 +427,8 @@ export default {
     contentCopied: 'Content copied',
     fullscreen: 'Fullscreen',
     exitFullscreen: 'Exit fullscreen',
+    minimize: 'Collapse to corner',
+    restorePreview: 'Expand preview window',
     unsavedChanges: 'Unsaved changes',
     binaryFilePreview: 'Binary file, preview not supported',
     tooLargeToPreview: 'File exceeds {size} and cannot be previewed. Download it instead.',
