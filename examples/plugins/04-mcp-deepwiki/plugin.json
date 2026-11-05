@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcp-deepwiki",
+  "version": "1.0.0",
+  "description": "Ask questions about any public GitHub repository.",
+  "keywords": [
+    "mcp",
+    "docs",
+    "repositories"
+  ],
+  "extensions": {
+    "io.github.magicwubiao.catalog": {
+      "id": "deepwiki",
+      "kind": "mcp"
+    }
+  }
+}

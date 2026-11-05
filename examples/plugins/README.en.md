@@ -7,7 +7,7 @@ Every subdirectory here is a complete, installable Agent Plugin covering one com
 | [01-skill-only](01-skill-only/) | Skills only: SKILL.md frontmatter, per-skill scripts, icon, `examples` prompts | none |
 | [02-mcp-stdio-notes](02-mcp-stdio-notes/) | A runnable stdio MCP server (Python stdlib only), `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` expansion, data persistence | Python 3.8+ |
 | [03-cli-gh](03-cli-gh/) | cli.json connector: `{{param}}` templates, `{{?param}}` conditionals, stdin params, credential placeholders, raw escape hatch | local `gh` binary |
-| [04-mcp-http-remote](04-mcp-http-remote/) | Remote MCP: streamable-http and sse transports, `${CRED:NAME}` header credentials, OAuth 2.1 | network |
+| [04-mcp-deepwiki](04-mcp-deepwiki/) | Remote MCP: `streamable-http` transport, minimal cloud setup with no local process or credentials, `io.github.magicwubiao.catalog` extension declaration | network |
 | [05-media-provider](05-media-provider/) | Extension namespace: contribute a backend to the built-in `image_gen` tool, return `b64` payloads | Python 3.8+ |
 | [06-mcp-blender](06-mcp-blender/) | Local bridge: Blender. The server only relays — the add-on inside Blender listens on 9876 and the server connects back to it | Blender + add-on locally, uv/uvx |
 | [07-mcp-unity](07-mcp-unity/) | Local bridge: Unity. The server comes from PyPI (`mcpforunityserver`); the Editor side is the MCP for Unity package in your project | Unity Editor + package in project, uv/uvx |

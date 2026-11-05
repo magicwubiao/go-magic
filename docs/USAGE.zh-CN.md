@@ -1188,7 +1188,7 @@ POST /api/mcp/servers/{name}/oauth/signout 登出（删除本地 token）
 
 Web 页「连接器 → 从目录添加」里内置了一批常见 server（GitHub、Slack、Notion、Postgres、Playwright…），选中后会预填命令与需要的凭据名，填完保存即可。
 
-目录里的条目**一律是纯远程或纯本地进程**，不依赖"同一台机器上还装着某个客户端软件"：go-magic 经常部署在服务器上，那种条目一旦内置，用户在服务端点了就是必然失败。因此 Blender / Unity / Godot、Figma 桌面版（本机 3845 端口）、即时设计画布桥接这类**本地软件桥**不在目录里，而是随示例插件分发（一个软件一个示例，按需只装自己用的）：`examples/plugins/06-mcp-blender`、`07-mcp-unity`、`08-mcp-godot`、`09-mcp-figma-desktop`、`10-mcp-jsdesign`，本地要用时 `magic plugin install` 装一次即可。
+目录里的条目**一律是纯远程或纯本地进程**，不依赖"同一台机器上还装着某个客户端软件"：go-magic 经常部署在服务器上，那种条目一旦内置，用户在服务端点了就是必然失败。因此 Blender / Unity / Godot、Figma 桌面版（本机 3845 端口）、即时设计画布桥接、FreeCAD（本机 9875 端口）这类**本地软件桥**不在目录里，而是随示例插件分发（一个软件一个示例，按需只装自己用的）：`examples/plugins/06-mcp-blender`、`07-mcp-unity`、`08-mcp-godot`、`09-mcp-figma-desktop`、`10-mcp-jsdesign`、`11-mcp-freecad`，本地要用时 `magic plugin install` 装一次即可。
 
 #### 用 JSON 添加（可直接粘贴别家的配置）
 
@@ -1418,7 +1418,7 @@ magic plugin remove  github-workflow --purge        # 连数据目录一起删
 
 升级语义：新版本先解压到扫描目录下的隐藏临时目录，校验清单通过后**整体换名**替换旧目录（失败时旧版本原样保留）；数据目录在 `plugins-data/` 下，不在替换范围内，因此升级不丢 `PLUGIN_DATA`。卸载默认也保留数据，只有 `--purge` 才删除。
 
-> **完整可安装的示例**：[`examples/plugins/`](../examples/plugins/README.md) 下有 5 个覆盖不同组件类型的插件——纯技能、自带 stdio MCP server、cli.json 连接器、远程 http + `${CRED:}` 凭据与 OAuth、媒体后端扩展——每个都带 README 逐字段拆解。`internal/agentplugin/examples_test.go` 会在 `go test` 里持续校验这些示例仍然合法。
+> **完整可安装的示例**：[`examples/plugins/`](../examples/plugins/README.md) 下有 11 个覆盖不同组件类型的插件——纯技能、自带 stdio MCP server、cli.json 连接器、远程 streamable-http MCP（DeepWiki，免凭据的最简云端接入）、媒体后端扩展，外加 6 个本地软件桥（Blender / Unity / Godot / Figma 桌面版 / 即时设计 / FreeCAD）——每个都带 README 逐字段拆解。`${CRED:}` 凭据占位在 03（cli.json）里演示，远程条目的凭据与 `oauth` 字段见 15.4 节。`internal/agentplugin/examples_test.go` 会在 `go test` 里持续校验这些示例仍然合法。
 
 网页「插件」页做同样的事：上传 zip、启用/禁用、卸载、填凭据、单独重连某个 MCP 条目。
 

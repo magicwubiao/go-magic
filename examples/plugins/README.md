@@ -7,7 +7,7 @@
 | [01-skill-only](01-skill-only/) | 纯技能插件：SKILL.md 前言字段、skill 内置脚本、图标、`examples` 问法 | 无 |
 | [02-mcp-stdio-notes](02-mcp-stdio-notes/) | 自带一个可运行的 stdio MCP server（纯 Python 标准库），`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 变量、数据落盘 | Python 3.8+ |
 | [03-cli-gh](03-cli-gh/) | cli.json 连接器：参数模板 `{{x}}`、条件参数 `{{?x}}`、stdin 传参、凭据占位、raw 逃生工具 | 本机装有 `gh` |
-| [04-mcp-http-remote](04-mcp-http-remote/) | 远程 MCP：streamable-http / sse 两种传输、`${CRED:NAME}` 请求头凭据、OAuth 2.1 免配置授权 | 网络 |
+| [04-mcp-deepwiki](04-mcp-deepwiki/) | 远程 MCP：`streamable-http` 传输、免本地进程免凭据的最简云端接入、`io.github.magicwubiao.catalog` 目录扩展声明 | 网络 |
 | [05-media-provider](05-media-provider/) | 扩展命名空间：插件给内置 `image_gen` 工具"换后端"，返回 `b64` 由内核落盘 | Python 3.8+ |
 | [06-mcp-blender](06-mcp-blender/) | 本地桥：Blender。server 只转发，真身是 Blender 里的 add-on（add-on 监听 9876，server 反向连它） | 本机 Blender + add-on、uv/uvx |
 | [07-mcp-unity](07-mcp-unity/) | 本地桥：Unity。server 从 PyPI 拉 `mcpforunityserver`，操作 Editor 的是项目里的 MCP for Unity 包 | 本机 Unity Editor + 项目内桥接包、uv/uvx |

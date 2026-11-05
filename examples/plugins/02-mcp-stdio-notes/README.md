@@ -61,4 +61,4 @@ EOF
 
 把 `command` 换成你的二进制、`args` 换成真实参数即可。需要 API key 时在 `env` 里加
 `"API_KEY": ""`（值为空 = 凭据表单里多一个输入框），或把 key 写进
-`args` / `headers` 的 `${CRED:API_KEY}` 占位符——见示例 04。
+`args` / `headers` 的 `${CRED:API_KEY}` 占位符——字段说明见 `docs/USAGE.zh-CN.md` 15.4 节（远程条目的完整演示见示例 04 的 README 末尾）。
