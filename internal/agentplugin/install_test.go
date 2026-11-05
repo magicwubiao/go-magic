@@ -61,7 +61,7 @@ func TestInstallFromZip_UpgradeReplacesFilesAndKeepsData(t *testing.T) {
 	}
 
 	// 写入一份"跨更新持久"的插件数据。
-	dataDir := filepath.Join(home, "agent-plugins-data", "demo")
+	dataDir := filepath.Join(home, "plugins-data", "demo")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir data: %v", err)
 	}

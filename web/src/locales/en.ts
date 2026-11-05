@@ -1930,8 +1930,8 @@ export default {
     noSearchResult: 'No connector matches your search',
   },
   agentplugins: {
-    title: 'Agent Plugins',
-    subtitle: 'OpenAI Agent Plugins 1.0.0 spec — portable, cross-platform plugins',
+    title: 'Plugins',
+    subtitle: 'One plugin bundles skills, MCP servers and CLI connectors — install and use in chat',
     reload: 'Reload',
     scanDir: 'Scan directory',
     noPlugins: 'No Agent Plugins installed',

@@ -173,7 +173,7 @@ func (s *Server) getInstallJob(id string) *cliInstallJob {
 
 // handleCLIInstallStart 提交一次安装任务。
 //
-//	POST /api/agent-plugins/cli/install
+//	POST /api/plugins/cli/install
 //	body: {"id":"gh"}            // 目录条目（kind 缺省为 cli）
 //	      {"plugin":"cli-gh"}    // 已安装插件：从 extensions 反查目录条目
 func (s *Server) handleCLIInstallStart(w http.ResponseWriter, r *http.Request) {
@@ -264,7 +264,7 @@ func (s *Server) handleCLIInstallStart(w http.ResponseWriter, r *http.Request) {
 
 // handleCLIInstallStatus 轮询一次任务状态。
 //
-//	GET /api/agent-plugins/cli/install/{id}
+//	GET /api/plugins/cli/install/{id}
 func (s *Server) handleCLIInstallStatus(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -57,7 +57,7 @@ func TestPluginCLIOAuthRoutesAndSummary(t *testing.T) {
 	}
 
 	// 未登录：status 可达、configured=true、state=none。
-	rec := call(http.MethodGet, "/api/agent-plugins/demo/cli/gh/oauth/status")
+	rec := call(http.MethodGet, "/api/plugins/demo/cli/gh/oauth/status")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status code = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -75,12 +75,12 @@ func TestPluginCLIOAuthRoutesAndSummary(t *testing.T) {
 	}
 
 	// 未知连接器必须 404（证明路径进到了处理器而不是被前缀分支挡掉）。
-	if rec := call(http.MethodGet, "/api/agent-plugins/demo/cli/nope/oauth/status"); rec.Code != http.StatusNotFound {
+	if rec := call(http.MethodGet, "/api/plugins/demo/cli/nope/oauth/status"); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown connector code = %d, want 404", rec.Code)
 	}
 
 	// start：设备授权端点不可达 → 4xx/5xx 的明确错误，不能 500 或挂住。
-	if rec := call(http.MethodPost, "/api/agent-plugins/demo/cli/gh/oauth/start"); rec.Code < http.StatusBadRequest {
+	if rec := call(http.MethodPost, "/api/plugins/demo/cli/gh/oauth/start"); rec.Code < http.StatusBadRequest {
 		t.Fatalf("start with unreachable endpoint = %d body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -137,7 +137,7 @@ func TestPluginCLIOAuthRoutesAndSummary(t *testing.T) {
 		t.Fatalf("token source = (%q, %v), want tok", tok, err)
 	}
 
-	rec = call(http.MethodGet, "/api/agent-plugins/demo/cli/gh/oauth/status")
+	rec = call(http.MethodGet, "/api/plugins/demo/cli/gh/oauth/status")
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -154,10 +154,10 @@ func TestPluginCLIOAuthRoutesAndSummary(t *testing.T) {
 	}
 
 	// 登出：token 删除，状态回到 none。
-	if rec := call(http.MethodPost, "/api/agent-plugins/demo/cli/gh/oauth/signout"); rec.Code != http.StatusOK {
+	if rec := call(http.MethodPost, "/api/plugins/demo/cli/gh/oauth/signout"); rec.Code != http.StatusOK {
 		t.Fatalf("signout = %d body=%s", rec.Code, rec.Body.String())
 	}
-	rec = call(http.MethodGet, "/api/agent-plugins/demo/cli/gh/oauth/status")
+	rec = call(http.MethodGet, "/api/plugins/demo/cli/gh/oauth/status")
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

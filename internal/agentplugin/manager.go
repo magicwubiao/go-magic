@@ -60,13 +60,50 @@ func NewManager(scanDirs []string, disabled map[string]bool) *Manager {
 	}
 }
 
-// DefaultScanDir 返回默认扫描目录 ~/.magic/agent-plugins。
+// DefaultScanDir 返回默认扫描目录 <magicHome>/plugins。
 func DefaultScanDir() string {
-	return filepath.Join(config.GetMagicHome(), "agent-plugins")
+	return filepath.Join(config.GetMagicHome(), "plugins")
 }
 
-// EnsureDefaultScanDir 确保默认扫描目录存在。
+// DefaultDataDir 返回插件数据根目录 <magicHome>/plugins-data。
+// 每个插件的数据目录是 <magicHome>/plugins-data/<目录名>（${PLUGIN_DATA} 展开）。
+func DefaultDataDir() string {
+	return filepath.Join(config.GetMagicHome(), "plugins-data")
+}
+
+// legacy 目录名（历史版本）：启动时一次性搬到新命名，老用户无感。
+const (
+	legacyScanDir = "agent-plugins"
+	legacyDataDir = "agent-plugins-data"
+)
+
+// migrateLegacyDirs 把旧命名目录搬到新命名。
+// 只在"旧目录存在且新目录不存在"时 rename，避免覆盖新数据；
+// 失败只记日志不阻塞启动（旧目录还在，顶多算没迁移）。
+func migrateLegacyDirs() {
+	home := config.GetMagicHome()
+	pairs := [][2]string{
+		{filepath.Join(home, legacyScanDir), filepath.Join(home, "plugins")},
+		{filepath.Join(home, legacyDataDir), filepath.Join(home, "plugins-data")},
+	}
+	for _, p := range pairs {
+		if _, err := os.Stat(p[0]); err != nil {
+			continue // 旧目录不存在：没有可迁移的
+		}
+		if _, err := os.Stat(p[1]); err == nil {
+			continue // 新目录已存在：不动，避免覆盖
+		}
+		if err := os.Rename(p[0], p[1]); err != nil {
+			log.Warnf("[AgentPlugin] migrate legacy dir %s -> %s: %v", p[0], p[1], err)
+			continue
+		}
+		log.Infof("[AgentPlugin] migrated legacy dir %s -> %s", p[0], p[1])
+	}
+}
+
+// EnsureDefaultScanDir 确保默认扫描目录存在（含旧目录一次性迁移）。
 func EnsureDefaultScanDir() error {
+	migrateLegacyDirs()
 	return os.MkdirAll(DefaultScanDir(), 0o755)
 }
 
@@ -142,7 +179,7 @@ func hasManifest(dir string) bool {
 // loadManaged 加载单个插件并按需创建运行时。
 func loadManaged(pluginDir string) *ManagedPlugin {
 	dirName := filepath.Base(pluginDir)
-	dataDir := filepath.Join(config.GetMagicHome(), "agent-plugins-data", dirName)
+	dataDir := filepath.Join(DefaultDataDir(), dirName)
 	p := Load(pluginDir, dataDir)
 	mp := &ManagedPlugin{Plugin: p, DirName: dirName, Rejected: p.IsRejected()}
 	if mp.Name() == "" {

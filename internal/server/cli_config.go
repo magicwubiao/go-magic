@@ -5,7 +5,7 @@ package server
 // 历史：这里曾经有一整套 /api/cli/connectors CRUD + /api/cli/parse +
 // /api/cli/test，配套连接器页的「CLI」页签。那条路已经移除——CLI 连接器
 // 现在只有两个入口：
-//  1. 目录卡片（pkg/clicatalog → Agent Plugin，走 /api/agent-plugins/*）；
+//  1. 目录卡片（pkg/clicatalog → Agent Plugin，走 /api/plugins/*）；
 //  2. 配置文件里的 cli 段（cli.json / config.json），给 TUI 与团队分发用。
 //
 // 之所以保留配置侧：`magic` 启动的会话、以及拷过来的 cli.json 仍然要生效。

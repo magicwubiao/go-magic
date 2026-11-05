@@ -1290,7 +1290,7 @@ magic acp disconnect helper
 "env": ["GH_TOKEN=${GH_TOKEN}"]
 ```
 
-**手写的连接器不再有设备码授权入口**：`cli.json` 里的 `oauth` 段仍然生效——token 照样注入 `token_env`，过期照样静默刷新——但"发起授权"需要一个带登录按钮的界面，而那个界面（原来连接器页的 CLI 页签）已经随手写表单一起移除。已授权的存量连接器会一直工作到 `refresh_token` 失效为止，之后报错会直接指出迁移路径。新接入要走插件：`~/.magic/agent-plugins/cli-<名字>/` 下放一份 `plugin.json` + `cli.json`（`connectors` 结构与这里完全相同），插件页的凭据弹窗提供设备码登录、登出和"未登录"阻塞提示。
+**手写的连接器不再有设备码授权入口**：`cli.json` 里的 `oauth` 段仍然生效——token 照样注入 `token_env`，过期照样静默刷新——但"发起授权"需要一个带登录按钮的界面，而那个界面（原来连接器页的 CLI 页签）已经随手写表单一起移除。已授权的存量连接器会一直工作到 `refresh_token` 失效为止，之后报错会直接指出迁移路径。新接入要走插件：`~/.magic/plugins/cli-<名字>/` 下放一份 `plugin.json` + `cli.json`（`connectors` 结构与这里完全相同），插件页的凭据弹窗提供设备码登录、登出和"未登录"阻塞提示。
 
 命令行侧可以用 `magic cli list` 查看已配置的连接器与展开后的工具名（`cli_<connector>_<tool>`），排查"模型为什么看不到某个工具"时最直接。
 
@@ -1357,14 +1357,14 @@ cli_gh_call({"tool": "pr_list", "params": {"repo": "owner/name", "limit": 20}})
 
 单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。`cli.json` 是唯一的手写入口（与 `config.json` 同级），改完重启服务端或运行 `magic` 重新加载；排查"模型为什么看不到某个工具"先跑 `magic cli list`。
 
-> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/agent-plugins/cli-docker/` 之类），工具名带插件前缀 `ap_cli-docker_cli_docker_ps`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
+> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/plugins/cli-docker/` 之类），工具名带插件前缀 `ap_cli-docker_cli_docker_ps`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
 
 ### 15.4 插件（Agent Plugins）
 
 插件不是新的运行时概念：一个插件就是一个**目录**，里面装技能、MCP server、CLI 连接器，加载后走各自既有的注册路径。本实现遵循 [Agent Plugins 1.0.0](https://agent-plugins.org) 规范。
 
 ```
-<magicHome>/agent-plugins/<dir>/
+<magicHome>/plugins/<dir>/
   plugin.json          # 必须（$schema + name）
   skills/<name>/SKILL.md
   mcp.json             # 可选
@@ -1416,20 +1416,20 @@ magic plugin remove  github-workflow   # 删目录（默认保留 PLUGIN_DATA）
 magic plugin remove  github-workflow --purge        # 连数据目录一起删
 ```
 
-升级语义：新版本先解压到扫描目录下的隐藏临时目录，校验清单通过后**整体换名**替换旧目录（失败时旧版本原样保留）；数据目录在 `agent-plugins-data/` 下，不在替换范围内，因此升级不丢 `PLUGIN_DATA`。卸载默认也保留数据，只有 `--purge` 才删除。
+升级语义：新版本先解压到扫描目录下的隐藏临时目录，校验清单通过后**整体换名**替换旧目录（失败时旧版本原样保留）；数据目录在 `plugins-data/` 下，不在替换范围内，因此升级不丢 `PLUGIN_DATA`。卸载默认也保留数据，只有 `--purge` 才删除。
 
 > **完整可安装的示例**：[`examples/plugins/`](../examples/plugins/README.md) 下有 5 个覆盖不同组件类型的插件——纯技能、自带 stdio MCP server、cli.json 连接器、远程 http + `${CRED:}` 凭据与 OAuth、媒体后端扩展——每个都带 README 逐字段拆解。`internal/agentplugin/examples_test.go` 会在 `go test` 里持续校验这些示例仍然合法。
 
 网页「插件」页做同样的事：上传 zip、启用/禁用、卸载、填凭据、单独重连某个 MCP 条目。
 
 ```
-GET    /api/agent-plugins                        摘要（含 cli_connectors / warnings）
-POST   /api/agent-plugins/install                上传 zip
-POST   /api/agent-plugins/reload                 重新扫描
-POST   /api/agent-plugins/{name}/uninstall|enable|disable
-GET    /api/agent-plugins/{name}/credentials     凭据（*** 掩码）
-POST   /api/agent-plugins/{name}/credentials     保存并重连
-POST   /api/agent-plugins/{name}/mcp/{server}/connect
+GET    /api/plugins                              摘要（含 cli_connectors / warnings）
+POST   /api/plugins/install                      上传 zip
+POST   /api/plugins/reload                       重新扫描
+POST   /api/plugins/{name}/uninstall|enable|disable
+GET    /api/plugins/{name}/credentials           凭据（*** 掩码）
+POST   /api/plugins/{name}/credentials           保存并重连
+POST   /api/plugins/{name}/mcp/{server}/connect
 ```
 
 约定：

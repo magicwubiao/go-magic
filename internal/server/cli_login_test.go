@@ -16,7 +16,7 @@ import (
 //   - /api/cli/catalog/login/{session} 能到达处理器（未知会话 404，而不是 405）。
 //
 // 连接器级 OAuth 的三个路由已随手写 CLI 面板一起移除，现在只剩插件那条
-// （/api/agent-plugins/{p}/cli/{n}/oauth/*，见 agentplugin_cli_oauth_test.go）。
+// （/api/plugins/{p}/cli/{n}/oauth/*，见 agentplugin_cli_oauth_test.go）。
 func TestCLILoginRoutes(t *testing.T) {
 	s := &Server{}
 

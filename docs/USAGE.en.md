@@ -1310,7 +1310,7 @@ Config lives in a standalone `cli.json` under magicHome (default `~/.magic`). Th
 "env": ["GH_TOKEN=${GH_TOKEN}"]
 ```
 
-**Hand-written connectors no longer have a device-code sign-in entry.** The `oauth` block in `cli.json` still works — the token is still injected into `token_env` and still refreshed silently — but *starting* an authorization needs a screen with a sign-in button, and that screen (the old CLI tab on the Connectors page) was removed together with the form. Connectors that are already authorized keep working until their `refresh_token` expires; the error after that points at the migration path. New setups belong in a plugin: drop `plugin.json` + `cli.json` into `~/.magic/agent-plugins/cli-<name>/` (the `connectors` block is identical to the one here) and the plugin's credential dialog offers device-code sign-in, sign-out and a "not signed in" blocker.
+**Hand-written connectors no longer have a device-code sign-in entry.** The `oauth` block in `cli.json` still works — the token is still injected into `token_env` and still refreshed silently — but *starting* an authorization needs a screen with a sign-in button, and that screen (the old CLI tab on the Connectors page) was removed together with the form. Connectors that are already authorized keep working until their `refresh_token` expires; the error after that points at the migration path. New setups belong in a plugin: drop `plugin.json` + `cli.json` into `~/.magic/plugins/cli-<name>/` (the `connectors` block is identical to the one here) and the plugin's credential dialog offers device-code sign-in, sign-out and a "not signed in" blocker.
 
 On the command line, `magic cli list` shows the configured connectors and the expanded tool names (`cli_<connector>_<tool>`) — the fastest way to answer "why can't the model see this tool".
 
@@ -1377,14 +1377,14 @@ It is therefore off by default and intended for connectors with many tools in a 
 
 `cli.json` is the only hand-written entry point (next to `config.json`); restart the server or run `magic` to reload it, and start with `magic cli list` when debugging "why can't the model see this tool".
 
-> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/agent-plugins/cli-docker/` and friends). Their tools carry the plugin prefix — `ap_cli-docker_cli_docker_ps` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
+> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/plugins/cli-docker/` and friends). Their tools carry the plugin prefix — `ap_cli-docker_cli_docker_ps` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
 
 ### 15.4 Plugins (Agent Plugins)
 
 A plugin is not a new runtime concept: a plugin is a **directory** holding skills, MCP servers and CLI connectors, all of which go through the existing registration paths once loaded. This implementation follows the [Agent Plugins 1.0.0](https://agent-plugins.org) spec.
 
 ```
-<magicHome>/agent-plugins/<dir>/
+<magicHome>/plugins/<dir>/
   plugin.json          # required ($schema + name)
   skills/<name>/SKILL.md
   mcp.json             # optional
@@ -1436,20 +1436,20 @@ magic plugin remove  github-workflow   # directory only (PLUGIN_DATA is kept)
 magic plugin remove  github-workflow --purge        # directory + data dir
 ```
 
-Upgrade semantics: the new version is unpacked into a hidden staging directory inside the scan dir, validated, then renamed into place (the old directory is moved aside first and restored if the swap fails). `PLUGIN_DATA` lives under `agent-plugins-data/`, outside the replaced tree, so upgrading never loses it. Uninstall keeps it too unless `--purge` is passed.
+Upgrade semantics: the new version is unpacked into a hidden staging directory inside the scan dir, validated, then renamed into place (the old directory is moved aside first and restored if the swap fails). `PLUGIN_DATA` lives under `plugins-data/`, outside the replaced tree, so upgrading never loses it. Uninstall keeps it too unless `--purge` is passed.
 
 > **Complete installable examples**: [`examples/plugins/`](../examples/plugins/README.en.md) contains 5 plugins covering every component type — skills only, a bundled stdio MCP server, a cli.json connector, remote http + `${CRED:}` credentials and OAuth, and a media-provider extension — each with a README that explains the fields. `internal/agentplugin/examples_test.go` keeps validating them on every `go test` run.
 
 The Plugins page does the same thing in the browser: upload a zip, enable/disable, uninstall, fill in credentials, reconnect a single MCP entry.
 
 ```
-GET    /api/agent-plugins                        summary (incl. cli_connectors / warnings)
-POST   /api/agent-plugins/install                upload a zip
-POST   /api/agent-plugins/reload                 rescan
-POST   /api/agent-plugins/{name}/uninstall|enable|disable
-GET    /api/agent-plugins/{name}/credentials     credentials (*** masked)
-POST   /api/agent-plugins/{name}/credentials     save + reconnect
-POST   /api/agent-plugins/{name}/mcp/{server}/connect
+GET    /api/plugins                              summary (incl. cli_connectors / warnings)
+POST   /api/plugins/install                      upload a zip
+POST   /api/plugins/reload                       rescan
+POST   /api/plugins/{name}/uninstall|enable|disable
+GET    /api/plugins/{name}/credentials           credentials (*** masked)
+POST   /api/plugins/{name}/credentials           save + reconnect
+POST   /api/plugins/{name}/mcp/{server}/connect
 ```
 
 Conventions:

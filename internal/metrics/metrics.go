@@ -207,11 +207,6 @@ type Metrics struct {
 	CacheHits            *Counter   `json:"cache_hits"`
 	CacheMisses          *Counter   `json:"cache_misses"`
 
-	// Plugin metrics
-	PluginLoadCount  *Counter `json:"plugin_load_count"`
-	PluginUsageCount *Counter `json:"plugin_usage_count"`
-	PluginErrors     *Counter `json:"plugin_errors"`
-
 	// Skill metrics
 	SkillsCreated     *Counter `json:"skills_created"`
 	SkillUsageCount   *Counter `json:"skill_usage_count"`
@@ -253,9 +248,6 @@ func NewMetrics() *Metrics {
 		MemoryRetrievalCount: &Counter{},
 		CacheHits:            &Counter{},
 		CacheMisses:          &Counter{},
-		PluginLoadCount:      &Counter{},
-		PluginUsageCount:     &Counter{},
-		PluginErrors:         &Counter{},
 		SkillsCreated:        &Counter{},
 		SkillUsageCount:      &Counter{},
 		PatternDetections:    &Counter{},
@@ -322,18 +314,6 @@ func (m *Metrics) RecordMemory(size int64, queryDuration time.Duration, cacheHit
 	}
 }
 
-// RecordPlugin records plugin metrics
-func (m *Metrics) RecordPlugin(operation string, success bool) {
-	switch operation {
-	case "load":
-		m.PluginLoadCount.Inc()
-	case "use":
-		m.PluginUsageCount.Inc()
-	case "error":
-		m.PluginErrors.Inc()
-	}
-}
-
 // RecordSkill records skill metrics
 func (m *Metrics) RecordSkill(operation string) {
 	switch operation {
@@ -376,7 +356,6 @@ type MetricsSnapshot struct {
 	Planning           PlanningMetrics   `json:"planning"`
 	Execution          ExecutionMetrics  `json:"execution"`
 	Memory             MemoryMetrics     `json:"memory"`
-	Plugins            PluginMetrics     `json:"plugins"`
 	Skills             SkillMetrics      `json:"skills"`
 	Triggers           TriggerMetrics    `json:"triggers"`
 	IntentDistribution map[string]uint64 `json:"intent_distribution"`
@@ -418,13 +397,6 @@ type MemoryMetrics struct {
 	P95LatencyMs      float64 `json:"p95_latency_ms"`
 	CacheHitRate      float64 `json:"cache_hit_rate"`
 	TotalRetrievals   uint64  `json:"total_retrievals"`
-}
-
-// PluginMetrics represents plugin layer snapshot
-type PluginMetrics struct {
-	TotalLoads  uint64 `json:"total_loads"`
-	TotalUsages uint64 `json:"total_usages"`
-	TotalErrors uint64 `json:"total_errors"`
 }
 
 // SkillMetrics represents skill layer snapshot
@@ -502,13 +474,6 @@ func (m *Metrics) Snapshot() *MetricsSnapshot {
 		TotalRetrievals:   m.MemoryRetrievalCount.Value(),
 	}
 
-	// Plugins
-	snapshot.Plugins = PluginMetrics{
-		TotalLoads:  m.PluginLoadCount.Value(),
-		TotalUsages: m.PluginUsageCount.Value(),
-		TotalErrors: m.PluginErrors.Value(),
-	}
-
 	// Skills
 	snapshot.Skills = SkillMetrics{
 		TotalCreated:  m.SkillsCreated.Value(),
@@ -578,11 +543,6 @@ func (m *Metrics) ExportPrometheus() string {
 	writeMetric("cortex_memory_query_latency_avg_ms", "Average query latency in ms", snapshot.Memory.AvgQueryLatencyMs)
 	writeMetric("cortex_memory_cache_hit_rate", "Cache hit rate", snapshot.Memory.CacheHitRate)
 
-	// Plugins
-	writeMetric("cortex_plugins_loaded_total", "Total plugin loads", snapshot.Plugins.TotalLoads)
-	writeMetric("cortex_plugins_usage_total", "Total plugin usages", snapshot.Plugins.TotalUsages)
-	writeMetric("cortex_plugins_errors_total", "Total plugin errors", snapshot.Plugins.TotalErrors)
-
 	// Skills
 	writeMetric("cortex_skills_created_total", "Total skills created", snapshot.Skills.TotalCreated)
 	writeMetric("cortex_skills_usage_total", "Total skill usages", snapshot.Skills.TotalUsages)
@@ -612,9 +572,6 @@ func (m *Metrics) Reset() {
 	m.MemoryRetrievalCount.Reset()
 	m.CacheHits.Reset()
 	m.CacheMisses.Reset()
-	m.PluginLoadCount.Reset()
-	m.PluginUsageCount.Reset()
-	m.PluginErrors.Reset()
 	m.SkillsCreated.Reset()
 	m.SkillUsageCount.Reset()
 	m.PatternDetections.Reset()

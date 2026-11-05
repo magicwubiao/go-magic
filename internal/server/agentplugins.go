@@ -268,19 +268,37 @@ func (s *Server) unregisterAgentPluginArtifacts(plugins map[string]*agentplugin.
 	}
 }
 
+// trimPluginsAPIPrefix 裁掉插件 API 前缀，兼容新旧两种：
+// /api/plugins（新）与 /api/agent-plugins（旧，保留为兼容别名）。
+// 命中任一前缀都返回前缀之后的子路径；都不命中则原样返回（调用方按空串处理为列表根）。
+func trimPluginsAPIPrefix(p string) string {
+	if rest := strings.TrimPrefix(p, "/api/plugins"); rest != p {
+		return rest
+	}
+	return strings.TrimPrefix(p, "/api/agent-plugins")
+}
+
+// trimPluginsIconPrefix 裁掉图标 API 前缀，同样兼容新旧两种（见 trimPluginsAPIPrefix）。
+func trimPluginsIconPrefix(p string) string {
+	if rest := strings.TrimPrefix(p, "/api/plugins-icon/"); rest != p {
+		return rest
+	}
+	return strings.TrimPrefix(p, "/api/agent-plugins-icon/")
+}
+
 // handleAgentPlugins 暴露 Agent Plugins 的列表与重载 API。
 //
-//	GET    /api/agent-plugins              — 返回所有插件加载摘要
-//	POST   /api/agent-plugins/reload       — 重新扫描并加载(先停旧的 MCP)
-//	GET    /api/agent-plugins/catalog      — 目录插件包列表(kind=mcp|cli,含 installed)
-//	POST   /api/agent-plugins/catalog/install — 目录条目物化成插件(body {"kind","id","args"})
-//	POST   /api/agent-plugins/install      — 上传 zip 安装插件(multipart "file" + "name")
-//	POST   /api/agent-plugins/{name}/uninstall  — 卸载并删除插件目录
-//	POST   /api/agent-plugins/{name}/enable     — 启用插件
-//	POST   /api/agent-plugins/{name}/disable    — 禁用插件
+//	GET    /api/plugins              — 返回所有插件加载摘要
+//	POST   /api/plugins/reload       — 重新扫描并加载(先停旧的 MCP)
+//	GET    /api/plugins/catalog      — 目录插件包列表(kind=mcp|cli,含 installed)
+//	POST   /api/plugins/catalog/install — 目录条目物化成插件(body {"kind","id","args"})
+//	POST   /api/plugins/install      — 上传 zip 安装插件(multipart "file" + "name")
+//	POST   /api/plugins/{name}/uninstall  — 卸载并删除插件目录
+//	POST   /api/plugins/{name}/enable     — 启用插件
+//	POST   /api/plugins/{name}/disable    — 禁用插件
 func (s *Server) handleAgentPlugins(w http.ResponseWriter, r *http.Request) {
 	// 子路由:/install、/{name}/uninstall|enable|disable
-	rest := strings.TrimPrefix(r.URL.Path, "/api/agent-plugins")
+	rest := trimPluginsAPIPrefix(r.URL.Path)
 	rest = strings.TrimPrefix(rest, "/")
 
 	switch {
@@ -593,7 +611,7 @@ func (s *Server) removePlugin(name string, purge bool) (removedDir string, err e
 //	upgrade: "0"/"false" 时禁止覆盖已安装的同名插件（默认允许，即升级）
 //
 // 升级是**原子替换**：新内容先解压到隐藏临时目录，校验通过后整体换名；
-// PLUGIN_DATA 在 agent-plugins-data/ 下，不在替换范围内，因此升级不丢数据
+// PLUGIN_DATA 在 plugins-data/ 下，不在替换范围内，因此升级不丢数据
 // （这也正是"升级 = 卸载 + 重装"最不能接受的副作用）。
 func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 	// 32MB 内存缓冲,超出写临时文件。
@@ -711,7 +729,7 @@ func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
 // （规范允许目录名 ≠ manifest.name；靠 Root 反推在清单被拒时只能拿到空串），
 // 并清掉凭据与 OAuth token。
 //
-//	POST /api/agent-plugins/{name}/uninstall?purge=1
+//	POST /api/plugins/{name}/uninstall?purge=1
 func (s *Server) uninstallAgentPlugin(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -741,7 +759,7 @@ func (s *Server) uninstallAgentPlugin(w http.ResponseWriter, r *http.Request, na
 	if !purge {
 		// 明确告诉用户数据还在：默认保留 PLUGIN_DATA 是刻意的（重装/换版本
 		// 不该丢索引），但也必须让人知道它在哪、怎么清掉。
-		resp["data_kept"] = filepath.Join(config.GetMagicHome(), "agent-plugins-data")
+		resp["data_kept"] = filepath.Join(config.GetMagicHome(), "plugins-data")
 	}
 	jsonResponse(w, resp)
 }
@@ -818,9 +836,9 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 
 // handlePluginCredentials 查看与保存插件的用户凭据(env key → value)。
 //
-//	GET  /api/agent-plugins/{name}/credentials — 掩码视图(值一律 ***)+
+//	GET  /api/plugins/{name}/credentials — 掩码视图(值一律 ***)+
 //	       required_env(每个 MCP 条目 mcp.json 里值为空的 key,即待填占位)。
-//	POST /api/agent-plugins/{name}/credentials — body {"env":{KEY:VALUE}}。
+//	POST /api/plugins/{name}/credentials — body {"env":{KEY:VALUE}}。
 //	       保存后立即合并进运行时并重连该插件所有条目,凭据补齐即刻生效。
 //
 // 掩码约定与 mcp_servers 的 env 一致:值只以 *** 回显,回传 *** 视为
@@ -968,7 +986,7 @@ func (s *Server) handlePluginCredentials(w http.ResponseWriter, r *http.Request,
 
 // handlePluginCredentialsAuto 自动授权：能探测到的凭据直接填好并立即生效。
 //
-//	POST /api/agent-plugins/{name}/credentials/auto
+//	POST /api/plugins/{name}/credentials/auto
 //
 // 探测顺序：本机环境变量 → 常见别名（GITHUB_TOKEN ↔ GH_TOKEN …）→
 // 已登录的官方 CLI（gh auth token）→ 其他插件里填过的同名凭据。
@@ -1169,13 +1187,13 @@ var allowedIconExts = map[string]string{
 
 // handlePluginIcon 服务插件清单声明的图标文件。
 //
-//	GET /api/agent-plugins-icon/{name}
+//	GET /api/plugins-icon/{name}
 //
 // 刻意不套 requireAuth:<img> 标签带不上 Authorization 头(与 /api/fs/serve
 // 同理)。风险可控:路径必须落在该插件根目录内、扩展名在图片白名单内、
 // 响应限流 4MB,最坏也只是泄露一张插件作者自己打包进去的图片。
 func (s *Server) handlePluginIcon(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/agent-plugins-icon/")
+	name := trimPluginsIconPrefix(r.URL.Path)
 	name = strings.Trim(name, "/")
 	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "\\") {
 		http.Error(w, "invalid plugin name", http.StatusBadRequest)

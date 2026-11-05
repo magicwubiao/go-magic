@@ -2,9 +2,9 @@ package server
 
 // 插件内 CLI 连接器的 OAuth（设备码）路由与视图。
 //
-//	POST /api/agent-plugins/{name}/cli/{connector}/oauth/start
-//	GET  /api/agent-plugins/{name}/cli/{connector}/oauth/status
-//	POST /api/agent-plugins/{name}/cli/{connector}/oauth/signout
+//	POST /api/plugins/{name}/cli/{connector}/oauth/start
+//	GET  /api/plugins/{name}/cli/{connector}/oauth/status
+//	POST /api/plugins/{name}/cli/{connector}/oauth/signout
 //
 // 与全局连接器是同一套流程（serveCLIOAuth），区别只在 token 键带插件
 // 命名空间：同一个 SQL 客户端在 A 插件里用账号甲、B 插件里用账号乙时，

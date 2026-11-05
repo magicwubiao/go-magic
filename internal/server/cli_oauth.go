@@ -12,9 +12,9 @@ package server
 //   - 刷新在 EnsureAccessToken 里静默完成，CLI 侧无感。
 //
 // 请求（只有插件内的 CLI 连接器暴露了这套接口）：
-//   POST /api/agent-plugins/{plugin}/cli/{name}/oauth/start    起设备码流程（幂等）
-//   GET  /api/agent-plugins/{plugin}/cli/{name}/oauth/status   轮询状态（含短码/授权 URL）
-//   POST /api/agent-plugins/{plugin}/cli/{name}/oauth/signout  登出（删 token）
+//   POST /api/plugins/{plugin}/cli/{name}/oauth/start    起设备码流程（幂等）
+//   GET  /api/plugins/{plugin}/cli/{name}/oauth/status   轮询状态（含短码/授权 URL）
+//   POST /api/plugins/{plugin}/cli/{name}/oauth/signout  登出（删 token）
 //
 // 手写的全局连接器（cli.json 的 oauth 段）已经没有 HTTP 入口：token 还能刷新
 // 就继续用，续不上时由 annotateCLIOAuthError 给出迁移指引。

@@ -97,7 +97,7 @@ func TestExamplePlugins_Load(t *testing.T) {
 				checkBinding("speech", b.Name, b.Server)
 			}
 
-			// 声明了 icon 就必须真实存在（UI 会按它拉 /agent-plugins-icon）。
+			// 声明了 icon 就必须真实存在（UI 会按它拉 /plugins-icon）。
 			if p.Manifest != nil && p.Manifest.Icon != "" {
 				if _, err := os.Stat(filepath.Join(p.Root, p.Manifest.Icon)); err != nil {
 					t.Errorf("icon %q missing: %v", p.Manifest.Icon, err)

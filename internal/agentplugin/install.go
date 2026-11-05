@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -35,7 +34,7 @@ type InstallOptions struct {
 
 	// Upgrade 允许覆盖已存在的同名插件，采用**原子替换**：
 	// 新内容先落到同目录下的隐藏临时目录，校验通过后整体换名，失败时
-	// 旧版本原样保留。PLUGIN_DATA 不受影响（它在 agent-plugins-data/ 下，
+	// 旧版本原样保留。PLUGIN_DATA 不受影响（它在 plugins-data/ 下，
 	// 与插件目录是两棵树）——这正是"升级不该丢数据"的实现方式。
 	//
 	// 为 false 且目录已存在时返回 ErrPluginExists。
@@ -393,7 +392,7 @@ func Uninstall(name string, purge bool) (string, error) {
 		return "", fmt.Errorf("remove plugin dir: %w", err)
 	}
 	if purge {
-		dataDir := filepath.Join(config.GetMagicHome(), "agent-plugins-data", name)
+		dataDir := filepath.Join(DefaultDataDir(), name)
 		if err := os.RemoveAll(dataDir); err != nil {
 			log.Warnf("[AgentPlugin] failed to purge data dir %s: %v", dataDir, err)
 		}

@@ -17,8 +17,8 @@ import (
 
 // Agent Plugins 的命令行入口。
 //
-// 与 Web 的 /api/agent-plugins 面向同一份扫描目录与同一份配置：
-// 插件以目录形式落在 <magicHome>/agent-plugins/<dir>，启停状态记在
+// 与 Web 的 /api/plugins 面向同一份扫描目录与同一份配置：
+// 插件以目录形式落在 <magicHome>/plugins/<dir>，启停状态记在
 // config.json 的 agent_plugins.disabled。这里不做另一套存储。
 //
 // 装插件=把目录放进扫描目录，卸插件=把目录删掉；不像"把连接器写进 config"
@@ -191,7 +191,7 @@ func runPluginInstall(target string) error {
 	}
 
 	// 装完立刻自检：解压成功不等于插件可用（manifest 可能被拒、条目可能校验失败）。
-	plugin := agentplugin.Load(dest, filepath.Join(config.GetMagicHome(), "agent-plugins-data", filepath.Base(dest)))
+	plugin := agentplugin.Load(dest, filepath.Join(agentplugin.DefaultDataDir(), filepath.Base(dest)))
 	fmt.Printf("Installed into %s\n", dest)
 	if plugin.IsRejected() {
 		fmt.Fprintf(os.Stderr, "warning: plugin is rejected and will not load: %s\n", plugin.FatalError)

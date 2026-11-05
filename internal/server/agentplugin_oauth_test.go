@@ -58,7 +58,7 @@ func TestPluginOAuthRoutesAreReachable(t *testing.T) {
 		return rec
 	}
 
-	res := get("/api/agent-plugins/demo/mcp/svc/oauth/status")
+	res := get("/api/plugins/demo/mcp/svc/oauth/status")
 	if res.Code != http.StatusOK {
 		t.Fatalf("status route code = %d body=%s", res.Code, res.Body.String())
 	}
@@ -73,14 +73,14 @@ func TestPluginOAuthRoutesAreReachable(t *testing.T) {
 	}
 
 	// 未知条目：404 而不是 405（证明进到了处理器）。
-	if res := get("/api/agent-plugins/demo/mcp/nope/oauth/status"); res.Code != http.StatusNotFound {
+	if res := get("/api/plugins/demo/mcp/nope/oauth/status"); res.Code != http.StatusNotFound {
 		t.Fatalf("unknown entry code = %d, want 404", res.Code)
 	}
 
 	// connect 路由同样必须可达（此前被 case "mcp" 挡死，前端重试一直 405）。
 	rec := httptest.NewRecorder()
 	s.handleAgentPlugins(rec, httptest.NewRequest(http.MethodPost,
-		"/api/agent-plugins/demo/mcp/svc/connect", nil))
+		"/api/plugins/demo/mcp/svc/connect", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("connect route code = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -88,7 +88,7 @@ func TestPluginOAuthRoutesAreReachable(t *testing.T) {
 	// start：本机没有授权服务器元数据 → 400 + 可读错误，不能是 500。
 	rec = httptest.NewRecorder()
 	s.handleAgentPlugins(rec, httptest.NewRequest(http.MethodPost,
-		"/api/agent-plugins/demo/mcp/svc/oauth/start", nil))
+		"/api/plugins/demo/mcp/svc/oauth/start", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("start without AS code = %d body=%s", rec.Code, rec.Body.String())
 	}

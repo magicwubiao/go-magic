@@ -2,9 +2,9 @@ package server
 
 // 插件条目的 OAuth 授权 API。
 //
-//	POST /api/agent-plugins/{name}/mcp/{server}/oauth/start   — 发起授权，返回 authorize_url
-//	GET  /api/agent-plugins/{name}/mcp/{server}/oauth/status  — 轮询状态
-//	POST /api/agent-plugins/{name}/mcp/{server}/oauth/signout — 登出（删 token）
+//	POST /api/plugins/{name}/mcp/{server}/oauth/start   — 发起授权，返回 authorize_url
+//	GET  /api/plugins/{name}/mcp/{server}/oauth/status  — 轮询状态
+//	POST /api/plugins/{name}/mcp/{server}/oauth/signout — 登出（删 token）
 //
 // 与连接器页同一套语义：token 存在共享的 oauth_tokens.json 里，键为
 // agentplugin:<plugin>/<server>；授权完成后由 server.go 的 OnOAuthAuthorized

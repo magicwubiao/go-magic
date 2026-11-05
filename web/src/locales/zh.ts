@@ -1934,8 +1934,8 @@ export default {
     noSearchResult: '没有匹配的连接器',
   },
   agentplugins: {
-    title: 'Agent 插件',
-    subtitle: 'OpenAI Agent Plugins 1.0.0 规范 — 跨平台可移植插件',
+    title: '插件',
+    subtitle: '一个插件打包技能、MCP 与 CLI 连接器，装上即可在对话中使用',
     reload: '重新加载',
     scanDir: '扫描目录',
     noPlugins: '暂无 Agent 插件',

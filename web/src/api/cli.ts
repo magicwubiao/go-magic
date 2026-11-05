@@ -89,7 +89,7 @@ export async function startPluginCLIOAuth(plugin: string, name: string): Promise
   device?: CLIDeviceCode
 }> {
   return request(
-    `/agent-plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/start`,
+    `/plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/start`,
     { method: 'POST' },
   )
 }
@@ -100,13 +100,13 @@ export async function getPluginCLIOAuth(plugin: string, name: string): Promise<{
   configured: boolean
 }> {
   return request(
-    `/agent-plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/status`,
+    `/plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/status`,
   )
 }
 
 export async function signOutPluginCLIOAuth(plugin: string, name: string): Promise<void> {
   return request<void>(
-    `/agent-plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/signout`,
+    `/plugins/${encodeURIComponent(plugin)}/cli/${encodeURIComponent(name)}/oauth/signout`,
     { method: 'POST' },
   )
 }

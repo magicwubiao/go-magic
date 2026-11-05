@@ -28,7 +28,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/cliconn"
 	"github.com/magicwubiao/go-magic/internal/mcp"
 	"github.com/magicwubiao/go-magic/pkg/clicatalog"
-	"github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/connectors"
 )
 
@@ -306,7 +305,7 @@ func InstallCatalogPack(kind, id string, argsOverride []string) (dir, name strin
 	}
 
 	// 立刻走一遍真实加载：清单/组件/条目级校验都在这里现形。
-	p := Load(dir, filepath.Join(config.GetMagicHome(), "agent-plugins-data", name))
+	p := Load(dir, filepath.Join(DefaultDataDir(), name))
 	if err := verifyLoadedPack(p); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", "", nil, err

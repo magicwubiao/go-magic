@@ -202,12 +202,12 @@ export interface CatalogInstallResult extends AgentPluginInstallResult {
 
 // 返回所有已加载的 Agent Plugin 摘要。
 export async function getAgentPlugins(): Promise<AgentPlugin[]> {
-  return request('/agent-plugins', { timeoutMs: 60_000 })
+  return request('/plugins', { timeoutMs: 60_000 })
 }
 
 // 目录插件包列表（kind=mcp|cli，含 installed 状态）。
 export async function getCatalogPacks(kind: 'mcp' | 'cli'): Promise<CatalogPack[]> {
-  return request(`/agent-plugins/catalog?kind=${kind}`)
+  return request(`/plugins/catalog?kind=${kind}`)
 }
 
 // 把目录条目安装成插件。args 仅对 stdio 类 MCP 条目生效（覆盖模板参数）。
@@ -217,7 +217,7 @@ export async function installCatalogPack(
   id: string,
   args?: string[],
 ): Promise<CatalogInstallResult> {
-  return request('/agent-plugins/catalog/install', {
+  return request('/plugins/catalog/install', {
     method: 'POST',
     body: JSON.stringify({ kind, id, args: args && args.length ? args : undefined }),
   })
@@ -227,7 +227,7 @@ export async function installCatalogPack(
 export async function reloadAgentPlugins(): Promise<AgentPluginsReloadResult> {
   // 重新加载要停旧运行时、重扫插件目录、逐个连接 MCP——30s 默认值会在
   // 后端还在跑的时候把前端请求 abort 掉，用户只看到一句"信号中断"。
-  return request('/agent-plugins/reload', { method: 'POST', timeoutMs: 180_000 })
+  return request('/plugins/reload', { method: 'POST', timeoutMs: 180_000 })
 }
 
 // 通过上传 zip 安装插件。file 为 zip 文件,name 为插件目录名(可选)。
@@ -248,7 +248,7 @@ export async function installAgentPlugin(
   const token = getAuthToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const resp = await fetch('/api/agent-plugins/install', {
+  const resp = await fetch('/api/plugins/install', {
     method: 'POST',
     headers,
     body: form,
@@ -266,7 +266,7 @@ export async function uninstallAgentPlugin(
   purge = false,
 ): Promise<{ ok: boolean; name: string; dir: string; purged?: boolean; data_kept?: string }> {
   const q = purge ? '?purge=1' : ''
-  return request(`/agent-plugins/${encodeURIComponent(name)}/uninstall${q}`, { method: 'POST', timeoutMs: 120_000 })
+  return request(`/plugins/${encodeURIComponent(name)}/uninstall${q}`, { method: 'POST', timeoutMs: 120_000 })
 }
 
 // 启用插件。未就绪(缺凭据 / 命令没装)时后端返回 409 + blockers,
@@ -276,7 +276,7 @@ export async function enableAgentPlugin(
   force = false,
 ): Promise<{ ok: boolean; name: string; disabled: boolean }> {
   const qs = force ? '?force=1' : ''
-  return request(`/agent-plugins/${encodeURIComponent(name)}/enable${qs}`, {
+  return request(`/plugins/${encodeURIComponent(name)}/enable${qs}`, {
     method: 'POST',
     timeoutMs: 120_000,
   })
@@ -284,12 +284,12 @@ export async function enableAgentPlugin(
 
 // 禁用插件。
 export async function disableAgentPlugin(name: string): Promise<{ ok: boolean; name: string; disabled: boolean }> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/disable`, { method: 'POST', timeoutMs: 60_000 })
+  return request(`/plugins/${encodeURIComponent(name)}/disable`, { method: 'POST', timeoutMs: 60_000 })
 }
 
 // 获取插件凭据掩码视图(值一律 *** 或 '',拿不到真实值)。
 export async function getPluginCredentials(name: string): Promise<AgentPluginCredentials> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/credentials`)
+  return request(`/plugins/${encodeURIComponent(name)}/credentials`)
 }
 
 // 保存插件凭据并触发重连。值为 *** 表示保持原值,空串表示删除该 key。
@@ -298,7 +298,7 @@ export async function setPluginCredentials(
   name: string,
   env: Record<string, string>,
 ): Promise<{ ok: boolean; plugin: string; entries: { name: string; ok: boolean; connected: boolean; error?: string; error_kind?: string }[] }> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/credentials`, {
+  return request(`/plugins/${encodeURIComponent(name)}/credentials`, {
     method: 'POST',
     body: JSON.stringify({ env }),
     // 保存后后端会逐个重连条目（每个都要拉进程 + 握手）。
@@ -309,7 +309,7 @@ export async function setPluginCredentials(
 // 重连插件的单个 MCP 条目(凭据之外的"重试"入口)。
 export async function connectPluginServer(name: string, server: string): Promise<{ ok: boolean; error?: string }> {
   return request(
-    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/connect`,
+    `/plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/connect`,
     { method: 'POST', timeoutMs: 60_000 },
   )
 }
@@ -337,7 +337,7 @@ export async function startPluginOAuth(
   server: string,
 ): Promise<PluginOAuthStartResult> {
   return request(
-    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/start`,
+    `/plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/start`,
     { method: 'POST' },
   )
 }
@@ -348,7 +348,7 @@ export async function getPluginOAuthStatus(
   server: string,
 ): Promise<PluginOAuthStatus> {
   return request(
-    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/status`,
+    `/plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/status`,
   )
 }
 
@@ -358,7 +358,7 @@ export async function signOutPluginOAuth(
   server: string,
 ): Promise<{ ok: boolean; status: PluginOAuthStatus }> {
   return request(
-    `/agent-plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/signout`,
+    `/plugins/${encodeURIComponent(name)}/mcp/${encodeURIComponent(server)}/oauth/signout`,
     { method: 'POST' },
   )
 }
@@ -379,7 +379,7 @@ export interface AutoAuthorizeResult {
 }
 
 export async function authorizePluginAuto(name: string): Promise<AutoAuthorizeResult> {
-  return request(`/agent-plugins/${encodeURIComponent(name)}/credentials/auto`, { method: 'POST' })
+  return request(`/plugins/${encodeURIComponent(name)}/credentials/auto`, { method: 'POST' })
 }
 
 // ---------------------------------------------------------------------------
@@ -415,12 +415,12 @@ export async function startCLIInstall(body: {
   id?: string
   plugin?: string
 }): Promise<CLIInstallStartResult> {
-  return request('/agent-plugins/cli/install', {
+  return request('/plugins/cli/install', {
     method: 'POST',
     body: JSON.stringify({ kind: 'cli', ...body }),
   })
 }
 
 export async function getCLIInstallJob(id: string): Promise<{ ok: boolean; job: CLIInstallJob }> {
-  return request(`/agent-plugins/cli/install/${encodeURIComponent(id)}`)
+  return request(`/plugins/cli/install/${encodeURIComponent(id)}`)
 }

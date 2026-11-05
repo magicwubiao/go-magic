@@ -1809,10 +1809,14 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/cortex/soul/", withCORS(requireAuth(s.handleCortexSoul)))
 	mux.HandleFunc("/api/cortex/gepa", withCORS(requireAuth(s.handleCortexGEPA)))
 
-	// Agent Plugins (OpenAI Agent Plugins 1.0.0 spec):list & reload
+	// 插件 API：新前缀 /api/plugins；旧前缀 /api/agent-plugins 保留为兼容
+	// 别名（同一 handler 内部按两种前缀裁剪，见 trimPluginsAPIPrefix）。
+	mux.HandleFunc("/api/plugins", withCORS(requireAuth(s.handleAgentPlugins)))
+	mux.HandleFunc("/api/plugins/", withCORS(requireAuth(s.handleAgentPlugins)))
 	mux.HandleFunc("/api/agent-plugins", withCORS(requireAuth(s.handleAgentPlugins)))
 	mux.HandleFunc("/api/agent-plugins/", withCORS(requireAuth(s.handleAgentPlugins)))
 	// 插件图标:给 <img> 用,带不上认证头,故不套 requireAuth(见 handlePluginIcon)。
+	mux.HandleFunc("/api/plugins-icon/", withCORS(s.handlePluginIcon))
 	mux.HandleFunc("/api/agent-plugins-icon/", withCORS(s.handlePluginIcon))
 	// Plugin providers
 	mux.HandleFunc("/api/dashboard/plugin-providers", withCORS(requireAuth(s.handlePluginProviders)))

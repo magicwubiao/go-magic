@@ -12,8 +12,8 @@ import (
 // 目录插件包接口：把内置的 MCP 连接器目录 / CLI 应用目录里的条目，
 // 物化成真正的 Agent Plugin（plugin.json + mcp.json / cli.json）。
 //
-//	GET  /api/agent-plugins/catalog?kind=mcp|cli  目录列表（含 installed 状态）
-//	POST /api/agent-plugins/catalog/install       body {"kind":"mcp","id":"lark","args":[...]}
+//	GET  /api/plugins/catalog?kind=mcp|cli  目录列表（含 installed 状态）
+//	POST /api/plugins/catalog/install       body {"kind":"mcp","id":"lark","args":[...]}
 //
 // 与"官方技能包"的区别只是内容来源：官方包内嵌在二进制里，目录包由
 // pkg/connectors / pkg/clicatalog 的模板现场生成。装上之后两者完全同构——

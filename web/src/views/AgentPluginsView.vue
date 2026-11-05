@@ -96,7 +96,7 @@
           <div class="ap-plugin-row" @click="toggleExpand(plugin.name)">
             <n-avatar
               v-if="plugin.icon"
-              :src="`/api/agent-plugins-icon/${encodeURIComponent(plugin.name)}`"
+              :src="`/api/plugins-icon/${encodeURIComponent(plugin.name)}`"
               :size="24"
               object-fit="contain"
               round
