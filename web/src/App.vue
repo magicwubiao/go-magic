@@ -35,10 +35,11 @@
               />
               <!-- 底部"设置"下拉:点击向上弹出 -->
               <div class="sider-footer">
+                <!-- 统一改为点击弹出（hover 误触频繁，点击意图更明确） -->
                 <n-dropdown
                   placement="top-start"
                   :options="headerOptions"
-                  :trigger="isMobile ? 'click' : 'hover'"
+                  trigger="click"
                   @select="handleHeaderSelect"
                 >
                   <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
