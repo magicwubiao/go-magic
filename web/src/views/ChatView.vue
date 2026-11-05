@@ -5060,7 +5060,10 @@ onActivated(() => {
    注意：没有遮罩、不动 body overflow —— 预览打开时对话区必须完全可交互。 */
 .preview-dock {
   position: fixed;
-  z-index: 900;
+  /* 1050：必须盖过右栏拉手 .right-sidebar-fab（z-index 1000），否则移动端
+     预览整屏铺开时，拉手会浮在预览内容上；同时仍低于 naive 弹窗（2000+）
+     与预览自身全屏态（3000），保证弹窗和全屏退出条不被浮窗压住。 */
+  z-index: 1050;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -5107,12 +5110,13 @@ onActivated(() => {
   border-color: #2d8cf0;
 }
 
-/* 最小化后的小胶囊：钉在右下角，避开输入区。点标题展开、点叉关闭 */
+/* 最小化后的小胶囊：钉在右下角，避开输入区。点标题展开、点叉关闭。
+   层级与 .preview-dock 同级：同样要盖过右栏拉手（z-index 1000）。 */
 .preview-dock-mini {
   position: fixed;
   right: 16px;
   bottom: 96px;
-  z-index: 900;
+  z-index: 1050;
   display: flex;
   align-items: center;
   gap: 2px;
