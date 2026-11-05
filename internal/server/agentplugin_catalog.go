@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -56,9 +57,15 @@ func (s *Server) installAgentPluginFromCatalog(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// 生命周期串行：两条并发安装（或安装与卸载交错）会在同一目录上打架。
+	// 与 zip 安装同一条锁，但**不做全量 swapAgentPlugins**——那会把其它插件
+	// 的 MCP 子进程全部杀掉（装一个插件不该打断别人的会话）。
+	s.agentPluginsMu.Lock()
+	defer s.agentPluginsMu.Unlock()
+
 	dir, name, required, err := agentplugin.InstallCatalogPack(body.Kind, body.ID, body.Args)
 	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
+		if errors.Is(err, agentplugin.ErrPluginExists) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -66,8 +73,14 @@ func (s *Server) installAgentPluginFromCatalog(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 重新加载以激活新插件(串行化:与 zip 安装/官方包安装同一条路径)。
-	s.swapAgentPlugins()
+	// 只激活新插件：解析 → 换入条目 → 注入 skills/CLI/MCP 工具。
+	reloaded := agentplugin.LoadDir(dir)
+	if s.isPluginDisabled(reloaded.Name()) {
+		reloaded.Disabled = true
+		reloaded.Runtime = nil
+	}
+	s.putPluginEntry(reloaded.Name(), reloaded)
+	s.activatePlugin(reloaded)
 
 	jsonResponse(w, map[string]any{
 		"ok":           true,

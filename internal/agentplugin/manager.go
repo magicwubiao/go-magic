@@ -91,7 +91,10 @@ func migrateLegacyDirs() {
 			continue // 旧目录不存在：没有可迁移的
 		}
 		if _, err := os.Stat(p[1]); err == nil {
-			continue // 新目录已存在：不动，避免覆盖
+			// 新目录已存在：不能覆盖（可能是用户升级后新建的插件）。
+			// 但要在日志里说清楚旧目录还在，否则"插件凭空消失"没有任何线索。
+			log.Warnf("[AgentPlugin] both %s and %s exist; legacy dir is NOT loaded (merge it manually)", p[0], p[1])
+			continue
 		}
 		if err := os.Rename(p[0], p[1]); err != nil {
 			log.Warnf("[AgentPlugin] migrate legacy dir %s -> %s: %v", p[0], p[1], err)

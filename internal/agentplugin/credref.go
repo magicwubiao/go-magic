@@ -29,6 +29,25 @@ import (
 // credPlaceholderRe 匹配 ${CRED:NAME}；NAME 与 env key 同字符集。
 var credPlaceholderRe = regexp.MustCompile(`\$\{CRED:([A-Za-z_][A-Za-z0-9_]*)\}`)
 
+// lookupCred 取凭据值，大小写不敏感。
+//
+// 为什么必须不敏感：Windows 环境变量名不分大小写，凭据表单与 CLI 侧
+// （withCLICredentials / filledCredKeys / pruneFilledRequiredEnv）都是这个口径。
+// 早先这里用精确匹配，于是用户把 key 写成 gh_token 时，UI 判"已填妥"、
+// 连接却报 "missing credentials" —— 同一条凭据两个结论。
+// 精确匹配优先：Linux 上确实存在仅大小写不同的两个 key，先给准确的。
+func lookupCred(creds map[string]string, key string) (string, bool) {
+	if v, ok := creds[key]; ok {
+		return v, true
+	}
+	for k, v := range creds {
+		if strings.EqualFold(strings.TrimSpace(k), key) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // resolveCredPlaceholders 把 s 里的 ${CRED:NAME} 替换成凭据值，
 // 同时返回没有取到值的 key（排序去重）。
 func resolveCredPlaceholders(s string, creds map[string]string) (string, []string) {
@@ -38,7 +57,7 @@ func resolveCredPlaceholders(s string, creds map[string]string) (string, []strin
 	var missing []string
 	out := credPlaceholderRe.ReplaceAllStringFunc(s, func(m string) string {
 		name := credPlaceholderRe.FindStringSubmatch(m)[1]
-		v, ok := creds[name]
+		v, ok := lookupCred(creds, name)
 		if !ok || strings.TrimSpace(v) == "" {
 			missing = append(missing, name)
 			return m
@@ -84,7 +103,7 @@ func applyCredentials(spec MCPServerSpec, creds map[string]string) (MCPServerSpe
 		// 否则在凭据里写 PATH / NODE_OPTIONS / LD_PRELOAD 就能改写子进程的
 		// 运行时行为，而 CLI 侧早就明确"只覆盖已声明的 key"，两处纪律必须一致。
 		for _, k := range SpecCredentialKeys(spec) {
-			v, ok := creds[k]
+			v, ok := lookupCred(creds, k)
 			if !ok || strings.TrimSpace(v) == "" {
 				continue
 			}

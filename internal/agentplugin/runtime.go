@@ -506,8 +506,9 @@ func (r *Runtime) Stop() {
 	mgr := r.manager()
 	r.mu.Lock()
 	r.stopped = true
-	names := make([]string, 0, len(r.plugin.MCPServers))
+	var names []string
 	if r.plugin != nil {
+		names = make([]string, 0, len(r.plugin.MCPServers))
 		for _, ms := range r.plugin.MCPServers {
 			names = append(names, ms.Name)
 		}

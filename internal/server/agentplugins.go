@@ -178,12 +178,13 @@ func (s *Server) setPluginCredentials(name string, creds map[string]string) erro
 // （序列化整份 s.cfg）。调用方（卸载/启停插件两条路径）此前都不持锁，
 // 裸改写就是数据竞态。cfgMu 与 s.mu 互不相干（setCfg 走 cfgMu），
 // 只拿 s.mu 会被 CI 的 -race 判为 DATA RACE；cfgMu 是叶子锁。
-func (s *Server) setPluginDisabled(name string, disabled bool) {
+func (s *Server) setPluginDisabled(name string, disabled bool) error {
 	s.acquireServerMu("")
 	defer s.releaseServerMu()
 	s.lockCfgForWrite()
 	defer s.unlockCfgForWrite()
 	// lockCfgForWrite 保证 s.cfg 非 nil（nil 时会补 DefaultConfig）。
+	prev := append([]string(nil), s.cfg.AgentPlugins.Disabled...)
 	list := s.cfg.AgentPlugins.Disabled
 	if disabled {
 		found := false
@@ -206,7 +207,13 @@ func (s *Server) setPluginDisabled(name string, disabled bool) {
 		list = next
 	}
 	s.cfg.AgentPlugins.Disabled = list
-	_ = s.persistConfig(true)
+	// 落盘失败必须回滚内存：只改内存会让"本次生效、重启回滚"变成
+	// 用户看不见的静默不一致（与项目的"写盘错误不许吞"同一条纪律）。
+	if err := s.persistConfig(true); err != nil {
+		s.cfg.AgentPlugins.Disabled = prev
+		return err
+	}
+	return nil
 }
 
 // swapAgentPlugins 串行执行插件生命周期变更共用的
@@ -598,9 +605,16 @@ func (s *Server) removePlugin(name string, purge bool) (removedDir string, err e
 		s.cleanupPluginState(dirName)
 	}
 	// 从禁用列表移除（禁用列表以 manifest.name 为键）。
-	s.setPluginDisabled(name, false)
+	// 卸载本身已经完成，禁用表清理失败只记日志——不能把"目录已删掉"
+	// 报成"卸载失败"（用户重试只会得到 not found）。
+	if err := s.setPluginDisabled(name, false); err != nil {
+		log.Warnf("[AgentPlugin] uninstalled %q but failed to update disabled list: %v", name, err)
+	}
 	return dir, nil
 }
+
+// maxPluginUploadBytes 是插件 zip 上传的请求体上限（压缩后）。
+const maxPluginUploadBytes = 256 << 20 // 256MB
 
 // installAgentPlugin 接收 zip 上传并安装（或升级）插件。
 //
@@ -614,8 +628,18 @@ func (s *Server) removePlugin(name string, purge bool) (removedDir string, err e
 // PLUGIN_DATA 在 plugins-data/ 下，不在替换范围内，因此升级不丢数据
 // （这也正是"升级 = 卸载 + 重装"最不能接受的副作用）。
 func (s *Server) installAgentPlugin(w http.ResponseWriter, r *http.Request) {
+	// 体积上限必须在 ParseMultipartForm 之前限制请求体：ParseMultipartForm
+	// 的 32MB 参数只控制内存驻留，超出部分照样落盘——没有 MaxBytesReader，
+	// 一个超大上传就能把磁盘写满。压缩包上限 256MB，解压侧另有
+	// maxInstallSize/maxTotalInstallSize 兜底。
+	r.Body = http.MaxBytesReader(w, r.Body, maxPluginUploadBytes)
 	// 32MB 内存缓冲,超出写临时文件。
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "plugin archive too large (max 256MB)", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -801,7 +825,12 @@ func (s *Server) toggleAgentPlugin(w http.ResponseWriter, r *http.Request, name 
 	s.agentPluginsMu.Lock()
 	defer s.agentPluginsMu.Unlock()
 
-	s.setPluginDisabled(name, disabled)
+	// 先落盘再动运行时：写不进去就不要停/起任何东西，否则内存状态与
+	// 磁盘状态打架，重启后用户看到的是"开关自己跳回去了"。
+	if err := s.setPluginDisabled(name, disabled); err != nil {
+		http.Error(w, "persist plugin state: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if disabled {
 		s.deactivatePlugin(mp)
@@ -1171,6 +1200,13 @@ func (s *Server) refreshPluginCLITools(pluginName string, mp *agentplugin.Manage
 
 	s.acquireServerMu("refreshPluginCLITools")
 	defer s.releaseServerMu()
+
+	// 插件可能已被并发卸载（保存凭据与卸载是两条互不阻塞的请求路径）：
+	// 此时再按旧指针注册，就会往注册表里塞一批指向已删除插件的僵尸工具，
+	// 模型能看见、调用必然失败。
+	if cur, ok := s.agentPlugins[pluginName]; !ok || cur != mp {
+		return
+	}
 
 	agentplugin.UnregisterCLITools(one, s.toolReg)
 	opts := s.cliRegisterOptions()

@@ -290,13 +290,14 @@ func InstallCatalogPack(kind, id string, argsOverride []string) (dir, name strin
 		return "", "", nil, err
 	}
 
-	scanDir := DefaultScanDir()
-	if err := os.MkdirAll(scanDir, 0o755); err != nil {
-		return "", "", nil, fmt.Errorf("ensure scan dir: %w", err)
+	scanDir, err := ensureScanDir()
+	if err != nil {
+		return "", "", nil, err
 	}
 	dir = filepath.Join(scanDir, name)
 	if _, statErr := os.Stat(dir); statErr == nil {
-		return "", "", nil, fmt.Errorf("plugin %q already exists, uninstall first", name)
+		// 复用哨兵错误：调用方据此回 409，而不是匹配英文串。
+		return "", "", nil, fmt.Errorf("%w: %q (uninstall it first)", ErrPluginExists, name)
 	}
 
 	if err := writePackFiles(dir, files); err != nil {

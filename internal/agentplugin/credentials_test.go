@@ -122,3 +122,38 @@ func TestEmptyEnvKeys(t *testing.T) {
 		t.Errorf("no placeholders expected, got %v", out)
 	}
 }
+
+// 凭据 key 的大小写必须在"连接路径"与"UI 就绪度/CLI 路径"之间保持一致：
+// 早先 applyCredentials 用精确匹配，用户把 GH_TOKEN 写成 gh_token 时
+// UI 判"已填妥"、连接却报 missing credentials。
+func TestApplyCredentialsCaseInsensitiveKeys(t *testing.T) {
+	spec := MCPServerSpec{
+		Type:    TransportStdio,
+		Command: "npx",
+		Env:     map[string]string{"GH_TOKEN": "", "PLAIN": "keep"},
+		Args:    []string{"--token=${CRED:GH_TOKEN}"},
+		Headers: nil,
+	}
+	creds := map[string]string{"gh_token": "secret-value"}
+
+	got, missing := applyCredentials(spec, creds)
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v, want none (case-insensitive match)", missing)
+	}
+	if got.Env["GH_TOKEN"] != "secret-value" {
+		t.Errorf("env GH_TOKEN = %q, want resolved value", got.Env["GH_TOKEN"])
+	}
+	if got.Env["PLAIN"] != "keep" {
+		t.Errorf("unrelated env key must be preserved, got %q", got.Env["PLAIN"])
+	}
+	if len(got.Args) != 1 || got.Args[0] != "--token=secret-value" {
+		t.Errorf("args = %v, want placeholder resolved", got.Args)
+	}
+	// 精确匹配优先：Linux 上允许仅大小写不同的两个 key 并存。
+	got2, _ := applyCredentials(
+		MCPServerSpec{Env: map[string]string{"K": ""}},
+		map[string]string{"K": "exact", "k": "folded"})
+	if got2.Env["K"] != "exact" {
+		t.Errorf("exact key must win, got %q", got2.Env["K"])
+	}
+}

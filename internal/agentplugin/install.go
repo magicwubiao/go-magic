@@ -105,12 +105,17 @@ func InstallFromDir(srcDir string, opts InstallOptions) (string, *Manifest, []st
 	return dest, m, skipped, nil
 }
 
+// ensureScanDir 确保扫描目录存在。
+//
+// 必须走 EnsureDefaultScanDir 而不是裸 MkdirAll：它顺带做旧目录的一次性迁移
+// （agent-plugins → plugins）。早先这里直接 MkdirAll，升级后"第一条命令是
+// install"的场景会先建出一个空的 plugins/，迁移随即因"新目录已存在"而永远
+// 跳过，老插件就此从列表里消失。
 func ensureScanDir() (string, error) {
-	scanDir := DefaultScanDir()
-	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+	if err := EnsureDefaultScanDir(); err != nil {
 		return "", fmt.Errorf("ensure scan dir: %w", err)
 	}
-	return scanDir, nil
+	return DefaultScanDir(), nil
 }
 
 // newStagingDir 在扫描目录下创建一个隐藏临时目录。
@@ -340,9 +345,17 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, io.LimitReader(in, maxInstallSize+1)); err != nil {
+	// 超限必须报错而不是静默截断：LimitReader 本身会"成功"复制 n 字节，
+	// 早先没有这层检查，>100MB 的文件会被装成半截内容，而用户看到的
+	// 只是"插件行为诡异"。
+	n, err := io.Copy(out, io.LimitReader(in, maxInstallSize+1))
+	if err != nil {
 		out.Close()
 		return fmt.Errorf("copy %q: %w", src, err)
+	}
+	if n > maxInstallSize {
+		out.Close()
+		return fmt.Errorf("file %q exceeds max size %d", src, maxInstallSize)
 	}
 	return out.Close()
 }
