@@ -950,14 +950,17 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 	// 命中信息随 turnRunCtx 进回合：runQueuedTurn 开跑时合成可见的技能调用记录。
 	turnRun.skillHits = directive.Skills
 
-	item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, turnRun, materializeSummary, "")
-	if item == nil {
-		writeSSE("data: " + sseErrorPayload(fmt.Errorf("message not accepted, please retry")) + "\n\n")
-		return
-	}
-
-	writeSSE("data: {\"type\":\"connected\"}\n\n")
-
+	// 先登记 sink，再入队。顺序不可颠倒。
+	//
+	// enqueueChatTurn 会顺手拉起队列 worker，而 worker 认领这条消息后**立刻**
+	// 广播 stream_started。若那一刻本连接还没登记为 sink（且 since=0 没有补发
+	// 任何历史事件），这条事件对本次连接而言就不存在了：前端永远不会从"排队"
+	// 切到"流式"，正文照推但界面不渲染，直到 done 才突然出现整段回答，而排队
+	// 气泡一直留在排队区——用户看到的就是"消息其实已经发出/执行完了，界面上
+	// 还挂在排队列表里"。
+	//
+	// 先登记还有一个副作用是正向的：入队到登记之间不再有窗口，任何事件都必然
+	// 落进补发日志或本 sink。
 	queue := s.sessionQueueFor(sessionID)
 	// 提交路径同样按位点登记：客户端在断线期间带着上一条连接的位点重连提交时，
 	// 上一回合尾部尚未收完的事件会在这里被补上。缺了它，用户"断线后重发一条"
@@ -968,6 +971,14 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		snk.cancel()
 		queue.closeSink(snk)
 	}()
+
+	item, dup := s.enqueueChatTurn(sessionID, parsed.content, mediaParts, persistedParts, turnRun, materializeSummary, "")
+	if item == nil {
+		writeSSE("data: " + sseErrorPayload(fmt.Errorf("message not accepted, please retry")) + "\n\n")
+		return
+	}
+
+	writeSSE("data: {\"type\":\"connected\"}\n\n")
 	if resync {
 		writeSSE(sseResyncPayload(since))
 	}
