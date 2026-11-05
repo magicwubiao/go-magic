@@ -790,27 +790,33 @@ async function readTextBody(): Promise<string> {
 
 // 换取托管签名地址（凭据在路径里，见 sessionsApi.createFSServeUrl）。
 // 失败时把原因写进 error 并返回 false。
+//
+// 注意：拿到新地址后才赋值，绝不能入口就 serveUrl.value = ''。刷新走的正是
+// 这条路径，清空会让 <video>/<audio> 的 src 变成空串，浏览器立刻抛 media
+// error → onWebError → 模板切到错误态并卸载视频元素，结果就是「视频刷新一次
+// 就变成预览文件失败」，而且错误态里视频已不存在，再刷新也恢复不了。
 async function prepareServeUrl(): Promise<boolean> {
-  serveUrl.value = ''
+  let next = ''
   if (usesFsPath.value) {
     try {
-      serveUrl.value = await sessionsApi.createFSServeUrl(props.fsPath, props.sessionId)
-      return true
+      next = await sessionsApi.createFSServeUrl(props.fsPath, props.sessionId)
+    } catch (err: unknown) {
+      error.value = err instanceof Error ? err.message : t('files.previewError')
+      return false
+    }
+  } else if (props.url) {
+    // 非工作区文件（props.url 指向 /api/uploads/...）：换一张 uploads 票据。
+    // 与 fsPath 一样必须异步——浏览器发不出 Authorization 头，凭据只能签进 URL。
+    try {
+      next = await sessionsApi.resolveAttachmentSrc(props.url)
     } catch (err: unknown) {
       error.value = err instanceof Error ? err.message : t('files.previewError')
       return false
     }
   }
-  // 非工作区文件（props.url 指向 /api/uploads/...）：换一张 uploads 票据。
-  // 与 fsPath 一样必须异步——浏览器发不出 Authorization 头，凭据只能签进 URL。
-  if (!props.url) return false
-  try {
-    serveUrl.value = await sessionsApi.resolveAttachmentSrc(props.url)
-    return !!serveUrl.value
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : t('files.previewError')
-    return false
-  }
+  if (!next) return false
+  serveUrl.value = next
+  return true
 }
 
 // prepareTicketUrls 换取「读取」与「下载」两张票据。
@@ -932,8 +938,11 @@ function onWebLoaded() {
   webLoading.value = false
 }
 
-// iframe / 媒体加载失败：给出错误提示
+// iframe / 媒体加载失败：给出错误提示。
+// src 为空（例如刷新过程中地址暂时不可用）不算失败——空 src 一定会触发
+// media error，把它当错误会把预览推进无法自愈的错误态。
 function onWebError() {
+  if (!serveUrl.value) return
   clearWebTimer()
   webLoading.value = false
   webError.value = t('files.previewError')
@@ -1051,9 +1060,16 @@ async function doRefresh() {
     }
     // 网页/媒体：只重签托管地址，不闪加载态。
     // 旧文档留在 iframe 里直到新文档加载完成，视觉上是一次原地刷新。
+    // 音视频一旦进过错误态，元素已被 v-if 摘掉，刷新成功必须显式清掉
+    // webError 才能重新挂载（否则停在「预览文件失败」不动）。
     if (kind.value === 'web') {
-      await prepareServeUrl()
-      if (serveUrl.value) refreshStamp.value = Date.now()
+      const ok = await prepareServeUrl()
+      if (!ok) return
+      // 先换戳再清错误：错误态下视频元素是随后才重新挂载的，
+      // 这样它一挂出来就是最终地址，不会先按旧地址加载一次再跳。
+      refreshStamp.value = Date.now()
+      webError.value = ''
+      webLoading.value = false
       return
     }
     // 文本/图片/Office：走完整加载流程（重新换票据、重新读正文/二进制）

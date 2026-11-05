@@ -1430,18 +1430,26 @@ interface DockRect {
   width: number
   height: number
 }
-const PREVIEW_DOCK_KEY = 'chat-preview-dock-rect'
+// 存下来的坐标是用户拖过的位置，键名带版本：改默认布局时换版本号，
+// 老用户的旧坐标不会把新默认（更靠左、更宽）盖掉。
+const PREVIEW_DOCK_KEY = 'chat-preview-dock-rect-v5'
 const PREVIEW_DOCK_MIN_W = 320
 const PREVIEW_DOCK_MIN_H = 220
 
 function defaultDockRect(): DockRect {
   const vw = window.innerWidth || 1440
   const vh = window.innerHeight || 900
-  const width = Math.min(560, Math.max(PREVIEW_DOCK_MIN_W, vw - 80))
-  const height = Math.min(660, Math.max(PREVIEW_DOCK_MIN_H, vh - 180))
-  // 默认靠右上：避开输入框（左下），也不压住右侧文件树
+  const width = Math.min(760, Math.max(PREVIEW_DOCK_MIN_W, vw - 80))
+  // 默认高度：以屏幕等比（width * vh/vw）为基准再放大 1.35 倍。纯等比在
+  // 1080p 下只有 ~371，用户反馈太矮（PPT 只露半页）；放大后 760 宽在
+  // 1080p ≈ 577、16:10 屏 ≈ 641，并设 520 下限 + 视口上限（vh-180）兜底。
+  const aspect = vh / Math.max(1, vw)
+  const maxH = Math.max(PREVIEW_DOCK_MIN_H, vh - 180)
+  const height = Math.min(maxH, Math.max(520, Math.round(width * aspect * 1.35)))
+  // 默认靠右上：避开输入框（左下），也不压住右侧文件树。
+  // 右侧留 330px 给文件树/滚动条。
   return {
-    left: Math.max(12, vw - width - 300),
+    left: Math.max(12, vw - width - 330),
     top: 64,
     width,
     height,

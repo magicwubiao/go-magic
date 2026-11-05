@@ -150,4 +150,15 @@ function onError(message: string) {
   height: 100%;
   min-height: 0;
 }
+
+/* 并排面板/浮窗：外层 .preview-content-container 由 flex 定高，wrapper 直接
+   撑满容器、滚动交给渲染器内部（FileViewer 根元素自带 height: 100%）。
+   固定 70vh 两头不讨好：面板比 70vh 矮时工具栏+预览一起把外层容器撑出
+   滚动条；面板比 70vh 高时正文下方留一大块空白。
+   dialog 模式不能照搬——容器高度是 auto（只有 max-height），百分比高度
+   无法解析，保持 70vh 估算值。 */
+.file-preview-panel--panel .office-preview-wrapper {
+  height: 100%;
+  min-height: 0;
+}
 </style>
