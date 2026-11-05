@@ -5,7 +5,7 @@
     </n-space>
 
     <n-space justify="space-between" style="margin-bottom: 16px;">
-      <n-space>
+      <n-space :wrap="false">
         <n-upload
           :show-file-list="false"
           :multiple="true"
@@ -18,6 +18,17 @@
             {{ t('files.upload') }}
           </n-button>
         </n-upload>
+        <n-input
+          v-model:value="searchQuery"
+          size="small"
+          clearable
+          :placeholder="t('files.search')"
+          style="width: 220px;"
+        >
+          <template #prefix>
+            <n-icon><SearchOutline /></n-icon>
+          </template>
+        </n-input>
       </n-space>
       <n-button size="small" @click="loadFiles" :loading="loading">
         <template #icon>
@@ -26,6 +37,7 @@
       </n-button>
     </n-space>
 
+    <!-- 批量操作工具栏：收进"文件列表"卡片头部（见下方 n-card 的 #header-extra） -->
     <n-spin :show="loading">
       <n-card :title="t('files.overview')" style="margin-bottom: 24px;" size="small">
         <n-grid :cols="3" :x-gap="16">
@@ -54,17 +66,44 @@
       </n-card>
 
       <n-card :title="t('files.fileList')" size="small">
+        <template #header-extra>
+          <n-space v-if="checkedKeys.length > 0" align="center" :size="8" :wrap="false">
+            <span v-if="!isMobile" class="batch-count">{{ t('files.selected', { count: checkedKeys.length }) }}</span>
+            <n-button size="small" type="error" :loading="batchBusy" @click="confirmBatchDelete">
+              <template #icon>
+                <n-icon><TrashOutline /></n-icon>
+              </template>
+              {{ t('files.batchDelete') }}
+            </n-button>
+            <n-button size="small" :loading="batchBusy" @click="batchDownload">
+              <template #icon>
+                <n-icon><DownloadOutline /></n-icon>
+              </template>
+              {{ t('files.batchDownload') }}
+            </n-button>
+            <n-button size="small" quaternary @click="clearChecked">
+              {{ t('files.clearSelection') }}
+            </n-button>
+          </n-space>
+        </template>
         <n-data-table
           :columns="uploadColumnsComputed"
-          :data="files"
+          :data="filteredFiles"
           :loading="loading"
           :pagination="pagination"
-          :scroll-x="isMobile ? 400 : 720"
+          :row-key="rowKey"
+          :checked-row-keys="checkedKeys"
+          :scroll-x="isMobile ? 440 : 780"
           size="small"
           bordered
           striped
+          @update:checked-row-keys="onCheckedKeys"
         />
-        <n-empty v-if="!loading && files.length === 0" :description="t('files.empty')" style="margin-top: 24px;" />
+        <n-empty
+          v-if="!loading && filteredFiles.length === 0"
+          :description="searchQuery ? t('files.noSearchResult') : t('files.empty')"
+          style="margin-top: 24px;"
+        />
       </n-card>
     </n-spin>
 
@@ -87,6 +126,7 @@ import {
   NUpload,
   NButton,
   NIcon,
+  NInput,
   NDataTable,
   NEmpty,
   NPopconfirm,
@@ -96,6 +136,7 @@ import {
   NCard,
   NSpin,
   useMessage,
+  useDialog,
 } from 'naive-ui'
 import {
   CloudUploadOutline,
@@ -103,6 +144,7 @@ import {
   DownloadOutline,
   EyeOutline,
   RefreshOutline,
+  SearchOutline,
   FolderOpenOutline,
   SaveOutline,
   FolderOutline,
@@ -121,6 +163,7 @@ import FilePreviewDialog from '@/components/FilePreviewDialog.vue'
 
 const { t } = useI18n()
 const message = useMessage()
+const dialog = useDialog()
 
 // ===== Uploads =====
 const files = ref<sessionsApi.FileItem[]>([])
@@ -144,9 +187,38 @@ const pagination = ref<PaginationProps>({
   },
 })
 
-watch(files, (val) => {
+// ===== 搜索过滤 =====
+const searchQuery = ref('')
+const filteredFiles = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return files.value
+  return files.value.filter((f) => f.filename.toLowerCase().includes(q))
+})
+
+watch(filteredFiles, (val) => {
   pagination.value.itemCount = val.length
 }, { immediate: true })
+
+// ===== 批量选择 =====
+const checkedKeys = ref<Array<string>>([])
+const batchBusy = ref(false)
+
+// 行键用 session/disk 组合：同一文件名可能出现在不同会话目录，纯文件名不唯一。
+function rowKey(row: sessionsApi.FileItem): string {
+  return `${row.session_id || ''}/${row.disk || row.filename}`
+}
+
+function onCheckedKeys(keys: Array<string | number>) {
+  checkedKeys.value = keys.map(String)
+}
+
+function clearChecked() {
+  checkedKeys.value = []
+}
+
+const checkedItems = computed(() =>
+  files.value.filter((f) => checkedKeys.value.includes(rowKey(f)))
+)
 
 function getFileIcon(filename: string) {
   const ext = filename.split('.').pop()?.toLowerCase() || ''
@@ -173,6 +245,9 @@ const updateIsMobile = () => {
 }
 
 const uploadColumns: DataTableColumns<sessionsApi.FileItem> = [
+  {
+    type: 'selection',
+  },
   {
     title: '#',
     key: 'index',
@@ -324,6 +399,75 @@ async function handleDelete(file: sessionsApi.FileItem) {
   }
 }
 
+// ===== Batch Actions =====
+
+// confirmBatchDelete 用 dialog.warning 二次确认（桌面 WebView 里原生 confirm
+// 会静默卡死，项目禁用 window.confirm/alert）。
+function confirmBatchDelete() {
+  const count = checkedKeys.value.length
+  if (count === 0) return
+  dialog.warning({
+    title: t('files.batchDelete'),
+    content: t('files.confirmBatchDelete', { count }),
+    positiveText: t('common.confirm'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      await handleBatchDelete()
+    },
+  })
+}
+
+async function handleBatchDelete() {
+  const items = checkedItems.value.map((f) => ({
+    session_id: f.session_id,
+    filename: f.disk || f.filename,
+  }))
+  if (items.length === 0) return
+  batchBusy.value = true
+  try {
+    const res = await sessionsApi.deleteFilesBatch(items)
+    if (res.failed.length === 0) {
+      message.success(t('files.batchDeleteSuccess', { count: res.deleted }))
+    } else {
+      // 单条失败不影响其余条目：部分失败时给出成功/失败计数，明细在控制台可查。
+      console.warn('[files] batch delete failures:', res.failed)
+      message.warning(t('files.batchDeletePartial', { count: res.deleted, failed: res.failed.length }))
+    }
+    clearChecked()
+    await loadFiles()
+  } catch {
+    message.error(t('files.deleteError'))
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+async function batchDownload() {
+  const items = checkedItems.value
+  if (items.length === 0) return
+  batchBusy.value = true
+  try {
+    for (const file of items) {
+      // 与单文件下载一致：先换 uploads 票据再交给 <a href>（带不上鉴权头）。
+      const url = await sessionsApi.resolveAttachmentSrc(file.url)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = file.filename
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      // 浏览器对短时间内连续触发的下载会拦截后续的，逐个间隔一小段时间触发。
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    }
+    message.success(t('files.batchDownloadStarted', { count: items.length }))
+  } catch {
+    message.error(t('files.downloadError'))
+  } finally {
+    batchBusy.value = false
+  }
+}
+
 async function downloadUploadFile(file: sessionsApi.FileItem) {
   try {
     // 先换一张 uploads 票据再交给浏览器下载：<a href> 带不上 Authorization 头，
@@ -374,6 +518,11 @@ onUnmounted(() => {
   height: 100%;
 }
 
+.batch-count {
+  font-size: 13px;
+  color: #666;
+  font-weight: 500;
+}
 
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {

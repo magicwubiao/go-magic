@@ -3,6 +3,8 @@ package server
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -954,6 +956,53 @@ func escapeRFC5987(s string) string {
 	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
+// 上传删除入口共用的哨兵错误：调用方（单删/批删）据此映射 HTTP 状态码。
+var (
+	errUploadInvalidName = errors.New("invalid filename")
+	errUploadInvalidPath = errors.New("invalid path")
+)
+
+// deleteUploadFile 删除 uploads 根下的一个上传文件并清理其元数据。
+// 单删（DELETE /api/files/...）与批删（POST /api/files/batch-delete）共用，
+// 避免两处校验逻辑漂移；调用方负责把返回的 error 映射为 HTTP 状态码。
+func (s *Server) deleteUploadFile(sessionID, filename string) error {
+	if filename == "" || strings.Contains(filename, "..") || strings.ContainsRune(filename, 0) {
+		return errUploadInvalidName
+	}
+	filename = filepath.Base(filename)
+	if filename == "." || filename == ".." || filename == "" {
+		return errUploadInvalidName
+	}
+	if safeFilename(filename) == "" {
+		return errUploadInvalidName
+	}
+
+	dir := s.uploadsDirFor(sessionID)
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return errUploadInvalidPath
+	}
+	absRoot, _ := filepath.Abs(s.uploadsRoot())
+	if !strings.HasPrefix(absDir, absRoot) {
+		return errUploadInvalidPath
+	}
+	absTarget, _ := filepath.Abs(filepath.Join(absDir, filename))
+	if !strings.HasPrefix(absTarget, absRoot) {
+		return errUploadInvalidPath
+	}
+
+	if err := os.Remove(absTarget); err != nil {
+		return err
+	}
+
+	if meta := s.ensureUploadsMeta(); meta != nil {
+		if err := meta.DeleteDisk(sessionID, filename); err != nil {
+			log.Warnf("[uploads] meta delete failed for %s: %v", filename, err)
+		}
+	}
+	return nil
+}
+
 // handleFileDelete — DELETE /api/files/{session_id}/{filename}
 // Legacy form /api/files/{filename} is accepted as a fallback for shared bucket.
 func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
@@ -976,53 +1025,16 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
 		filename = parts[0]
 	}
 
-	if filename == "" || strings.Contains(filename, "..") || strings.ContainsRune(filename, 0) {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
-	}
-	filename = filepath.Base(filename)
-	if filename == "." || filename == ".." || filename == "" {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
-	}
-
-	safe := safeFilename(filename)
-	if safe == "" {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
-	}
-
-	dir := s.uploadsDirFor(sessionID)
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	absRoot, _ := filepath.Abs(s.uploadsRoot())
-	if !strings.HasPrefix(absDir, absRoot) {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	target := filepath.Join(absDir, filename)
-	absTarget, _ := filepath.Abs(target)
-	if !strings.HasPrefix(absTarget, absRoot) {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-
-	if err := os.Remove(absTarget); err != nil {
-		if os.IsNotExist(err) {
+	if err := s.deleteUploadFile(sessionID, filename); err != nil {
+		switch {
+		case errors.Is(err, errUploadInvalidName), errors.Is(err, errUploadInvalidPath):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case os.IsNotExist(err):
 			http.Error(w, "file not found", http.StatusNotFound)
-			return
+		default:
+			http.Error(w, "failed to delete file: "+err.Error(), http.StatusInternalServerError)
 		}
-		http.Error(w, "failed to delete file: "+err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	if meta := s.ensureUploadsMeta(); meta != nil {
-		if err := meta.DeleteDisk(sessionID, filename); err != nil {
-			log.Warnf("[uploads] meta delete failed for %s: %v", filename, err)
-		}
 	}
 
 	s.recordUploadAudit(uploadsAuditEntry{
@@ -1031,6 +1043,74 @@ func (s *Server) handleFileDelete(w http.ResponseWriter, r *http.Request) {
 	})
 
 	jsonResponse(w, map[string]interface{}{"success": true})
+}
+
+// uploadsBatchDeleteRequest / 上限：批删单次最多 500 条，防止恶意超大请求。
+const uploadsBatchDeleteMax = 500
+
+// handleFileBatchDelete — POST /api/files/batch-delete
+// Body: {"items":[{"session_id":"...","filename":"..."}]}
+// 逐条删除，单条失败不影响其余条目；返回成功数与逐条失败明细，前端据此提示。
+func (s *Server) handleFileBatchDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Items []struct {
+			SessionID string `json:"session_id"`
+			Filename  string `json:"filename"`
+		} `json:"items"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Items) == 0 {
+		http.Error(w, "items is empty", http.StatusBadRequest)
+		return
+	}
+	if len(req.Items) > uploadsBatchDeleteMax {
+		http.Error(w, "too many items", http.StatusBadRequest)
+		return
+	}
+
+	type batchFailure struct {
+		SessionID string `json:"session_id,omitempty"`
+		Filename  string `json:"filename"`
+		Error     string `json:"error"`
+	}
+	addr := clientIP(r)
+	deleted := 0
+	failed := []batchFailure{}
+	for _, item := range req.Items {
+		// session 过滤与列表接口同规则：非法字符折叠成 '_'，与磁盘目录名对齐。
+		sessionID := strings.TrimSpace(item.SessionID)
+		if sessionID != "" {
+			sessionID = fileNameSafeRe.ReplaceAllString(sessionID, "_")
+		}
+		if err := s.deleteUploadFile(sessionID, item.Filename); err != nil {
+			failed = append(failed, batchFailure{
+				SessionID: sessionID,
+				Filename:  item.Filename,
+				Error:     err.Error(),
+			})
+			continue
+		}
+		deleted++
+		s.recordUploadAudit(uploadsAuditEntry{
+			Time: time.Now(), SessionID: sessionID,
+			Action: "delete", Filename: filepath.Base(item.Filename), Size: 0, IP: addr,
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{"success": true, "deleted": deleted, "failed": failed})
 }
 
 // uploadsServeHandler serves /api/uploads/ from the per-session layout. Each

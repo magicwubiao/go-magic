@@ -2005,6 +2005,8 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// bucketing, size limits, extension blacklist, and filename sanitization.
 	mux.HandleFunc("/api/upload", withCORS(requireAuth(s.handleFileUpload)))
 	mux.HandleFunc("/api/files", withCORS(requireAuth(s.handleFileList)))
+	// 精确路径注册，Go mux 最长前缀优先，不会被下面的 /api/files/ 前缀吞掉。
+	mux.HandleFunc("/api/files/batch-delete", withCORS(requireAuth(s.handleFileBatchDelete)))
 	mux.HandleFunc("/api/files/", withCORS(requireAuth(s.handleFileDelete)))
 
 	// Serve uploaded files (auth required). The handler is per-session aware

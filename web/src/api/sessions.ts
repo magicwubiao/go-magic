@@ -606,6 +606,24 @@ export async function deleteFile(sessionId: string | undefined, disk: string): P
   return request(`/files/${seg}`, { method: 'DELETE' })
 }
 
+// 批量删除上传文件（POST /api/files/batch-delete）。服务端逐条删除、单条失败
+// 不影响其余条目；failed 里是逐条失败明细（含服务端错误原文），调用方据此提示。
+export interface BatchDeleteFailure {
+  session_id?: string
+  filename: string
+  error: string
+}
+
+export async function deleteFilesBatch(
+  items: Array<{ session_id?: string; filename: string }>,
+): Promise<{ deleted: number; failed: BatchDeleteFailure[] }> {
+  const res = await request<{ deleted?: number; failed?: BatchDeleteFailure[] }>('/files/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ items }),
+  })
+  return { deleted: res.deleted || 0, failed: res.failed || [] }
+}
+
 export interface ChatStreamEvent {
   data: string
 }
