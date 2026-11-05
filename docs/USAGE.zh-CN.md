@@ -1357,7 +1357,7 @@ cli_gh_call({"tool": "pr_list", "params": {"repo": "owner/name", "limit": 20}})
 
 单个工具的超时上限 300 秒（与工具层 `MaxTimeout` 一致）。`cli.json` 是唯一的手写入口（与 `config.json` 同级），改完重启服务端或运行 `magic` 重新加载；排查"模型为什么看不到某个工具"先跑 `magic cli list`。
 
-> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/agent-plugins/cli-gh/` 之类），工具名带插件前缀 `ap_cli-gh_cli_gh_pr_list`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
+> 目录装出来的 CLI 应用是 **Agent Plugin**（`~/.magic/agent-plugins/cli-docker/` 之类），工具名带插件前缀 `ap_cli-docker_cli_docker_ps`，走插件页的启用/禁用/卸载/授权，不受本节的手写配置影响。
 
 ### 15.4 插件（Agent Plugins）
 

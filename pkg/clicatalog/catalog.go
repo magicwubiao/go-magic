@@ -6,7 +6,7 @@
 //
 // **收录标准（重要，别再往里加"常用工具"）**：目录只放
 // `execute_command` 拿不到的东西——需要代管/隔离凭据的跨服务查询
-// （gh、aws、aliyun、tccli、wrangler、vercel、supabase），外加一个高频的
+// （aws、aliyun、tccli、wrangler、vercel、supabase），外加一个高频的
 // 本地容器视角（docker）。git、kubectl、helm、jq、yq、rg、ffmpeg、yt-dlp
 // 这类"本机只读工具"曾经在目录里，已整体移除：模型用内置 shell 就能跑，
 // 收进目录的代价是每装一条往工具列表塞 2-5 个定义，直接吃掉上下文。
@@ -135,7 +135,6 @@ var entries = []Entry{
 	wranglerEntry,
 	vercelEntry,
 	supabaseEntry,
-	ghEntry,
 }
 
 // All 返回按分类与名字排好序的目录条目。
@@ -532,94 +531,4 @@ var supabaseEntry = Entry{
 	Check:   []string{"projects", "list"},
 	DocsURL: "https://supabase.com/docs/guides/local-development/cli/getting-started",
 	Tags:    []string{"postgres", "bass"},
-}
-
-// ghEntry：GitHub 官方 CLI。
-//
-// 声明式工具只放高频只读子命令（pr/issue/repo/run 的 list 与 view），
-// 同时打开 Raw：gh 的子命令面太大（单 gh api 就能覆盖整个 REST/GraphQL API），
-// 手写 ToolSpec 永远追不上，raw 逃生工具（恒审批）才是它长尾的正确入口。
-//
-// 认证三选一，目录不代存 token：
-//  1. 机器上已经 gh auth login 过（凭据在 gh 自己的配置里，最常见）；
-//  2. 填 GH_TOKEN（走 Requires，引导用户用 ${VAR} 引用）；
-//  3. 在自己的终端里跑 Login 展示的命令。
-//
-// 不设 LoginExec：gh auth login 的交互（包括最后的 "Press Enter to open
-// the browser"）走 survey，检测到 stdin 不是 TTY 会直接报错——管道 stdin
-// 的代跑链路喂不进它。--with-token 倒是吃 stdin，但它要等 EOF，而前端
-// 的输入转发只写不关，会一直挂起。等哪天 stdin 生命周期可控了再补。
-var ghEntry = Entry{
-	ID:          "gh",
-	Name:        "GitHub CLI",
-	Description: "List pull requests, issues and workflow runs; inspect repositories via the GitHub API.",
-	Category:    "dev",
-	DefaultName: "gh",
-	Connector: cliconn.Connector{
-		Command:     "gh",
-		Description: "GitHub CLI (uses the credentials from gh auth login, or GH_TOKEN)",
-		Raw:         true,
-		Tools: []cliconn.ToolSpec{
-			{
-				Name:        "pr_list",
-				Description: "List pull requests of a repository (number, title, author, state).",
-				Args:        []string{"pr", "list", "--limit", "{{limit}}", "--state", "{{state}}", "{{?repo}}--repo", "{{repo}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "OWNER/REPO; omit when running inside a repository checkout"},
-					{Name: "state", Default: "open", Description: "open / closed / merged / all"},
-					{Name: "limit", Type: "integer", Default: 20},
-				},
-			},
-			{
-				Name:        "issue_list",
-				Description: "List issues of a repository (number, title, author, state).",
-				Args:        []string{"issue", "list", "--limit", "{{limit}}", "--state", "{{state}}", "{{?repo}}--repo", "{{repo}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "OWNER/REPO; omit when running inside a repository checkout"},
-					{Name: "state", Default: "open", Description: "open / closed / all"},
-					{Name: "limit", Type: "integer", Default: 20},
-				},
-			},
-			{
-				Name:        "run_list",
-				Description: "List recent workflow (Actions) runs of a repository.",
-				Args:        []string{"run", "list", "--limit", "{{limit}}", "{{?repo}}--repo", "{{repo}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "OWNER/REPO; omit when running inside a repository checkout"},
-					{Name: "limit", Type: "integer", Default: 10},
-				},
-			},
-			{
-				Name:        "repo_view",
-				Description: "Show the description, default branch and README of a repository.",
-				Args:        []string{"repo", "view", "{{repo}}"},
-				ReadOnly:    true,
-				Params: []cliconn.ParamSpec{
-					{Name: "repo", Description: "OWNER/REPO (or full URL)", Required: true},
-				},
-			},
-		},
-	},
-	Requires: []Requirement{{
-		Key:         "GH_TOKEN",
-		Label:       "GitHub token (optional if gh auth login already ran)",
-		Secret:      true,
-		Required:    false,
-		Placeholder: "${GH_TOKEN}",
-		HelpURL:     "https://github.com/settings/tokens",
-	}},
-	Install: InstallHints{
-		"windows": {"winget install --id GitHub.cli -e"},
-		"darwin":  {"brew install gh"},
-		"linux":   {"sudo apt install gh", "sudo dnf install gh"},
-	},
-	Detect: []string{"--version"},
-	Login:  sameOnAllPlatforms("gh auth login"),
-	// 退出码非 0 表示这台机器既没有 gh 凭据也没有可用 token，与"没装"区分开。
-	Check:   []string{"auth", "status"},
-	DocsURL: "https://cli.github.com/manual/",
-	Tags:    []string{"github", "pr", "issue", "actions"},
 }

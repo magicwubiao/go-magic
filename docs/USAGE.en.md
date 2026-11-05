@@ -1377,7 +1377,7 @@ It is therefore off by default and intended for connectors with many tools in a 
 
 `cli.json` is the only hand-written entry point (next to `config.json`); restart the server or run `magic` to reload it, and start with `magic cli list` when debugging "why can't the model see this tool".
 
-> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/agent-plugins/cli-gh/` and friends). Their tools carry the plugin prefix — `ap_cli-gh_cli_gh_pr_list` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
+> CLI apps installed from the catalog are **Agent Plugins** (`~/.magic/agent-plugins/cli-docker/` and friends). Their tools carry the plugin prefix — `ap_cli-docker_cli_docker_ps` — and they are enabled, disabled, uninstalled and authorized from the Plugins page, independent of the hand-written config described here.
 
 ### 15.4 Plugins (Agent Plugins)
 

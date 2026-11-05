@@ -10,7 +10,7 @@ package agentplugin
 //   - 物化后的包是普通文件，用户/团队可以拷走、改参数、二次分发。
 //
 // 生成规则（保持"目录是唯一事实来源"）：
-//   - 插件名 = "<kind>-<id>"（如 mcp-lark / cli-gh），与官方技能包名不冲突；
+//   - 插件名 = "<kind>-<id>"（如 mcp-lark / cli-docker），与官方技能包名不冲突；
 //   - MCP 条目 → plugin.json + mcp.json（单 server）；需要凭据的位置写成占位：
 //     env 值为空、args/headers 里写 ${CRED:NAME}（见 credref.go）；
 //   - CLI 条目 → plugin.json + cli.json（单连接器）；Requires 写成空 env 占位；
@@ -376,7 +376,7 @@ type mcpServerOut struct {
 // buildMCPSpec 把目录条目转成 mcp.json 的 server 条目。
 //
 // 凭据位置三态：env → 值为空；args → {{KEY}} 换成 ${CRED:KEY}；
-// headers → 值写 ${CRED:KEY}（当前目录无此形态，保留能力以备扩条目）。
+// headers → 值写 ${CRED:KEY}（MasterGo / Modao / GitHub 这类远程条目走这条）。
 func buildMCPSpec(c connectors.Connector, argsOverride []string) mcpServerOut {
 	spec := mcpServerOut{Type: mapCatalogTransport(c.Transport)}
 	args := c.Args

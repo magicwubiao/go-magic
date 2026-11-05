@@ -329,42 +329,63 @@ var catalog = []Connector{
 	},
 
 	// --- Development ---
+	// GitHub 用**官方** server 的远程端点，不再包旧的 reference 实现：
+	//   - @modelcontextprotocol/server-github 随 Anthropic 参考服务器归档，
+	//     npm 包已不再维护，新用户装到的是一份没人修的工具集；
+	//   - 官方实现 github/github-mcp-server 是 Go 写的，没有 npm 包，本地跑
+	//     只能用 Docker 镜像，对"点一下就装"的目录来说门槛过高；
+	//   - 远程端点零安装、跨平台，正好符合本目录"服务端部署也能用"的取向。
+	// 凭据名沿用 GITHUB_PERSONAL_ACCESS_TOKEN：老用户重装时凭据库里已有这个
+	// key，不用重填；只读需求把 URL 换成 .../mcp/readonly 即可，凭据不变。
+	// GHES（自建 GitHub Enterprise Server）**不受远程端点支持**，只能用本地
+	// Docker 镜像 + GITHUB_HOST，按"自定义 MCP"手填——内置进来就是一条点了
+	// 必然连不上的条目，和设计段里那批本地软件桥同理。
+	//
+	// 别给它加 oauth 字段：端点确实会回 401 + resource_metadata，但指向的
+	// https://github.com/login/oauth 既没有授权服务器发现文档、也不支持动态
+	// 注册，只有事先建好的 OAuth App 才能走授权码流程（实测 2026-11）。
+	// 加了只会让 startOAuth 在发现阶段就失败，比填 PAT 更难解释。
 	{
 		ID:          "github",
 		Name:        "GitHub",
-		Description: "Repositories, issues, pull requests and code search on GitHub.",
+		Description: "Official GitHub MCP server (hosted endpoint): repositories, issues, pull requests, code search and Actions. Needs a personal access token.",
 		Category:    "dev",
-		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "@modelcontextprotocol/server-github"},
+		Transport:   "http",
+		URL:         "https://api.githubcopilot.com/mcp/",
 		DefaultName: "github",
 		Requires: []Requirement{{
 			Key:         "GITHUB_PERSONAL_ACCESS_TOKEN",
 			Label:       "Personal access token",
-			Where:       WhereEnv,
+			Where:       WhereHeader,
+			Header:      "Authorization",
+			Value:       "Bearer {{GITHUB_PERSONAL_ACCESS_TOKEN}}",
 			Secret:      true,
 			Required:    true,
-			Placeholder: "ghp_…",
+			Placeholder: "github_pat_…",
 			HelpURL:     "https://github.com/settings/tokens",
 		}},
-		DocsURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
+		DocsURL: "https://github.com/github/github-mcp-server",
 		Tags:    []string{"git", "issues", "pull-requests", "code-search"},
 	},
+	// GitLab 换成官方 MCP 端点（GitLab 18.6 起 HTTP 传输转正，路径 /api/v4/mcp）。
+	// 旧的 @modelcontextprotocol/server-gitlab 与 github 一样随参考服务器归档。
+	// 认证走原生 OAuth：GitLab 的授权服务器开放动态注册（POST /oauth/register
+	// 实测 201，返回公共客户端 token_endpoint_auth_method=none + require_pkce），
+	// 与 linear / pixso 同一条链路——点一下授权，不需要建应用填 token。
+	// 注意 GitLab 侧还有开关：顶层群组要允许访问 MCP server，否则工具列表为空。
+	// 自建 GitLab 不在这里（域名与版本各不相同），按"自定义 MCP"填
+	// https://<实例>/api/v4/mcp。
 	{
 		ID:          "gitlab",
 		Name:        "GitLab",
-		Description: "Projects, merge requests and pipelines on GitLab.",
+		Description: "Official GitLab MCP server: projects, issues, merge requests, pipelines and wiki (browser OAuth on first use; the group must allow MCP server access).",
 		Category:    "dev",
-		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "@modelcontextprotocol/server-gitlab"},
+		Transport:   "http",
+		URL:         "https://gitlab.com/api/v4/mcp",
+		OAuth:       &OAuthRequirement{Scopes: []string{"mcp"}},
 		DefaultName: "gitlab",
-		Requires: []Requirement{
-			{Key: "GITLAB_PERSONAL_ACCESS_TOKEN", Label: "Personal access token", Where: WhereEnv, Secret: true, Required: true},
-			{Key: "GITLAB_API_URL", Label: "API URL (self-hosted only)", Where: WhereEnv, Placeholder: "https://gitlab.com/api/v4"},
-		},
-		DocsURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab",
-		Tags:    []string{"git", "merge-requests", "ci"},
+		DocsURL:     "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+		Tags:        []string{"git", "merge-requests", "ci"},
 	},
 	{
 		ID:          "sentry",
@@ -410,14 +431,17 @@ var catalog = []Connector{
 	},
 
 	// --- Search & Web ---
+	// Brave 改用它自家的官方包 @brave/brave-search-mcp-server（2.x 默认 stdio）。
+	// 旧的 @modelcontextprotocol/server-brave-search 已归档，且没有接替的远程端点
+	// （mcp.brave.com 之类均不可达），官方 npm 包是唯一在维护的实现。
 	{
 		ID:          "brave-search",
 		Name:        "Brave Search",
-		Description: "Web and local search through the Brave Search API.",
+		Description: "Official Brave Search server: web, news, image and video search plus AI summaries.",
 		Category:    "search",
 		Transport:   "stdio",
 		Command:     "npx",
-		Args:        []string{"-y", "@modelcontextprotocol/server-brave-search"},
+		Args:        []string{"-y", "@brave/brave-search-mcp-server", "--transport", "stdio"},
 		DefaultName: "brave-search",
 		Requires: []Requirement{{
 			Key:      "BRAVE_API_KEY",
@@ -427,7 +451,7 @@ var catalog = []Connector{
 			Required: true,
 			HelpURL:  "https://brave.com/search/api/",
 		}},
-		DocsURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+		DocsURL: "https://github.com/brave/brave-search-mcp-server",
 		Tags:    []string{"search", "web"},
 	},
 	{
@@ -464,17 +488,30 @@ var catalog = []Connector{
 	},
 
 	// --- Data & Databases ---
+	// Postgres 换成 Postgres MCP Pro（crystaldba，MIT，仍在维护）：
+	// 旧的 @modelcontextprotocol/server-postgres 已归档，且 Datadog 报过一条
+	// 可绕过只读模式的 SQL 注入，没人会修。新版把连接串放 DATABASE_URI（env），
+	// 默认 --access-mode=restricted（只读 + 安全 SQL 解析），要写操作自己改成
+	// unrestricted——目录里不替用户放开写权限。
 	{
 		ID:          "postgres",
 		Name:        "PostgreSQL",
-		Description: "Read-only SQL queries against a PostgreSQL database.",
+		Description: "Postgres MCP Pro: schema-aware SQL, index tuning, EXPLAIN plans and health checks. Runs in restricted (read-only) mode.",
 		Category:    "data",
 		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"},
+		Command:     "uvx",
+		Args:        []string{"postgres-mcp", "--access-mode=restricted"},
 		DefaultName: "postgres",
-		DocsURL:     "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
-		Tags:        []string{"sql", "database"},
+		Requires: []Requirement{{
+			Key:         "DATABASE_URI",
+			Label:       "Connection string",
+			Where:       WhereEnv,
+			Secret:      true,
+			Required:    true,
+			Placeholder: "postgresql://user:password@localhost:5432/dbname",
+		}},
+		DocsURL: "https://github.com/crystaldba/postgres-mcp",
+		Tags:    []string{"sql", "database"},
 	},
 	{
 		ID:          "sqlite",
@@ -510,20 +547,31 @@ var catalog = []Connector{
 		DocsURL: "https://github.com/makenotion/notion-mcp-server",
 		Tags:    []string{"notes", "wiki", "docs"},
 	},
+	// Slack 换社区维护的 slack-mcp-server（korotovsky，Go 实现，npm 分发）。
+	// 官方端点 mcp.slack.com/mcp 虽然在线，但它**不开放动态注册**：得先在
+	// api.slack.com 建应用、打开 Enable MCP、再把 client_id/secret 手填进来，
+	// 内置目录没法做到"填个 token 就能用"，所以不走远程条目。
+	// 这个实现直接用 user token（xoxp）或浏览器令牌（xoxc+xoxd），不需要工作区
+	// 管理员审批应用。发消息/表情这类写操作默认关闭（SLACK_MCP_ADD_MESSAGE_TOOL
+	// 为空即不注册），要用的人自己在插件 env 里放开。
 	{
 		ID:          "slack",
 		Name:        "Slack",
-		Description: "Read channels and post messages in a Slack workspace.",
+		Description: "Community Slack server (no app approval needed): read channels, search messages, list users. Posting stays off until you enable it.",
 		Category:    "productivity",
 		Transport:   "stdio",
 		Command:     "npx",
-		Args:        []string{"-y", "@modelcontextprotocol/server-slack"},
+		Args:        []string{"-y", "slack-mcp-server@latest", "--transport", "stdio"},
 		DefaultName: "slack",
-		Requires: []Requirement{
-			{Key: "SLACK_BOT_TOKEN", Label: "Bot token", Where: WhereEnv, Secret: true, Required: true, Placeholder: "xoxb-…"},
-			{Key: "SLACK_TEAM_ID", Label: "Team ID", Where: WhereEnv, Required: true},
-		},
-		DocsURL: "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+		Requires: []Requirement{{
+			Key:      "SLACK_MCP_XOXP_TOKEN",
+			Label:    "User OAuth token (xoxp-…)",
+			Where:    WhereEnv,
+			Secret:   true,
+			Required: true,
+			HelpURL:  "https://github.com/korotovsky/slack-mcp-server",
+		}},
+		DocsURL: "https://github.com/korotovsky/slack-mcp-server",
 		Tags:    []string{"chat", "messaging"},
 	},
 	// Linear 官方 MCP 端点（2025 起只有 streamable-http 的 /mcp；老的
@@ -739,6 +787,10 @@ var catalog = []Connector{
 	// URL=http://127.0.0.1:8000/mcp。
 
 	// --- Browser & Automation ---
+	// 只有 playwright 一条：原来的 puppeteer 条目用的是已归档的
+	// @modelcontextprotocol/server-puppeteer，能力与 playwright 完全重叠
+	// （同样的"开浏览器→点击→截图→抓取"），两个都装只是白占一份 tool schema，
+	// 所以直接删掉而不是换实现。
 	{
 		ID:          "playwright",
 		Name:        "Playwright",
@@ -750,18 +802,6 @@ var catalog = []Connector{
 		DefaultName: "playwright",
 		DocsURL:     "https://github.com/microsoft/playwright-mcp",
 		Tags:        []string{"browser", "screenshot", "testing"},
-	},
-	{
-		ID:          "puppeteer",
-		Name:        "Puppeteer",
-		Description: "Headless Chrome automation and page scraping.",
-		Category:    "automation",
-		Transport:   "stdio",
-		Command:     "npx",
-		Args:        []string{"-y", "@modelcontextprotocol/server-puppeteer"},
-		DefaultName: "puppeteer",
-		DocsURL:     "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
-		Tags:        []string{"browser", "scraping"},
 	},
 
 	// --- Home & Devices ---

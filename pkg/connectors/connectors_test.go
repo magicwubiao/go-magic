@@ -204,7 +204,7 @@ func TestLocalAppEntriesLiveInExamples(t *testing.T) {
 // "连不上"。头名与凭据名也常常不同（MasterGo 的 x-mg-useraccesstoken），
 // 空着会被退化成同名头。
 func TestRemoteTokenEntriesDeclareHeader(t *testing.T) {
-	for _, id := range []string{"mastergo", "modao"} {
+	for _, id := range []string{"mastergo", "modao", "github"} {
 		c, ok := Get(id)
 		if !ok {
 			t.Fatalf("missing entry %q", id)
@@ -226,6 +226,110 @@ func TestRemoteTokenEntriesDeclareHeader(t *testing.T) {
 				t.Errorf("%s: %s should be a required secret", id, req.Key)
 			}
 		}
+	}
+}
+
+// GitHub 条目必须指向官方 server——挡住"顺手改回 npm 老包"的冲动。
+//
+// @modelcontextprotocol/server-github 随 Anthropic 参考服务器一起归档，npm 包
+// 不再维护；GitHub 自己维护的是 github/github-mcp-server，只能 Docker 本地跑
+// 或连远程 /mcp 端点。内置条目用远程端点（零安装、跨平台），凭据沿用
+// GITHUB_PERSONAL_ACCESS_TOKEN 保证老用户重装不用重填。
+func TestGitHubEntryUsesOfficialServer(t *testing.T) {
+	gh, ok := Get("github")
+	if !ok {
+		t.Fatal("github entry missing")
+	}
+	if gh.Transport != "http" || !strings.HasPrefix(gh.URL, "https://api.githubcopilot.com/") {
+		t.Fatalf("github = %s/%s, want the official hosted endpoint", gh.Transport, gh.URL)
+	}
+	joined := gh.Command + " " + strings.Join(gh.Args, " ")
+	if strings.Contains(joined, "server-github") {
+		t.Errorf("github entry still points at the archived reference package: %q", joined)
+	}
+	if len(gh.Requires) != 1 {
+		t.Fatalf("github requires %d credentials, want 1", len(gh.Requires))
+	}
+	req := gh.Requires[0]
+	if req.Key != "GITHUB_PERSONAL_ACCESS_TOKEN" || req.Where != WhereHeader {
+		t.Errorf("github credential = %s/%s, want GITHUB_PERSONAL_ACCESS_TOKEN over header", req.Key, req.Where)
+	}
+	if !strings.Contains(req.Value, "{{"+req.Key+"}}") {
+		t.Errorf("github header value = %q, want a {{%s}} placeholder", req.Value, req.Key)
+	}
+}
+
+// 归档包黑名单：Anthropic 在 2025 年归档了大部分参考服务器，这些 npm 包的
+// 元数据上都写着 "no longer supported"，装上去就是一份没人修的工具集
+// （postgres 那个还有未修复的 SQL 注入）。换实现时把替代品写进条目，
+// 别把老包加回来。
+var archivedReferencePackages = []string{
+	"@modelcontextprotocol/server-github",
+	"@modelcontextprotocol/server-gitlab",
+	"@modelcontextprotocol/server-slack",
+	"@modelcontextprotocol/server-brave-search",
+	"@modelcontextprotocol/server-postgres",
+	"@modelcontextprotocol/server-puppeteer",
+}
+
+func TestNoArchivedReferencePackages(t *testing.T) {
+	for _, c := range All() {
+		joined := c.Command + " " + strings.Join(c.Args, " ")
+		for _, pkg := range archivedReferencePackages {
+			if strings.Contains(joined, pkg) {
+				t.Errorf("%s still launches archived package %s", c.ID, pkg)
+			}
+		}
+	}
+}
+
+// 换掉的那几个条目各自的形态契约（都是按官方文档/实测确认过的）：
+//   - gitlab：官方远程端点 + 原生 OAuth（DCR 实测 201，公共客户端 + PKCE）；
+//   - slack：官方端点不开放 DCR，改社区 slack-mcp-server（token 直填）；
+//   - brave-search：官方 npm 包，2.x 默认 stdio；
+//   - postgres：Postgres MCP Pro，连接串走 DATABASE_URI，默认 restricted；
+//   - puppeteer：与 playwright 能力重叠，已删。
+func TestMigratedEntriesShape(t *testing.T) {
+	gitlab, ok := Get("gitlab")
+	if !ok {
+		t.Fatal("gitlab entry missing")
+	}
+	if gitlab.Transport != "http" || gitlab.URL != "https://gitlab.com/api/v4/mcp" || gitlab.OAuth == nil {
+		t.Errorf("gitlab = %s/%s oauth=%v, want the official endpoint with OAuth", gitlab.Transport, gitlab.URL, gitlab.OAuth)
+	}
+
+	slack, ok := Get("slack")
+	if !ok {
+		t.Fatal("slack entry missing")
+	}
+	if !strings.Contains(strings.Join(slack.Args, " "), "slack-mcp-server") {
+		t.Errorf("slack args = %v, want the community slack-mcp-server", slack.Args)
+	}
+	if len(slack.Requires) == 0 || slack.Requires[0].Key != "SLACK_MCP_XOXP_TOKEN" || slack.Requires[0].Where != WhereEnv {
+		t.Errorf("slack credential = %+v, want SLACK_MCP_XOXP_TOKEN in env", slack.Requires)
+	}
+
+	brave, ok := Get("brave-search")
+	if !ok {
+		t.Fatal("brave-search entry missing")
+	}
+	if brave.Command != "npx" || !strings.Contains(strings.Join(brave.Args, " "), "@brave/brave-search-mcp-server") {
+		t.Errorf("brave-search = %s %v, want the official package", brave.Command, brave.Args)
+	}
+
+	pg, ok := Get("postgres")
+	if !ok {
+		t.Fatal("postgres entry missing")
+	}
+	if pg.Command != "uvx" || !strings.Contains(strings.Join(pg.Args, " "), "--access-mode=restricted") {
+		t.Errorf("postgres = %s %v, want uvx postgres-mcp in restricted mode", pg.Command, pg.Args)
+	}
+	if len(pg.Requires) == 0 || pg.Requires[0].Key != "DATABASE_URI" || !pg.Requires[0].Secret {
+		t.Errorf("postgres credential = %+v, want a secret DATABASE_URI", pg.Requires)
+	}
+
+	if _, ok := Get("puppeteer"); ok {
+		t.Error("puppeteer must stay out: it duplicates playwright and the package is archived")
 	}
 }
 

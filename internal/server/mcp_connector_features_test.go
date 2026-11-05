@@ -179,7 +179,13 @@ func TestMCPCatalogEndpoint(t *testing.T) {
 	if github == nil {
 		t.Fatalf("search result = %+v, want the github connector", body.Connectors)
 	}
-	if len(github.Requires) == 0 || github.Requires[0].Where != "env" {
-		t.Errorf("github requirements = %+v", github.Requires)
+	// github 是远程条目（官方托管端点），令牌只能走 Authorization 头：
+	// 错写成 env 会变成子进程环境变量，对 http 传输毫无意义，连接时必然 401，
+	// 而用户看到的只是"连不上"。
+	if len(github.Requires) == 0 || github.Requires[0].Key != "GITHUB_PERSONAL_ACCESS_TOKEN" {
+		t.Fatalf("github requirements = %+v", github.Requires)
+	}
+	if github.Requires[0].Where != "header" {
+		t.Errorf("github requirement where = %q, want header", github.Requires[0].Where)
 	}
 }

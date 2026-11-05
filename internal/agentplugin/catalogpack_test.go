@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -52,6 +51,21 @@ func TestCatalogPacksCoverAllEntries(t *testing.T) {
 	}
 	if n := len(CatalogPacks(CatalogKindCLI)); n != len(clicatalog.All()) {
 		t.Errorf("cli packs = %d, want %d", n, len(clicatalog.All()))
+	}
+}
+
+// 目录里每个 MCP 条目都必须能真的装成一个能加载的插件。
+//
+// 光校验字段容易漏：远程条目没写 url、stdio 条目没写 command、把 oauth 挂到
+// stdio 上——这些只有物化 + Load 一遍才会现形（InstallCatalogPack 内部会走
+// verifyLoadedPack）。换条目实现时这条最先红，比用户点"安装"才发现强。
+func TestInstallEveryMCPCatalogPack(t *testing.T) {
+	isolatedHome(t)
+
+	for _, c := range connectors.All() {
+		if _, _, _, err := InstallCatalogPack(CatalogKindMCP, c.ID, nil); err != nil {
+			t.Errorf("install %s: %v", c.ID, err)
+		}
 	}
 }
 
@@ -136,6 +150,39 @@ func TestInstallCatalogPackMCP(t *testing.T) {
 	}
 }
 
+// OAuth 条目物化后不能再带 env 凭据：两套凭据并存会把"点一下授权"退化成
+// 手抄 token（buildMCPSpec 对 OAuth 条目提前返回，就是为了这个）。
+func TestInstallCatalogPackOAuthEntry(t *testing.T) {
+	isolatedHome(t)
+
+	dir, _, required, err := InstallCatalogPack(CatalogKindMCP, "gitlab", nil)
+	if err != nil {
+		t.Fatalf("InstallCatalogPack: %v", err)
+	}
+	if len(required) != 0 {
+		t.Errorf("required = %v, want none for an OAuth entry", required)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, mcpConfigName))
+	if err != nil {
+		t.Fatalf("read mcp.json: %v", err)
+	}
+	var doc MCPConfig
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse mcp.json: %v", err)
+	}
+	spec := doc.MCPServers["gitlab"]
+	if spec.Type != TransportStreamableHTTP || spec.URL != "https://gitlab.com/api/v4/mcp" {
+		t.Errorf("spec = %+v, want streamable http at the official endpoint", spec)
+	}
+	if spec.OAuth == nil || len(spec.OAuth.Scopes) == 0 {
+		t.Errorf("oauth block missing: %+v", spec.OAuth)
+	}
+	if len(spec.Env) != 0 || len(spec.Headers) != 0 {
+		t.Errorf("OAuth entry should carry no static credentials: env=%v headers=%v", spec.Env, spec.Headers)
+	}
+}
+
 // 安装 CLI 条目：cli.json 单连接器（目录现役条目均无凭据占位，
 // Requires → env 占位的映射由 TestBuildCLIConnectorEnvPlaceholders 单独覆盖）。
 func TestInstallCatalogPackCLI(t *testing.T) {
@@ -168,45 +215,41 @@ func TestInstallCatalogPackCLI(t *testing.T) {
 	}
 }
 
-// gh 条目物化后要带上全部只读工具：目录里点"添加"就该能查 PR/Issue，
-// 且 read_only 必须原样穿过 cli.json（丢了就会变成每次调用都要审批）。
-func TestInstallCatalogPackGHTools(t *testing.T) {
-	isolatedHome(t)
+// CLI 条目物化后必须原样带上声明式工具与 read_only：目录里点“添加”就该能
+// 免审批查数据，read_only 丢了会变成每次调用都要审批。
+func TestInstallEveryCLICatalogPackKeepsTools(t *testing.T) {
+	for _, e := range clicatalog.All() {
+		isolatedHome(t)
 
-	dir, name, required, err := InstallCatalogPack(CatalogKindCLI, "gh", nil)
-	if err != nil {
-		t.Fatalf("InstallCatalogPack: %v", err)
-	}
-	if name != "cli-gh" {
-		t.Fatalf("name = %q, want cli-gh", name)
-	}
-	if len(required) != 1 || required[0] != "GH_TOKEN" {
-		t.Errorf("gh exposes GH_TOKEN as an optional requirement, got required=%v", required)
-	}
-
-	p := Load(dir, filepath.Join(dir, "data"))
-	if err := verifyLoadedPack(p); err != nil {
-		t.Fatalf("loaded pack invalid: %v", err)
-	}
-	if len(p.CLIConnectors) != 1 {
-		t.Fatalf("cli connectors = %d, want 1", len(p.CLIConnectors))
-	}
-	conn := p.CLIConnectors[0]
-	if conn.Connector.Command != "gh" {
-		t.Errorf("command = %q, want gh", conn.Connector.Command)
-	}
-
-	wantTools := []string{"issue_list", "pr_list", "repo_view", "run_list"}
-	var gotTools []string
-	for _, spec := range conn.Connector.Tools {
-		gotTools = append(gotTools, spec.Name)
-		if !spec.ReadOnly {
-			t.Errorf("tool %q lost read_only across materialization", spec.Name)
+		dir, name, _, err := InstallCatalogPack(CatalogKindCLI, e.ID, nil)
+		if err != nil {
+			t.Fatalf("%s: InstallCatalogPack: %v", e.ID, err)
 		}
-	}
-	sort.Strings(gotTools)
-	if strings.Join(gotTools, ",") != strings.Join(wantTools, ",") {
-		t.Errorf("tools = %v, want %v", gotTools, wantTools)
+		if want := "cli-" + e.ID; name != want {
+			t.Errorf("%s: pack name = %q, want %q", e.ID, name, want)
+		}
+
+		p := Load(dir, filepath.Join(dir, "data"))
+		if err := verifyLoadedPack(p); err != nil {
+			t.Fatalf("%s: loaded pack invalid: %v", e.ID, err)
+		}
+		if len(p.CLIConnectors) != 1 {
+			t.Fatalf("%s: cli connectors = %d, want 1", e.ID, len(p.CLIConnectors))
+		}
+		conn := p.CLIConnectors[0]
+		if conn.Connector.Command != e.Connector.Command {
+			t.Errorf("%s: command = %q, want %q", e.ID, conn.Connector.Command, e.Connector.Command)
+		}
+		if len(conn.Connector.Tools) != len(e.Connector.Tools) {
+			t.Fatalf("%s: tools = %d, want %d", e.ID, len(conn.Connector.Tools), len(e.Connector.Tools))
+		}
+		for i, spec := range conn.Connector.Tools {
+			want := e.Connector.Tools[i]
+			if spec.Name != want.Name || spec.ReadOnly != want.ReadOnly {
+				t.Errorf("%s: tool %q (read_only %v), want %q (read_only %v)",
+					e.ID, spec.Name, spec.ReadOnly, want.Name, want.ReadOnly)
+			}
+		}
 	}
 }
 
@@ -235,12 +278,12 @@ func TestBuildCLIConnectorEnvPlaceholders(t *testing.T) {
 	}
 }
 
-// 参数覆盖：postgres/sqlite 这类条目的路径/连接串必须能在安装时替换。
+// 参数覆盖：sqlite 这类条目的路径必须能在安装时替换。
 func TestInstallCatalogPackArgsOverride(t *testing.T) {
 	isolatedHome(t)
 
-	args := []string{"-y", "@modelcontextprotocol/server-postgres", "postgresql://db.example.com/prod"}
-	dir, _, _, err := InstallCatalogPack(CatalogKindMCP, "postgres", args)
+	args := []string{"--db-path", "/tmp/override.db"}
+	dir, _, _, err := InstallCatalogPack(CatalogKindMCP, "sqlite", args)
 	if err != nil {
 		t.Fatalf("InstallCatalogPack: %v", err)
 	}
@@ -252,8 +295,8 @@ func TestInstallCatalogPackArgsOverride(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse mcp.json: %v", err)
 	}
-	spec := doc.MCPServers["postgres"]
-	if len(spec.Args) != 3 || spec.Args[2] != "postgresql://db.example.com/prod" {
+	spec := doc.MCPServers["sqlite"]
+	if len(spec.Args) != 2 || spec.Args[1] != "/tmp/override.db" {
 		t.Errorf("args override not applied: %v", spec.Args)
 	}
 }
