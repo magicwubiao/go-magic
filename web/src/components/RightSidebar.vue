@@ -1020,14 +1020,6 @@ watch(() => chatStore.activeSessionId, () => {
   try { loadTodos() } catch (e) {}
 })
 
-// 预览面板里保存成功后刷新文件列表：名称/大小/修改时间都变了，
-// 不刷新的话树里还显示旧大小（以前是弹窗 @saved 直接回调 loadFiles）。
-watch(() => previewStore.savedTick, () => {
-  if (activeTab.value === 'files') {
-    void loadFiles(dirCurrentPath.value || undefined)
-  }
-})
-
 // Goals functions
 async function selectGoal(goal: Goal) {
   goalsStore.setCurrentGoal(goal)
@@ -1264,14 +1256,13 @@ async function handleFileClick(entry: sessionsApi.FSEntry) {
 }
 
 // 打开预览：只负责把目标文件交给全局预览状态；类型判定、内容加载、
-// 高亮、编辑保存、全屏都在 FilePreviewPanel 内部完成。
+// 高亮、全屏、刷新都在 FilePreviewPanel 内部完成（面板是只读的）。
 function openFilePreview(entry: sessionsApi.FSEntry) {
   previewStore.open({
     name: entry.name,
     size: entry.size,
     fsPath: entry.path,
     sessionId: chatStore.activeSessionId || undefined,
-    editable: true,
   })
 }
 

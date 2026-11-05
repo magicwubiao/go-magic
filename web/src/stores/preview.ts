@@ -15,7 +15,6 @@ export interface PreviewTarget {
   url?: string
   fsPath?: string
   sessionId?: string
-  editable?: boolean
 }
 
 /**
@@ -31,13 +30,6 @@ export interface PreviewTarget {
 export const usePreviewStore = defineStore('preview', () => {
   const visible = ref(false)
   const target = ref<PreviewTarget | null>(null)
-  // 保存计数：面板里编辑保存成功后自增，右栏文件树靠它决定要不要重新拉列表
-  // （文件大小/修改时间变了，不刷新会显示旧值）
-  const savedTick = ref(0)
-
-  function markSaved() {
-    savedTick.value++
-  }
 
   function open(next: PreviewTarget) {
     // 同一个文件再次点击不重新加载：面板内部按 fsPath/url 变化才触发 load，
@@ -63,5 +55,5 @@ export const usePreviewStore = defineStore('preview', () => {
     open(next)
   }
 
-  return { visible, target, savedTick, markSaved, open, close, toggle }
+  return { visible, target, open, close, toggle }
 })

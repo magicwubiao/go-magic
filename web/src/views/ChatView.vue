@@ -1134,10 +1134,8 @@
         :url="previewStore.target.url || ''"
         :fs-path="previewStore.target.fsPath || ''"
         :session-id="previewStore.target.sessionId"
-        :editable="previewStore.target.editable !== false"
         @dragstart="startPreviewDrag"
         @close="previewStore.close()"
-        @saved="previewStore.markSaved()"
       >
         <template #actions>
           <!-- 小屏下浮窗本来就是整屏，没有"收到角落"这回事，直接不给入口，
@@ -3604,7 +3602,6 @@ function openAttachmentPreview(file: Partial<sessionsApi.UploadedFile>) {
     typeName: file.name || file.filename || '',
     size: file.size,
     url: file.url,
-    editable: false,
   })
 }
 

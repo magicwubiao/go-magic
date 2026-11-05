@@ -977,13 +977,12 @@
       </template>
     </n-modal>
 
-    <!-- 消息附件预览：公共组件（url 票据来源，禁用编辑） -->
+    <!-- 消息附件预览：公共组件（url 票据来源，只读） -->
     <FilePreviewDialog
       v-model:show="showAttachmentPreview"
       :name="previewAttachment?.name || attachmentLabelFromUrl(previewAttachment?.url || '')"
       :type-name="previewAttachment?.name || ''"
       :url="previewAttachment?.url || ''"
-      :editable="false"
     />
   </div>
 </template>

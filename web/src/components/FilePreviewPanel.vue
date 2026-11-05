@@ -58,33 +58,8 @@
         <n-tag v-if="typeof size === 'number'" size="small" type="info">{{ formatSize(size) }}</n-tag>
 
         <div class="preview-actions">
-          <!-- 编辑/保存 -->
-          <template v-if="canEdit">
-            <n-button
-              v-if="isEditing"
-              size="small"
-              type="primary"
-              :loading="saving"
-              :disabled="!unsavedChanges"
-              :title="t('common.save')"
-              @click="save"
-            >
-              <template #icon>
-                <n-icon :component="SaveOutline" />
-              </template>
-            </n-button>
-            <n-button
-              size="small"
-              :type="isEditing ? 'warning' : 'default'"
-              :title="isEditing ? t('common.cancel') : t('common.edit')"
-              @click="toggleEdit"
-            >
-              <template #icon>
-                <n-icon :component="isEditing ? CloseOutline : PencilOutline" />
-              </template>
-            </n-button>
-            <span v-if="isEditing && unsavedChanges" class="toolbar-divider" />
-          </template>
+          <!-- 预览是只读的：这里刻意不提供任何写入口。
+               改文件请用编辑器 / agent，预览一旦能写回，误触就会把文件内容冲掉。 -->
 
           <!-- 视图控制：按当前类型出现，不堆一排永远禁用的按钮 -->
           <template v-if="kind === 'image' && !imageError">
@@ -188,19 +163,11 @@
           </n-button>
           <!-- 浮窗/面板额外动作（最小化等）由调用方注入，放在关闭按钮之前 -->
           <slot name="actions" />
-          <!-- 卡片标题栏已隐藏，关闭按钮收进工具栏最右侧；
-               走 handleCloseAttempt 以保留未保存确认 -->
+          <!-- 卡片标题栏已隐藏，关闭按钮收进工具栏最右侧 -->
           <n-button size="small" quaternary :title="t('common.close')" @click="closeFromToolbar">
             <template #icon><n-icon :component="CloseOutline" /></template>
           </n-button>
         </div>
-      </div>
-
-      <div v-if="unsavedChanges" class="unsaved-hint">
-        <n-icon size="14" color="#f0a020" style="margin-right: 6px;">
-          <AlertCircleOutline />
-        </n-icon>
-        <n-text depth="2" style="font-size: 12px;">{{ t('chat.unsavedChanges') }}</n-text>
       </div>
 
       <div class="preview-content-container" :class="{ 'preview-fullscreen': fullscreen }">
@@ -222,15 +189,8 @@
           </n-button>
         </div>
 
-        <textarea
-          v-if="isEditing"
-          v-model="editingContent"
-          class="preview-textarea"
-          spellcheck="false"
-        ></textarea>
-
         <div
-          v-else-if="kind === 'image'"
+          v-if="kind === 'image'"
           class="image-preview-wrapper"
           :class="{ 'image-preview-wrapper--zoomed': imageZoom > 1 }"
         >
@@ -357,11 +317,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useDialog, useMessage } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 import { NButton, NIcon, NSpin, NTag, NText } from 'naive-ui'
 import {
   AddOutline,
-  AlertCircleOutline,
   CloseOutline,
   CodeSlashOutline,
   ContractOutline,
@@ -371,11 +330,9 @@ import {
   ExpandOutline,
   EyeOutline,
   OpenOutline,
-  PencilOutline,
   RefreshOutline,
   ReloadOutline,
   RemoveOutline,
-  SaveOutline,
   TextOutline,
 } from '@vicons/ionicons5'
 import { marked } from 'marked'
@@ -425,7 +382,9 @@ hljs.registerLanguage('ini', ini)
  *  - fsPath (+ sessionId)：工作区/会话文件，走 sessionsApi 读写与托管
  *  - url                 ：直接可用的地址（如上传文件），内部会补 token
  *
- * 自动按扩展名分派：图片 / HTML·PDF / 视频 / 音频 / 二进制占位 / 文本（含高亮与编辑）。
+ * 自动按扩展名分派：图片 / HTML·PDF / 视频 / 音频 / 二进制占位 / 文本（带高亮）。
+ *
+ * 只读：预览不提供写回能力，任何“改文件”的诉求都走编辑器或 agent。
  */
 interface Props {
   /** 是否处于展示状态：变为 true 时加载内容，false 时清空定时器与全屏态 */
@@ -441,8 +400,6 @@ interface Props {
   /** 工作区相对路径（文件树场景） */
   fsPath?: string
   sessionId?: string
-  /** 是否允许编辑（还需同时提供 fsPath 才能真正保存） */
-  editable?: boolean
   /** panel：跟随父容器高度（并排面板）；dialog：沿用弹窗的 85vh 限高 */
   variant?: 'dialog' | 'panel'
 }
@@ -452,20 +409,17 @@ const props = withDefaults(defineProps<Props>(), {
   typeName: '',
   url: '',
   fsPath: '',
-  editable: true,
   variant: 'dialog',
 })
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'saved'): void
   /** 浮窗模式：工具栏空白处按下，调用方据此开始拖动整个窗口 */
   (e: 'dragstart', ev: MouseEvent): void
 }>()
 
 const { t } = useI18n()
 const message = useMessage()
-const dialog = useDialog()
 
 // 行号只渲染到这个行数；再多就没必要看行号了（也避免生成几万行的字符串）
 const MAX_GUTTER_LINES = 20000
@@ -552,14 +506,10 @@ const extLanguageMap: Record<string, string> = {
 const loading = ref(false)
 const error = ref('')
 const content = ref('')
-const originalContent = ref('')
 const kind = ref<Kind>('none')
 // office 分支的完整二进制：Flyfish 渲染器需要整个文件，不能走 2MB 上限的
 // 正文读取接口，用下载票据拉 blob 后交给 OfficeFilePreview。
 const officeFile = ref<File | null>(null)
-const isEditing = ref(false)
-const editingContent = ref('')
-const saving = ref(false)
 const fullscreen = ref(false)
 const webLoading = ref(false)
 const webError = ref('')
@@ -609,21 +559,6 @@ const sourceLoading = ref(false)
 const ext = computed(() => (props.typeName || props.name || '').split('.').pop()?.toLowerCase() || '')
 
 const usesFsPath = computed(() => !!props.fsPath)
-
-// 只有真拿到正文的文本类文件才可写回：二进制与音视频/PDF 根本没有正文，
-// 旧实现下它们照样显示「编辑」，点开是一个空文本域——一旦误保存就把文件清空。
-// HTML 在读出来源之后（htmlSource 分支）同样可编辑，kind 仍是 'web'，
-// 所以这里按「有没有正文」判，而不是只认 kind === 'text'。
-const canEdit = computed(
-  () =>
-    props.editable
-    && usesFsPath.value
-    && (kind.value === 'text' || (kind.value === 'web' && !!content.value)),
-)
-
-const unsavedChanges = computed(
-  () => isEditing.value && editingContent.value !== originalContent.value,
-)
 
 // 三种地址：读取正文 / iframe·媒体托管 / 下载。
 //
@@ -778,12 +713,8 @@ function reset() {
   loading.value = true
   error.value = ''
   content.value = ''
-  originalContent.value = ''
   kind.value = 'none'
   officeFile.value = null
-  isEditing.value = false
-  editingContent.value = ''
-  saving.value = false
   fullscreen.value = false
   webLoading.value = false
   webError.value = ''
@@ -978,7 +909,6 @@ async function load() {
     const text = await readTextBody()
     if (seq !== loadSeq) return
     content.value = text
-    originalContent.value = text
     kind.value = 'text'
   } catch (err: unknown) {
     if (seq !== loadSeq) return
@@ -1063,7 +993,6 @@ async function toggleHtmlSource() {
     try {
       const text = await readTextBody()
       content.value = text
-      originalContent.value = text
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : t('files.previewError'))
       return
@@ -1095,7 +1024,7 @@ function toggleFullscreen() {
 }
 
 // 工具栏兼作浮窗标题栏：在空白处按下才通知父组件拖窗。
-// 排除按钮/输入类元素，否则点"下载""编辑"会连带把窗口拖走。
+// 排除按钮/输入类元素，否则点"下载""刷新"会连带把窗口拖走。
 function onToolbarMouseDown(e: MouseEvent) {
   if (props.variant !== 'panel' || e.button !== 0) return
   const el = e.target as HTMLElement | null
@@ -1103,28 +1032,10 @@ function onToolbarMouseDown(e: MouseEvent) {
   emit('dragstart', e)
 }
 
-// 退出编辑的确认统一走主题内 dialog（原生 confirm 观感突兀且无法适配主题）。
-// 需要同步返回 true/false 的 handleCloseAttempt 先拦截关闭，用户确认后再补发关闭。
-function confirmDiscard(onConfirm: () => void) {
-  dialog.warning({
-    title: t('common.edit'),
-    content: t('chat.discardChanges'),
-    positiveText: t('common.confirm'),
-    negativeText: t('common.cancel'),
-    onPositiveClick: onConfirm,
-  })
-}
-
 // 刷新当前预览。
-// 编辑中且有未保存改动时先确认：刷新会重读磁盘正文，直接把用户的修改冲掉。
+// 预览只读，没有“未保存改动”要保护，直接重读即可。
 async function refresh() {
   if (refreshing.value) return
-  if (unsavedChanges.value) {
-    confirmDiscard(() => {
-      void doRefresh()
-    })
-    return
-  }
   await doRefresh()
 }
 
@@ -1136,10 +1047,6 @@ async function doRefresh() {
     if (isHtmlDoc.value && htmlSource.value) {
       const text = await readTextBody()
       content.value = text
-      originalContent.value = text
-      // 正在编辑但没改动时也要同步编辑区，否则 originalContent 一换，
-      // editingContent 立刻被判定成「未保存」，凭空冒出一条未保存提示。
-      if (isEditing.value) editingContent.value = text
       return
     }
     // 网页/媒体：只重签托管地址，不闪加载态。
@@ -1160,47 +1067,8 @@ async function doRefresh() {
   }
 }
 
-function toggleEdit() {
-  if (isEditing.value) {
-    if (unsavedChanges.value) {
-      confirmDiscard(() => {
-        isEditing.value = false
-        editingContent.value = ''
-      })
-      return
-    }
-    isEditing.value = false
-    editingContent.value = ''
-    return
-  }
-  editingContent.value = content.value
-  originalContent.value = content.value
-  isEditing.value = true
-}
-
-async function save() {
-  if (!props.fsPath) return
-  saving.value = true
-  try {
-    await sessionsApi.writeFSFile(
-      props.fsPath,
-      editingContent.value,
-      props.sessionId,
-    )
-    content.value = editingContent.value
-    originalContent.value = editingContent.value
-    isEditing.value = false
-    message.success(t('common.success'))
-    emit('saved')
-  } catch (e: unknown) {
-    message.error(e instanceof Error ? e.message : t('common.operationFailed'))
-  } finally {
-    saving.value = false
-  }
-}
-
 async function copyContent() {
-  const text = isEditing.value ? editingContent.value : content.value
+  const text = content.value
   try {
     await navigator.clipboard.writeText(text || '')
     message.success(t('chat.contentCopied'))
@@ -1232,36 +1100,17 @@ function download() {
   message.success(t('common.downloadStarted'))
 }
 
-// 有未保存修改时拦截关闭（调用方决定怎么问、问完再调 close 或自行处理）。
-// 返回 true 表示可以立即关闭。
-function attemptClose(): boolean {
-  if (!unsavedChanges.value) return true
-  confirmDiscard(() => {
-    isEditing.value = false
-    editingContent.value = ''
-    emit('close')
-  })
-  return false
-}
-
-// 工具栏上的关闭按钮：无未保存改动时直接关，有改动则走确认拦截
+// 工具栏上的关闭按钮
 function closeFromToolbar() {
-  if (attemptClose()) emit('close')
+  emit('close')
 }
 
-// 捕获阶段拦截：全屏下 ESC 先退出全屏；编辑态下 Ctrl/Cmd+S 保存
+// 捕获阶段拦截：全屏下 ESC 先退出全屏（iframe 里的 ESC 冒不到父页）
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && fullscreen.value) {
     e.preventDefault()
     e.stopPropagation()
     fullscreen.value = false
-    return
-  }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-    // 只在编辑态接管；否则放行浏览器默认行为
-    if (!isEditing.value) return
-    e.preventDefault()
-    if (canEdit.value && unsavedChanges.value && !saving.value) void save()
   }
 }
 
@@ -1295,8 +1144,6 @@ onUnmounted(() => {
     markdownTimer = null
   }
 })
-
-defineExpose({ attemptClose })
 </script>
 
 <style scoped>
@@ -1428,11 +1275,6 @@ defineExpose({ attemptClose })
   border-radius: 8px;
 }
 
-/* 编辑态多一条「未保存」提示条（约 40px），正文同步让出这段高度 */
-.file-preview-panel--dialog .unsaved-hint + .preview-content-container {
-  max-height: calc(85vh - 132px);
-}
-
 /* 全屏预览：撑满视口。采用纵向 flex 布局，顶部固定一条退出条，
    预览主体占满剩余空间（否则 100vh 的 iframe 会把退出条顶出视口）。 */
 .preview-content-container.preview-fullscreen {
@@ -1492,12 +1334,6 @@ defineExpose({ attemptClose })
 }
 .preview-content-container.preview-fullscreen .preview-image {
   max-height: 100%;
-}
-.preview-content-container.preview-fullscreen .preview-textarea {
-  height: 100%;
-  min-height: 0;
-  border-radius: 0;
-  resize: none;
 }
 .preview-content-container.preview-fullscreen .binary-preview-wrapper,
 .preview-content-container.preview-fullscreen .preview-state {
@@ -1688,24 +1524,6 @@ defineExpose({ attemptClose })
   overflow-wrap: anywhere;
 }
 
-.preview-textarea {
-  width: 100%;
-  min-height: 400px;
-  font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 16px;
-  border: none;
-  border-radius: 8px;
-  resize: vertical;
-  box-sizing: border-box;
-  outline: none;
-}
-
-.preview-textarea:focus {
-  box-shadow: inset 0 0 0 2px #2080f0;
-}
-
 /* 预览高亮：GitHub Light 配色（全局已加载 github-dark.css，这里是浅色底，
    必须用 :deep 覆盖 token 颜色，避免深色主题文字在浅色背景上不可读） */
 .preview-content :deep(.hljs-keyword),
@@ -1774,16 +1592,6 @@ defineExpose({ attemptClose })
   background: #ffeef0;
 }
 
-.unsaved-hint {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-  background: #fffbe6;
-  border: 1px solid #ffe58f;
-  border-radius: 6px;
-}
-
 /* 浮窗/面板：媒体与网页预览按**容器**高度铺开，而不是按视口的 70vh。
    关键在于容器自身必须定死高度（height: 100% 或绝对定位）：
    父级 .preview-content-container 在 panel 模式下是 flex 撑开的定高块，
@@ -1846,11 +1654,6 @@ defineExpose({ attemptClose })
     max-height: 66vh;
   }
 
-  /* 小屏同样要给「未保存」提示条让位，否则提示条出现时又会顶出卡片滚动条 */
-  .file-preview-panel--dialog .unsaved-hint + .preview-content-container {
-    max-height: calc(66vh - 40px);
-  }
-
   .preview-content {
     padding: 10px;
     font-size: 12px;
@@ -1863,12 +1666,6 @@ defineExpose({ attemptClose })
 
   .preview-body .preview-content {
     padding-left: 8px;
-  }
-
-  .preview-textarea {
-    min-height: 50vh;
-    padding: 10px;
-    font-size: 12px;
   }
 
   .preview-image {

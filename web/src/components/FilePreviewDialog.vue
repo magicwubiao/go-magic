@@ -6,12 +6,10 @@
     :style="modalStyle"
     :bordered="false"
     :header-style="{ display: 'none' }"
-    @close="handleCloseAttempt"
   >
     <!-- 内容全部在 FilePreviewPanel 里：它同时被 ChatView 用作并排预览面板
          （预览时不挡对话），这里只负责提供弹窗外壳，保持四处调用点零改动。 -->
     <FilePreviewPanel
-      ref="panelRef"
       :active="visible"
       variant="dialog"
       :name="name"
@@ -20,9 +18,7 @@
       :url="url"
       :fs-path="fsPath"
       :session-id="sessionId"
-      :editable="editable"
       @close="visible = false"
-      @saved="emit('saved')"
     />
   </n-modal>
 </template>
@@ -35,10 +31,11 @@ import FilePreviewPanel from '@/components/FilePreviewPanel.vue'
 /**
  * 文件预览弹窗（弹窗外壳）。
  *
- * 内容体与全部预览逻辑在 FilePreviewPanel 里，本组件只做三件事：
+ * 内容体与全部预览逻辑在 FilePreviewPanel 里，本组件只做两件事：
  * 1. 用 n-modal 提供遮罩/居中的独立页预览外观（FilesView / BotsView 等页面用）
  * 2. 把 v-model:show 映射成面板的 active
- * 3. 关闭前让面板确认未保存改动
+ *
+ * 预览是只读的，没有「未保存改动」要拦截，关闭可以直接落到 v-model 上。
  *
  * 聊天页要的是「预览不挡对话」，那边直接用 FilePreviewPanel 并排挂载。
  */
@@ -55,8 +52,6 @@ interface Props {
   /** 工作区相对路径（文件树场景） */
   fsPath?: string
   sessionId?: string
-  /** 是否允许编辑（还需同时提供 fsPath 才能真正保存） */
-  editable?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -64,21 +59,16 @@ const props = withDefaults(defineProps<Props>(), {
   typeName: '',
   url: '',
   fsPath: '',
-  editable: true,
 })
 
 const emit = defineEmits<{
   (e: 'update:show', value: boolean): void
-  (e: 'saved'): void
 }>()
 
 const visible = computed({
   get: () => props.show,
   set: (value: boolean) => emit('update:show', value),
 })
-
-// defineExpose 暴露出来的方法不会进 InstanceType 的推导结果，这里按契约声明
-const panelRef = ref<{ attemptClose: () => boolean } | null>(null)
 
 const isMobile = ref(typeof window !== 'undefined' && window.innerWidth <= 768)
 const updateIsMobile = () => {
@@ -88,12 +78,6 @@ const updateIsMobile = () => {
 const modalStyle = computed(() =>
   isMobile.value ? { width: '96vw', maxWidth: '96vw' } : { width: 'min(960px, 92vw)' },
 )
-
-// 有未保存改动时拦截关闭：naive-ui 的 on-close 是 thenable 守卫，
-// 返回 false 即中止本次关闭，用户确认后由面板自己发 close 事件。
-function handleCloseAttempt(): boolean {
-  return panelRef.value?.attemptClose() ?? true
-}
 
 onMounted(() => {
   window.addEventListener('resize', updateIsMobile)
