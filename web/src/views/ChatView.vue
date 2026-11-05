@@ -870,7 +870,7 @@
                 :options="modelOptions"
                 size="small"
                 :bordered="false"
-                style="min-width: 160px; max-width: 260px; margin-right: 8px"
+                class="toolbar-model-select"
                 :placeholder="t('chat.selectModel')"
                 :consistent-menu-width="false"
                 :render-label="renderModelLabel"
@@ -6118,8 +6118,11 @@ onActivated(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  flex: 1 1 auto;
+  /* 不能再是 min-width: 0——那样窄窗口下这一格会被压到十几像素，
+     把「更多操作（+，内含技能/插件入口）」按钮从中间裁断。
+     30px 正好是这个按钮的宽度，保证它永远完整可见。 */
+  min-width: 30px;
+  flex: 0 1 auto;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -6128,8 +6131,21 @@ onActivated(() => {
   display: none;
 }
 
+/* 模型选择器是这一行里唯一的弹性项：宽屏 220px，窄屏按需压缩（内部名称省略号），
+   把宽度让给左侧的「更多操作」按钮和右侧发送键，而不是被挤出输入框。 */
 .toolbar-model-select {
+  flex: 0 1 auto;
   width: 220px;
+  min-width: 0;
+  max-width: 260px;
+  margin-right: 8px;
+}
+
+.toolbar-model-select .n-base-selection-label,
+.toolbar-model-select .n-base-selection-input {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbar-btn {
@@ -6137,7 +6153,17 @@ onActivated(() => {
 }
 
 /* 工具下拉里隐藏的上传入口：隐藏 n-upload 默认触发按钮，
-   仅保留内部 file input（供 openFileDialog 触发文件选择）。 */
+   仅保留内部 file input（供 openFileDialog 触发文件选择）。
+   外层必须脱离布局：否则这个 250px 宽的隐藏块会把 .toolbar-scroll
+   撑到 286px，反过来抢走模型选择器的宽度。 */
+.toolbar-upload-hidden {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .toolbar-upload-hidden .n-upload-trigger,
 .toolbar-upload-hidden .n-upload-trigger-button {
   display: none;
@@ -6547,6 +6573,10 @@ onActivated(() => {
 .toolbar-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  /* 允许压缩：空间不够时先压模型选择器，别把左/右两端顶出输入框 */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .send-circle-btn {
