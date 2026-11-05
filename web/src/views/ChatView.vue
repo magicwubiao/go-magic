@@ -7014,7 +7014,10 @@ onActivated(() => {
 /* 底部工具栏中的审批策略选择器：紧凑显示，避免文案过长，样式与工具栏一致且无外边框 */
 .workdir-bar-approval {
   flex-shrink: 0;
-  width: 96px;
+  /* 96px 时"自动审批"四个字 + 盾牌图标 + 右侧箭头刚好差几个像素，
+     触发框里被省略成"自动…"；给到 112px 让短标签完整显示。
+     右侧目录路径是 flex:1 + min-width:0，会自己让位，不会被这个宽度顶出去。 */
+  width: 112px;
   margin-left: 8px;
 }
 .workdir-bar-approval .n-base-selection {
@@ -7263,6 +7266,95 @@ onActivated(() => {
   display: none;
 }
 
+/* ===== 窄窗口（桌面壳最小 800px）=====
+   三栏本轮都是固定宽：会话栏 240 + 对话区 min-width 360 + 右栏收起 48，再加上
+   外层导航 220，总和 868 > 800 —— 窗口缩到最小尺寸时整页横向溢出，
+   表现就是"右侧被切掉一块、底部状态栏被挤出可视区"（用户反馈的遮挡问题）。
+   这里按窗口宽度逐级收窄固定列，并放开对话区的压缩下限；外层导航的收窄
+   在 App.vue（siderWidth: 220 → 180），两处断点保持一致。 */
+@media (max-width: 1100px) {
+  .session-sidebar {
+    width: 200px;
+  }
+
+  /* 对话区在窄窗口允许继续压缩：360px 是宽屏下的可读性下限，
+     窄窗口里它会把三栏总和顶出视口，宁可让对话区窄一点也不能溢出。 */
+  .chat-main {
+    min-width: 320px;
+  }
+
+  .messages {
+    padding: 16px 16px;
+  }
+
+  .input-area {
+    padding: 10px 16px 12px;
+  }
+}
+
+@media (max-width: 900px) {
+  .session-sidebar {
+    width: 180px;
+  }
+
+  .chat-main {
+    min-width: 280px;
+  }
+
+  .messages {
+    padding: 14px 12px;
+  }
+
+  .input-area {
+    padding: 8px 12px 10px;
+  }
+
+  /* 底部状态栏在 180px 会话栏旁边只剩很窄的一条，内边距与间距一起收 */
+  .workdir-bar {
+    padding: 0 10px;
+  }
+
+  .workdir-bar-inner {
+    gap: 6px;
+  }
+
+  /* 右侧边栏拉手：窄窗口下右栏变成抽屉浮层（见 RightSidebar 的 OVERLAY_BREAKPOINT），
+     必须给出这个入口，否则右栏在窄窗口里没有打开的方式。
+     样式与移动端一致：紧靠屏幕右边缘、一半嵌在边缘外，几乎不遮挡对话内容。 */
+  .right-sidebar-fab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: 0;
+    top: 50%;
+    transform: translate(50%, -50%);
+    width: 34px;
+    height: 42px;
+    z-index: 1000;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-right: none;
+    border-radius: 10px;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.12);
+    color: #666;
+    cursor: pointer;
+    transition: right 0.3s ease;
+  }
+
+  .right-sidebar-fab:hover,
+  .right-sidebar-fab:active,
+  .right-sidebar-fab:focus {
+    background: #f7f7f7;
+    color: #333;
+  }
+
+  /* 抽屉展开时，拉手跟随到面板左边缘（面板宽 280px），保持半嵌入姿态 */
+  .right-sidebar-fab.open {
+    right: 280px;
+  }
+}
+
 /* Responsive: Mobile devices */
 @media (max-width: 768px) {
   /* 目录会话面板：移动端把 absolute 覆盖成 fixed，钉到视口不占文档流。
@@ -7424,40 +7516,8 @@ onActivated(() => {
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
 
-  /* 右侧边栏拉手：紧靠屏幕右边缘，一半嵌入边缘、一半露出（参考左侧会话手柄），
-     几乎不遮挡聊天内容。竖条、左侧圆角，右侧与屏幕边缘齐平。 */
-  .right-sidebar-fab {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    right: 0;
-    top: 50%;
-    transform: translate(50%, -50%);
-    width: 34px;
-    height: 42px;
-    z-index: 1000;
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-right: none;
-    border-radius: 10px;
-    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.12);
-    color: #666;
-    cursor: pointer;
-    transition: right 0.3s ease;
-  }
-
-  .right-sidebar-fab:hover,
-  .right-sidebar-fab:active,
-  .right-sidebar-fab:focus {
-    background: #f7f7f7;
-    color: #333;
-  }
-
-  /* 右侧面板展开时，拉手跟随到面板左边缘（面板宽 280px），保持半嵌入姿态 */
-  .right-sidebar-fab.open {
-    right: 280px;
-  }
+  /* 右侧边栏拉手：断点已上移到 900px（见上方的窄窗口区块），
+     移动端沿用同一份样式，这里不再重复定义。 */
 
   /* 移动端底部工具栏：压缩审批策略选择器，避免挤压工作目录/分身名 */
   .workdir-bar {

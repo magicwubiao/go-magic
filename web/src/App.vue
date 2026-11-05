@@ -20,7 +20,7 @@
             bordered
             collapse-mode="width"
             :collapsed-width="64"
-            :width="220"
+            :width="siderWidth"
             show-trigger
             v-model:collapsed="siderCollapsed"
           >
@@ -140,20 +140,32 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const showLogoutConfirm = ref(false)
-const isMobile = ref(window.innerWidth <= 768)
+// 断点三档：mobile(<768) 抽屉式导航 / compact(<1024) 窄窗口 / desktop
+// compact 这一档存在的理由：桌面壳的最小窗口宽是 800px（src-tauri 的
+// MIN_WINDOW_WIDTH），而聊天页三栏的固定宽度之和为
+// 导航 220 + 会话 240 + 对话最小 360 + 右栏收起 48 = 868，
+// 超过 800 就会整页横向溢出 —— 右栏被推到视口外、底部状态栏被挤出可视区。
+// 因此在 1024 以下把导航收窄到 180，聊天页再把自己的两列一起收窄（见 ChatView
+// 的 @media），三栏总和才能落回窗口内。
+const MOBILE_BREAKPOINT = 768
+const COMPACT_BREAKPOINT = 1024
+const isMobile = ref(window.innerWidth <= MOBILE_BREAKPOINT)
+const isCompact = ref(!isMobile.value && window.innerWidth <= COMPACT_BREAKPOINT)
 const siderCollapsed = ref(isMobile.value)
+const siderWidth = computed(() => (isCompact.value ? 180 : 220))
 
 function handleAppResize() {
-  const nowMobile = window.innerWidth <= 768
-  // 从桌面端缩放到移动端时，将导航栏默认折叠（移出屏幕外）；
-  // 从移动端切回桌面端则展开。仅在小屏/大屏切换边界处调整，
-  // 避免打断用户在移动端手动展开/折叠的意图。
+  const nowMobile = window.innerWidth <= MOBILE_BREAKPOINT
+  const nowCompact = !nowMobile && window.innerWidth <= COMPACT_BREAKPOINT
+  // 只在跨档位时调整折叠态，避免打断用户在同一档内的手动展开/折叠。
+  // 从桌面端缩到移动端时把导航收进抽屉；回到桌面端则展开。
   if (nowMobile && !isMobile.value) {
     siderCollapsed.value = true
   } else if (!nowMobile && isMobile.value) {
     siderCollapsed.value = false
   }
   isMobile.value = nowMobile
+  isCompact.value = nowCompact
 }
 
 onMounted(() => {

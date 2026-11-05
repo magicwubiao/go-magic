@@ -1,10 +1,10 @@
 <template>
   <!-- Mobile backdrop -->
   <div v-if="mobileVisible" class="right-sidebar-backdrop" @click="$emit('update:mobileVisible', false)"></div>
-  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isMobile && !mobileVisible }" :style="!isCollapsed && !isMobile ? { width: effectiveSidebarWidth + 'px' } : undefined">
+  <div class="right-sidebar" :class="{ collapsed: isCollapsed, 'mobile-visible': mobileVisible, 'mobile-hidden': isOverlay && !mobileVisible }" :style="!isCollapsed && !isOverlay ? { width: effectiveSidebarWidth + 'px' } : undefined">
     <!-- Resize handle (desktop only) -->
     <div
-      v-if="!isCollapsed && !isMobile"
+      v-if="!isCollapsed && !isOverlay"
       class="resize-handle"
       @mousedown="startResize"
       @dblclick="resetWidth"
@@ -597,14 +597,21 @@ const chatStore = useChatStore()
 const configStore = useConfigStore()
 const todosStore = useTodosStore()
 
-const isMobile = ref(window.innerWidth <= 768)
+// 窄窗口判定：<=900px 时右栏不再占布局宽度，改成从右侧滑出的抽屉浮层。
+// 原因：桌面壳最小窗口宽 800px，左侧导航(180) + 会话栏(180) + 对话区最小宽(280)
+// 已经 640，右栏再占 220 就必然把对话区压到 200 出头 —— 输入框工具栏（模型下拉
+// 最小 160 + 按钮）反而会溢出到面板上，看起来就是"内容被遮挡"。抽屉浮层下
+// 对话区独占剩余宽度，展开时盖在对话之上、点空白处收回，不挤压任何一列。
+const OVERLAY_BREAKPOINT = 900
+const isOverlay = ref(window.innerWidth <= OVERLAY_BREAKPOINT)
 
 function handleResize() {
-  isMobile.value = window.innerWidth <= 768
+  isOverlay.value = window.innerWidth <= OVERLAY_BREAKPOINT
 }
 
-watch(isMobile, (mobile) => {
-  if (!mobile) {
+watch(isOverlay, (overlay) => {
+  if (!overlay) {
+    // 回到宽窗口：抽屉态关闭，恢复成常驻的折叠竖条
     emit('update:mobileVisible', false)
     isCollapsed.value = true
   }
@@ -661,18 +668,58 @@ function loadSidebarWidth(): number {
 
 const sidebarWidth = ref(loadSidebarWidth())
 
-// 视口可用宽度钳制：聊天区有 min-width: 360px，侧栏自身 flex-shrink: 0，
-// 若不按窗口宽度钳制，拉到最大时会整体溢出视口右缘。
-// CHAT_MIN_WIDTH 与 ChatView 的 .chat-main min-width 保持一致。
+// 视口可用宽度钳制：侧栏自身 flex-shrink: 0，展开时会把左侧两列（外层导航 +
+// 会话栏）和对话区一起往右顶；一旦总和超过窗口宽度就整页横向溢出，
+// 右栏自己被推到视口外、底部状态栏被挤出可视区。
+// 所以要保住的是「左侧两列 + 对话区最小宽 + 本侧栏 ≤ 窗口宽度」这条不等式。
+// 下面的最小宽与断点和 ChatView 里 .chat-main 的 min-width 保持一致。
 const CHAT_MIN_WIDTH = 360
+const CHAT_MIN_WIDTH_COMPACT = 320 // <=1100px
+const CHAT_MIN_WIDTH_NARROW = 280 // <=900px
 const SIDEBAR_EDGE_ALLOWANCE = 2 // 左边框 + resize 热区余量
+// 空间实在不够时的下限：宁可让侧栏比用户拖出来的宽度更窄，也不许溢出视口。
+// 取 140 而不是 220，是为了让 800px 最小窗口下「导航 180 + 会话 180 + 对话 280 +
+// 侧栏 158」仍能凑进一行；低于这个宽度的窗口桌面壳不会出现（MIN_WINDOW_WIDTH=800）。
+const SIDEBAR_MIN_EFFECTIVE = 140
 const windowWidth = ref(window.innerWidth)
-window.addEventListener('resize', () => {
+
+// 左侧两列的实宽（外层导航 + 会话栏）：导航会随窗口在 220/180/64 之间变，
+// 会话栏在窄窗口也收窄，写死常数迟早对不上，直接量 DOM。
+const leftColumnsWidth = ref(0)
+function measureLeftColumns() {
+  const sider = document.querySelector('.n-layout-sider') as HTMLElement | null
+  const session = document.querySelector('.session-sidebar') as HTMLElement | null
+  leftColumnsWidth.value = (sider?.offsetWidth || 0) + (session?.offsetWidth || 0)
+}
+
+function handleWindowWidthResize() {
   windowWidth.value = window.innerWidth
+  // 媒体查询驱动的列宽在 resize 之后才生效，但 resize 事件回调时布局已重排，
+  // 这里量到的是新宽度。
+  measureLeftColumns()
+}
+
+onMounted(() => {
+  measureLeftColumns()
+  // 首帧测量时布局可能还没结算（导航宽度由组件决定），下一帧再量一次兜底。
+  nextTick(measureLeftColumns)
+  window.addEventListener('resize', handleWindowWidthResize)
 })
-const maxSidebarWidth = computed(() =>
-  Math.max(SIDEBAR_WIDTH_MIN, windowWidth.value - CHAT_MIN_WIDTH - SIDEBAR_EDGE_ALLOWANCE)
-)
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleWindowWidthResize)
+})
+
+const chatMinWidth = computed(() => {
+  if (windowWidth.value <= 900) return CHAT_MIN_WIDTH_NARROW
+  if (windowWidth.value <= 1100) return CHAT_MIN_WIDTH_COMPACT
+  return CHAT_MIN_WIDTH
+})
+
+const maxSidebarWidth = computed(() => {
+  const budget = windowWidth.value - leftColumnsWidth.value - chatMinWidth.value - SIDEBAR_EDGE_ALLOWANCE
+  return Math.max(SIDEBAR_MIN_EFFECTIVE, Math.min(SIDEBAR_WIDTH_MAX, budget))
+})
 const effectiveSidebarWidth = computed(() => Math.min(sidebarWidth.value, maxSidebarWidth.value))
 
 let resizing = false
@@ -2072,8 +2119,10 @@ async function doUpload(files: File[]) {
   z-index: 199;
 }
 
-/* Mobile responsive */
-@media (max-width: 768px) {
+/* 窄窗口（<=900px）：右栏改为浮层抽屉。
+   断点与 ChatView 的窄窗口断点、右侧拉手 .right-sidebar-fab 的显隐断点一致。
+   浮层不占布局宽度，因此对话区在 800px 窗口下仍有完整可用宽度。 */
+@media (max-width: 900px) {
   .right-sidebar {
     position: fixed;
     right: 0;
