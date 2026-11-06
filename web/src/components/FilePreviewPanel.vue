@@ -1381,7 +1381,10 @@ onUnmounted(() => {
   height: 100%;
   max-height: 100%;
 }
-.preview-content-container.preview-fullscreen .preview-image {
+/* 与下方 panel 模式同理：必须用 :not() 排除放大态。放大时宽度由内联样式
+   按比例定死，max-height 再钳高度会破坏宽高比（全屏放大变形就是这条漏了
+   排除导致的——3 类权重压过 .preview-image-zoomed 的 max-height: none）。 */
+.preview-content-container.preview-fullscreen .preview-image:not(.preview-image-zoomed) {
   max-height: 100%;
 }
 .preview-content-container.preview-fullscreen .binary-preview-wrapper,
