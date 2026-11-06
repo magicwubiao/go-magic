@@ -790,7 +790,7 @@
                 :options="toolbarMenuOptions"
                 :render-label="renderToolbarMenuLabel"
                 @select="handleToolbarMenuSelect"
-                @update:show="(v: boolean) => (toolbarMenuOpen = v)"
+                @update:show="handleToolbarMenuShow"
               >
                 <n-button
                   size="tiny"
@@ -3292,6 +3292,16 @@ function openPanel(panel: Exclude<CapPanel, ''>) {
     agentPluginsStore.loadPlugins().catch(() => {})
     chatStore.refreshCapabilities().catch(() => {})
   }
+}
+
+// 下拉菜单打开时预取插件/技能列表：徽标计数（renderToolbarMenuLabel）读的就是
+// 这两份 store 数据，不预取的话只有点进面板加载过一次之后数字才正确。
+// 技能只在没拉过时取一次；插件列表可能刚在别的页面改过，每次打开都刷。
+function handleToolbarMenuShow(v: boolean) {
+  toolbarMenuOpen.value = v
+  if (!v || !chatStore.activeSessionId) return
+  agentPluginsStore.loadPlugins().catch(() => {})
+  if (!skillsStore.skills.length) skillsStore.loadSkills().catch(() => {})
 }
 
 // 选完技能/收起面板后把光标还给输入框，用户可以直接接着打字发送。
