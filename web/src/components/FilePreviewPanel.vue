@@ -1,32 +1,39 @@
 <template>
   <div class="file-preview-panel" :class="`file-preview-panel--${variant}`">
-    <div v-if="loading" class="preview-state">
-      <!-- 常规态的关闭按钮收在工具栏最右侧；但 loading / error 两态在工具栏之前
-           就返回了，必须自带来路，否则「文件超过 2MB 无法预览」这类错误态
-           只能靠点遮罩退出（并排面板模式连遮罩都没有，会彻底出不去）。 -->
-      <n-button
-        class="preview-state-close"
-        size="small"
-        quaternary
-        :title="t('common.close')"
-        @click="closeFromToolbar"
-      >
-        <template #icon><n-icon :component="CloseOutline" /></template>
-      </n-button>
+    <div v-if="loading" class="preview-state" @mousedown="onChromeMouseDown">
+      <!-- 加载 / 错误两态没有工具栏（在 preview-ready 里才渲染），但浮窗模式
+           下用户仍需要拖动窗口与最小化的入口，因此：
+           1) 整块状态区按空白处可拖动（onChromeMouseDown 排除按钮）；
+           2) 右上角除了关闭按钮，还渲染调用方注入的 #actions（最小化）。 -->
+      <div class="preview-state-top">
+        <slot name="actions" />
+        <n-button
+          class="preview-state-close"
+          size="small"
+          quaternary
+          :title="t('common.close')"
+          @click="closeFromToolbar"
+        >
+          <template #icon><n-icon :component="CloseOutline" /></template>
+        </n-button>
+      </div>
       <n-spin size="large" />
       <n-text depth="3" class="preview-state-text">Loading...</n-text>
     </div>
 
-    <div v-else-if="error" class="preview-state">
-      <n-button
-        class="preview-state-close"
-        size="small"
-        quaternary
-        :title="t('common.close')"
-        @click="closeFromToolbar"
-      >
-        <template #icon><n-icon :component="CloseOutline" /></template>
-      </n-button>
+    <div v-else-if="error" class="preview-state" @mousedown="onChromeMouseDown">
+      <div class="preview-state-top">
+        <slot name="actions" />
+        <n-button
+          class="preview-state-close"
+          size="small"
+          quaternary
+          :title="t('common.close')"
+          @click="closeFromToolbar"
+        >
+          <template #icon><n-icon :component="CloseOutline" /></template>
+        </n-button>
+      </div>
       <n-text type="error">{{ error }}</n-text>
       <!-- 读取失败（含「超过 2MB 无法预览」）时，用户最需要的还是能拿到文件，
            所以错误态也保留下载出口 -->
@@ -52,7 +59,7 @@
       <div
         class="preview-toolbar"
         :class="{ 'preview-toolbar--drag': variant === 'panel' }"
-        @mousedown="onToolbarMouseDown"
+        @mousedown="onChromeMouseDown"
       >
         <span class="preview-title" :title="name">{{ name }}</span>
         <n-tag v-if="typeof size === 'number'" size="small" type="info">{{ formatSize(size) }}</n-tag>
@@ -1032,9 +1039,10 @@ function toggleFullscreen() {
   fullscreen.value = !fullscreen.value
 }
 
-// 工具栏兼作浮窗标题栏：在空白处按下才通知父组件拖窗。
+// 浮窗模式的拖动句柄：工具栏空白处与 loading/error 状态区空白处按下，
+// 都通知父组件拖动整个窗口。
 // 排除按钮/输入类元素，否则点"下载""刷新"会连带把窗口拖走。
-function onToolbarMouseDown(e: MouseEvent) {
+function onChromeMouseDown(e: MouseEvent) {
   if (props.variant !== 'panel' || e.button !== 0) return
   const el = e.target as HTMLElement | null
   if (el?.closest('button, a, input, textarea, select, .n-base-selection, .n-tag')) return
@@ -1196,11 +1204,36 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* 无工具栏的状态（加载中 / 读取失败）自带的关闭入口，固定在右上角 */
+/* 无工具栏的状态（加载中 / 读取失败）：右上角一行放 调用方注入的动作
+   （浮窗模式下的最小化按钮）+ 关闭按钮 */
+.preview-state-top {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 关闭按钮在行内布局里取消自身的绝对定位（保留类是为了独立复用时的兜底样式） */
+.preview-state-top .preview-state-close {
+  position: static;
+}
+
+/* 独立使用时（无 preview-state-top 包裹）仍钉在右上角 */
 .preview-state-close {
   position: absolute;
   top: 4px;
   right: 4px;
+}
+
+/* 浮窗模式：状态区空白处可拖动窗口，光标与工具栏拖动区保持一致 */
+.file-preview-panel--panel .preview-state {
+  cursor: grab;
+}
+
+.file-preview-panel--panel .preview-state:active {
+  cursor: grabbing;
 }
 
 .preview-state-text {
