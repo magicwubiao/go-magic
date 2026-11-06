@@ -183,6 +183,10 @@ func (r *Registry) RegisterAll(workDir string) {
 	// 五个入口一致地拿到同一套工具（此前 RegisterOptionalTools 无人调用，整批失效）。
 	r.RegisterMediaTools()
 
+	// ACP 外部 agent（Agent Client Protocol）。没配 acp.json 时 Available() 为 false，
+	// 工具不会出现在清单里；注册动作本身很轻（不拉起任何子进程，连接是懒建立的）。
+	r.RegisterACPTools()
+
 	// Cron job tool
 	r.Register(NewCronJobTool())
 

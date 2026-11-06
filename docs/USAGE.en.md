@@ -365,7 +365,7 @@ magic
 ├── tools                 tools  list
 │   └── toolsets          toolsets  list / show / enable / disable
 ├── mcp                  MCP servers  list / add / connect / disconnect / health
-├── acp                  ACP agent interop  serve / connect / disconnect / list / ping / skills / call
+├── acp                  ACP external agents  agents / prompt / reset / info / init / config
 ├── plugin                plugins  list / search / discover / install / uninstall /
 │                               enable / disable / reload / update / info / check
 ├── agent                 sub-agents  spawn / list / kill / stats
@@ -1245,22 +1245,63 @@ Conventions worth knowing:
 - The API only ever returns env **keys**; values are `***`. Posting the mask back
   restores the stored value instead of overwriting it.
 
-### 15.2 ACP (Agent Communication Protocol)
+### 15.2 ACP (Agent Client Protocol)
 
-Lets multiple agents discover each other and call each other's skills.
+Drive external ACP agents (Claude Code, Gemini CLI, ...) from magic. They run as
+their own subprocess with their own tools and context; magic only sends prompts
+and streams the output back.
+
+Configured in `acp.json` under the magic home (`GO_MAGIC_ACP_CONFIG` overrides the
+path; `magic acp config` prints it):
+
+```jsonc
+{
+  "agents": {
+    "claude": {
+      "command": "npx",
+      "args": ["-y", "@zed-industries/claude-code-acp"],
+      "env": ["ANTHROPIC_API_KEY=sk-..."],   // never echoed back
+      "workspace": "/path/to/project",        // session cwd, must be absolute
+      "description": "Claude Code",
+      "timeout_seconds": 600,                 // per turn; default 600, max 3600
+      "allow_write": false,                   // allow fs/write_text_file
+      "auto_approve": ["read", "search"],     // tool kinds to auto-approve; "all" allows everything
+      "enabled": true
+    }
+  }
+}
+```
 
 ```bash
-magic acp serve --transport stdio                    # default stdio
-magic acp serve --transport http --address ":8080" --agent-id my-agent
-
-magic acp connect helper --transport http --address http://localhost:8080
-magic acp connect local-helper --transport stdio --command /path/to/agent --args "--mode","acp"
-magic acp list
-magic acp ping [agent]
-magic acp skills [agent]
-magic acp call helper summarize --params '{"text":"..."}'
-magic acp disconnect helper
+magic acp init                                   # write an example config
+magic acp config                                 # config path
+magic acp agents                                 # list configured agents
+magic acp info claude                            # negotiated version / capabilities / session
+magic acp prompt claude "refactor the auth module"
+magic acp prompt claude -                        # read the prompt from stdin
+magic acp prompt claude "clean temp files" --reset
+magic acp reset claude
 ```
+
+Behaviour:
+
+- **No connect / disconnect / list.** ACP is stdio: a connection cannot outlive the
+  host process, so every command spawns on demand and exits when done. What persists
+  is the config, not the connection.
+- **Tools**: `acp_agents`, `acp_prompt`, `acp_reset_session` under the "ACP Agents"
+  category. `acp_prompt` always requires human approval; the tools stay hidden when
+  no agent is configured.
+- **Context** persists per agent across calls; use `acp_reset_session` (or `--reset`)
+  to start over.
+- **Permissions**: `session/request_permission` is answered from `auto_approve`.
+  Defaults allow read/search/think/fetch and reject edits and command execution.
+- **File access**: `fs/read_text_file` is limited to `workspace` and
+  `additional_dirs`, checked against resolved paths (symlinks cannot escape).
+  Writing needs `allow_write: true`.
+- **Timeouts**: `timeout_seconds` applies to CLI runs; tool calls are additionally
+  capped by the executor's 300s limit.
+- **Cancellation**: Ctrl+C sends `session/cancel` and waits for the agent to end the
+  turn with `cancelled` instead of killing the process.
 
 ### 15.3 CLI Connectors
 

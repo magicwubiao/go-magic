@@ -3,627 +3,261 @@ package acp
 import (
 	"bufio"
 	"bytes"
-	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
 
-// Transport interface for ACP transport layers
+// 连接层的错误。
+var (
+	// errPeerClosed 表示连接已被本地关闭，后续调用直接失败。
+	errPeerClosed = errors.New("acp: connection closed")
+	// ErrNoAgent 表示配置里没有这个 agent。
+	ErrNoAgent = errors.New("acp: agent not configured")
+)
+
+const (
+	// MaxMessageBytes 是单条 JSON-RPC 消息的上限（16MB）。
+	//
+	// 必须有上限：ACP agent 是外部进程，一行无限增长的输出会把宿主内存吃光。
+	// 16MB 足以容纳一次带图片的 session/update（图片是 base64，膨胀 4/3）。
+	MaxMessageBytes = 16 << 20
+
+	// stderrTailBytes 是保留的 stderr 尾巴长度，用于报错时给出上下文。
+	stderrTailBytes = 8 << 10
+
+	// defaultCloseGrace 是关闭时等待子进程自行退出的时间，超时强杀。
+	defaultCloseGrace = 5 * time.Second
+)
+
+// Transport 是一条 ACP 消息通道：按行收发 JSON-RPC 文本。
 type Transport interface {
-	Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error)
-	Receive(ctx context.Context) (*JSONRPCRequest, error)
-	Respond(ctx context.Context, resp *JSONRPCResponse) error
+	// ReadMessage 返回一条完整消息（不含行尾换行）。
+	ReadMessage() ([]byte, error)
+	// WriteMessage 写出一条消息，实现负责补行尾换行并串行化写入。
+	WriteMessage([]byte) error
+	// Close 关闭通道并回收资源。
 	Close() error
+	// Diagnostics 返回对端 stderr 的尾巴，用于错误信息。
+	Diagnostics() string
 }
 
-// StdioTransport implements ACP transport over stdio
+// tailBuffer 是固定容量的环形字节缓冲，只保留最后 N 字节。
+// stderr 必须**从启动起就持续排空**：管道缓冲区（通常 64KB）写满后子进程
+// 会阻塞在 write 上，整条连接随之假死——旧版只在 Close 时才 io.Copy，正是
+// 这个死法。
+type tailBuffer struct {
+	mu   sync.Mutex
+	data []byte
+	cap  int
+}
+
+func newTailBuffer(size int) *tailBuffer {
+	return &tailBuffer{cap: size}
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.data = append(t.data, p...)
+	if len(t.data) > t.cap {
+		trimmed := make([]byte, t.cap)
+		copy(trimmed, t.data[len(t.data)-t.cap:])
+		t.data = trimmed
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.data)
+}
+
+// streamTransport 是建立在任意 io.Reader/Writer 上的按行分帧实现。
+// stdio 与测试用的管道都复用它，保证两边的分帧逻辑只有一份。
+type streamTransport struct {
+	r       *bufio.Reader
+	w       io.Writer
+	closer  io.Closer
+	rCloser io.Closer
+	writeMu sync.Mutex
+	diag    func() string
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func newStreamTransport(r io.Reader, w io.Writer, closer io.Closer, diag func() string) *streamTransport {
+	if diag == nil {
+		diag = func() string { return "" }
+	}
+	t := &streamTransport{
+		r:      bufio.NewReaderSize(r, 64<<10),
+		w:      w,
+		closer: closer,
+		diag:   diag,
+	}
+	// 读端也要能关：Close 之后读取协程若还阻塞在 Read 上，就永远不会退出，
+	// 调用方（Client.Close）只能靠超时兜底，测试里每个用例白等 2s。
+	if rc, ok := r.(io.Closer); ok {
+		t.rCloser = rc
+	}
+	return t
+}
+
+// ReadMessage 读取一行并返回去掉空白后的内容。
+//
+// 用 ReadSlice 累加而不是 ReadBytes：前者返回 bufio.ErrBufferFull 时可以先
+// 检查累计长度，超限立刻报错，不会像 ReadBytes 那样先把整行读进内存再判定。
+func (t *streamTransport) ReadMessage() ([]byte, error) {
+	for {
+		var buf []byte
+		for {
+			chunk, err := t.r.ReadSlice('\n')
+			buf = append(buf, chunk...)
+			if len(buf) > MaxMessageBytes {
+				return nil, fmt.Errorf("acp: message exceeds %d bytes", MaxMessageBytes)
+			}
+			if err == nil {
+				break
+			}
+			if errors.Is(err, bufio.ErrBufferFull) {
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				// 容忍最后一行没有换行符：有些实现退出前不补 \n。
+				if len(bytes.TrimSpace(buf)) > 0 {
+					break
+				}
+				return nil, io.EOF
+			}
+			return nil, err
+		}
+
+		line := bytes.TrimSpace(buf)
+		if len(line) == 0 {
+			continue // 空行（keepalive）跳过
+		}
+		return line, nil
+	}
+}
+
+func (t *streamTransport) WriteMessage(data []byte) error {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+
+	out := make([]byte, 0, len(data)+1)
+	out = append(out, data...)
+	out = append(out, '\n')
+	_, err := t.w.Write(out)
+	return err
+}
+
+func (t *streamTransport) Close() error {
+	t.closeOnce.Do(func() {
+		if t.closer != nil {
+			t.closeErr = t.closer.Close()
+		}
+		if t.rCloser != nil {
+			_ = t.rCloser.Close()
+		}
+	})
+	return t.closeErr
+}
+
+func (t *streamTransport) Diagnostics() string { return t.diag() }
+
+// StdioOptions 是启动 ACP 子进程的参数。
+type StdioOptions struct {
+	Command string
+	Args    []string
+	Env     []string // "KEY=VALUE" 形式，叠加在宿主环境之上
+	Dir     string   // 子进程工作目录，空 = 继承
+}
+
+// StdioTransport 通过子进程的 stdin/stdout 传输 ACP 消息。
 type StdioTransport struct {
 	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	stderr io.ReadCloser
-	mu     sync.Mutex
+	inner  *streamTransport
+	stderr *tailBuffer
+	grace  time.Duration
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// NewStdioTransport creates a new stdio transport
-func NewStdioTransport(command string, args, env []string) (*StdioTransport, error) {
-	cmd := exec.Command(command, args...)
-	cmd.Env = append(os.Environ(), env...)
+// StartStdio 启动 ACP agent 子进程。
+func StartStdio(opts StdioOptions) (*StdioTransport, error) {
+	if opts.Command == "" {
+		return nil, errors.New("acp: empty command")
+	}
+
+	cmd := exec.Command(opts.Command, opts.Args...)
+	cmd.Env = append(os.Environ(), opts.Env...)
+	if opts.Dir != "" {
+		cmd.Dir = opts.Dir
+	}
+	setProcessAttrs(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
+		return nil, fmt.Errorf("acp: stdin pipe: %w", err)
 	}
-
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+		return nil, fmt.Errorf("acp: stdout pipe: %w", err)
 	}
-
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+		return nil, fmt.Errorf("acp: stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start ACP server: %w", err)
+		return nil, fmt.Errorf("acp: start %s: %w", opts.Command, err)
 	}
 
-	return &StdioTransport{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
-		stderr: stderr,
-	}, nil
+	tail := newTailBuffer(stderrTailBytes)
+	go func() { _, _ = io.Copy(tail, stderr) }()
+
+	t := &StdioTransport{cmd: cmd, stderr: tail, grace: defaultCloseGrace}
+	t.inner = newStreamTransport(stdout, stdin, stdin, tail.String)
+	return t, nil
 }
 
-// NewStdioTransportFromProcess creates a stdio transport from an existing process
-func NewStdioTransportFromProcess(cmd *exec.Cmd) (*StdioTransport, error) {
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
+func (t *StdioTransport) ReadMessage() ([]byte, error)   { return t.inner.ReadMessage() }
+func (t *StdioTransport) WriteMessage(data []byte) error { return t.inner.WriteMessage(data) }
+func (t *StdioTransport) Diagnostics() string            { return t.stderr.String() }
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
+// PID 返回子进程 PID（诊断/日志用）。
+func (t *StdioTransport) PID() int { return t.cmd.Process.Pid }
 
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start ACP server: %w", err)
-	}
-
-	return &StdioTransport{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
-		stderr: stderr,
-	}, nil
-}
-
-// Send sends a JSON-RPC response
-func (t *StdioTransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// Marshal the response
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	// Write to stdin with newline delimiter
-	if _, err := t.stdin.Write(append(data, '\n')); err != nil {
-		return nil, fmt.Errorf("failed to write to stdin: %w", err)
-	}
-
-	return nil, nil
-}
-
-// Receive receives a JSON-RPC request (blocking)
-func (t *StdioTransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
-	type result struct {
-		req *JSONRPCRequest
-		err error
-	}
-
-	done := make(chan result, 1)
-	go func() {
-		line, err := t.stdout.ReadBytes('\n')
-		if err != nil {
-			done <- result{err: fmt.Errorf("failed to read from stdout: %w", err)}
-			return
-		}
-
-		var req JSONRPCRequest
-		if err := json.Unmarshal(bytes.TrimSpace(line), &req); err != nil {
-			done <- result{err: fmt.Errorf("failed to unmarshal request: %w", err)}
-			return
-		}
-
-		done <- result{req: &req}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case r := <-done:
-		return r.req, r.err
-	}
-}
-
-// Respond sends a JSON-RPC response (for server-side use)
-func (t *StdioTransport) Respond(ctx context.Context, resp *JSONRPCResponse) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// Marshal the response
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	// Write to stdin with newline delimiter
-	if _, err := t.stdin.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("failed to write to stdin: %w", err)
-	}
-
-	return nil
-}
-
-// Close closes the stdio transport
+// Close 先关 stdin 让子进程自行退出，超时才强杀。
+//
+// ACP agent 收到 EOF 通常会收尾退出；直接 Kill 会丢掉它正在写的日志，
+// 排查问题时等于自断线索。
 func (t *StdioTransport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	var errs []error
-
-	if t.stdin != nil {
-		if err := t.stdin.Close(); err != nil {
-			errs = append(errs, err)
+	t.closeOnce.Do(func() {
+		if t.inner != nil {
+			_ = t.inner.Close()
 		}
-	}
 
-	if t.cmd.Process != nil {
-		if err := t.cmd.Process.Kill(); err != nil {
-			errs = append(errs, err)
-		}
-	}
+		done := make(chan error, 1)
+		go func() { done <- t.cmd.Wait() }()
 
-	if err := t.cmd.Wait(); err != nil {
-		errs = append(errs, err)
-	}
-
-	// Drain stderr
-	go io.Copy(io.Discard, t.stderr)
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing transport: %v", errs)
-	}
-	return nil
-}
-
-// HTTPTransport implements ACP transport over HTTP
-type HTTPTransport struct {
-	client  *http.Client
-	baseURL string
-	headers map[string]string
-	mu      sync.Mutex
-}
-
-// NewHTTPTransport creates a new HTTP transport
-func NewHTTPTransport(baseURL string, headers map[string]string) *HTTPTransport {
-	return &HTTPTransport{
-		client:  &http.Client{Timeout: 30 * time.Second},
-		baseURL: strings.TrimSuffix(baseURL, "/"),
-		headers: headers,
-	}
-}
-
-// Send sends a JSON-RPC request and returns the response
-func (t *HTTPTransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", t.baseURL+"/rpc", bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	for k, v := range t.headers {
-		httpReq.Header.Set(k, v)
-	}
-
-	resp, err := t.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var jsonResp JSONRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&jsonResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &jsonResp, nil
-}
-
-// Receive receives a JSON-RPC request (not applicable for HTTP)
-func (t *HTTPTransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
-	return nil, fmt.Errorf("Receive not supported for HTTP transport")
-}
-
-// Respond sends a JSON-RPC response (no-op for HTTP transport)
-func (t *HTTPTransport) Respond(ctx context.Context, resp *JSONRPCResponse) error {
-	return nil
-}
-
-// Close closes the HTTP transport (no-op)
-func (t *HTTPTransport) Close() error {
-	return nil
-}
-
-// SSETransport implements ACP transport over Server-Sent Events
-type SSETransport struct {
-	url        string
-	client     *http.Client
-	eventChan  chan string
-	headers    map[string]string
-	mu         sync.Mutex
-	connected  bool
-	cancelFunc context.CancelFunc
-}
-
-// NewSSETransport creates a new SSE transport
-func NewSSETransport(url string, headers map[string]string) (*SSETransport, error) {
-	return &SSETransport{
-		url:       url,
-		client:    &http.Client{Timeout: 0}, // No timeout for SSE
-		eventChan: make(chan string, 100),
-		headers:   headers,
-		connected: true,
-	}, nil
-}
-
-// Send sends a JSON-RPC request and returns the response
-func (t *SSETransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error) {
-	t.mu.Lock()
-	if !t.connected {
-		t.mu.Unlock()
-		return nil, fmt.Errorf("SSE transport not connected")
-	}
-	t.mu.Unlock()
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", t.url, bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	for k, v := range t.headers {
-		httpReq.Header.Set(k, v)
-	}
-
-	resp, err := t.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Read SSE events
-	scanner := bufio.NewScanner(resp.Body)
-	const maxCapacity = 1024 * 1024 // 1MB
-	buf := make([]byte, maxCapacity)
-	scanner.Buffer(buf, maxCapacity)
-
-	var responseData string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Parse SSE format: data: {...}
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "" || data == ":" {
-				continue
-			}
-			responseData = data
-			break
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("SSE read error: %w", err)
-	}
-
-	if responseData == "" {
-		return nil, fmt.Errorf("no response data received")
-	}
-
-	var jsonResp JSONRPCResponse
-	if err := json.Unmarshal([]byte(responseData), &jsonResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &jsonResp, nil
-}
-
-// Receive receives a JSON-RPC request via SSE (for inbound requests)
-func (t *SSETransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case data, ok := <-t.eventChan:
-		if !ok {
-			return nil, fmt.Errorf("event channel closed")
-		}
-		var req JSONRPCRequest
-		if err := json.Unmarshal([]byte(data), &req); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal request: %w", err)
-		}
-		return &req, nil
-	}
-}
-
-// Respond sends a JSON-RPC response (no-op for SSE transport)
-func (t *SSETransport) Respond(ctx context.Context, resp *JSONRPCResponse) error {
-	return nil
-}
-
-// Close closes the SSE transport
-func (t *SSETransport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.connected = false
-	close(t.eventChan)
-	return nil
-}
-
-// TCPTransport implements ACP transport over TCP
-type TCPTransport struct {
-	conn         net.Conn
-	address      string
-	listener     net.Listener
-	isServer     bool
-	mu           sync.Mutex
-	readTimeout  time.Duration
-	writeTimeout time.Duration
-}
-
-// NewTCPTransport creates a new TCP transport client
-func NewTCPTransport(address string) (*TCPTransport, error) {
-	return &TCPTransport{
-		address:      address,
-		readTimeout:  30 * time.Second,
-		writeTimeout: 30 * time.Second,
-	}, nil
-}
-
-// NewTCPTransportAsServer creates a new TCP transport server
-func NewTCPTransportAsServer(address string) (*TCPTransport, error) {
-	return &TCPTransport{
-		address:      address,
-		isServer:     true,
-		readTimeout:  0, // No timeout for server
-		writeTimeout: 30 * time.Second,
-	}, nil
-}
-
-// Connect establishes the TCP connection
-func (t *TCPTransport) Connect(ctx context.Context) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	dialer := &net.Dialer{
-		Timeout: 10 * time.Second,
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", t.address)
-	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", t.address, err)
-	}
-
-	t.conn = conn
-	return nil
-}
-
-// Listen starts the TCP server
-func (t *TCPTransport) Listen(ctx context.Context) error {
-	if !t.isServer {
-		return fmt.Errorf("Listen only available for server transport")
-	}
-
-	ln, err := net.Listen("tcp", t.address)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", t.address, err)
-	}
-
-	t.listener = ln
-	go t.acceptLoop(ctx)
-	return nil
-}
-
-// acceptLoop accepts incoming connections
-func (t *TCPTransport) acceptLoop(ctx context.Context) {
-	for {
 		select {
-		case <-ctx.Done():
-			return
-		default:
+		case <-done:
+			// 子进程退出码非零是它自己的事，不当连接错误。
+		case <-time.After(t.grace):
+			killProcessGroup(t.cmd.Process)
+			<-done
+			t.closeErr = fmt.Errorf("acp: agent did not exit within %s, killed", t.grace)
 		}
-
-		t.mu.Lock()
-		ln := t.listener
-		t.mu.Unlock()
-
-		if ln == nil {
-			return
-		}
-
-		ln.(*net.TCPListener).SetDeadline(time.Now().Add(1 * time.Second))
-		conn, err := ln.Accept()
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			return
-		}
-
-		// Handle connection
-		go t.handleConnection(conn)
-	}
-}
-
-// handleConnection handles a single TCP connection
-func (t *TCPTransport) handleConnection(conn net.Conn) {
-	t.mu.Lock()
-	if t.conn == nil {
-		t.conn = conn
-	}
-	t.mu.Unlock()
-
-	// For now, just keep the connection alive
-	// In a full implementation, this would handle multiple sessions
-}
-
-// Send sends a JSON-RPC request
-func (t *TCPTransport) Send(ctx context.Context, req *JSONRPCRequest) (*JSONRPCResponse, error) {
-	t.mu.Lock()
-	conn := t.conn
-	t.mu.Unlock()
-
-	if conn == nil {
-		return nil, fmt.Errorf("TCP transport not connected")
-	}
-
-	// Marshal the request
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Write with newline delimiter
-	if t.writeTimeout > 0 {
-		conn.SetWriteDeadline(time.Now().Add(t.writeTimeout))
-	}
-
-	_, err = conn.Write(append(data, '\n'))
-	if err != nil {
-		return nil, fmt.Errorf("failed to write to TCP: %w", err)
-	}
-
-	// Read response
-	if t.readTimeout > 0 {
-		conn.SetReadDeadline(time.Now().Add(t.readTimeout))
-	}
-
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from TCP: %w", err)
-	}
-
-	var resp JSONRPCResponse
-	if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &resp, nil
-}
-
-// Receive receives a JSON-RPC request
-func (t *TCPTransport) Receive(ctx context.Context) (*JSONRPCRequest, error) {
-	t.mu.Lock()
-	conn := t.conn
-	t.mu.Unlock()
-
-	if conn == nil {
-		return nil, fmt.Errorf("TCP transport not connected")
-	}
-
-	// Read request
-	if t.readTimeout > 0 {
-		conn.SetReadDeadline(time.Now().Add(t.readTimeout))
-	}
-
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		if err == io.EOF {
-			return nil, fmt.Errorf("connection closed")
-		}
-		return nil, fmt.Errorf("failed to read from TCP: %w", err)
-	}
-
-	var req JSONRPCRequest
-	if err := json.Unmarshal(bytes.TrimSpace(line), &req); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal request: %w", err)
-	}
-
-	return &req, nil
-}
-
-// Close closes the TCP connection
-func (t *TCPTransport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	var errs []error
-
-	if t.conn != nil {
-		if err := t.conn.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		t.conn = nil
-	}
-
-	if t.listener != nil {
-		if err := t.listener.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		t.listener = nil
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing TCP transport: %v", errs)
-	}
-	return nil
-}
-
-// IsConnected checks if the TCP connection is alive
-func (t *TCPTransport) IsConnected() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.conn == nil {
-		return false
-	}
-
-	// Check if connection is still valid by setting a zero deadline
-	t.conn.SetDeadline(time.Now())
-	return true
-}
-
-func jsonMarshal(v interface{}) (json.RawMessage, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-	return data, nil
+	})
+	return t.closeErr
 }

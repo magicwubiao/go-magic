@@ -168,6 +168,16 @@ var toolCategories = []ToolCategory{
 		Tools:       []string{},
 	},
 	{
+		// 外部 ACP agent 工具（固定三个名字）。数量不随配置变化，
+		// 哪个 agent 可用由 acp.json 决定，因此这里可以静态列举。
+		ID:          "acp",
+		Label:       "ACP Agents",
+		Description: "Drive external Agent Client Protocol agents (Claude Code, Gemini CLI, ...)",
+		Tools: []string{
+			"acp_agents", "acp_prompt", "acp_reset_session",
+		},
+	},
+	{
 		// 插件工具（ap_<plugin>_<server>_<tool> 与 ap_<plugin>_cli_<connector>_<tool>），
 		// 按前缀归类：插件面取决于用户安装了哪些 Agent Plugin，无法静态列举。
 		ID:          "plugins",

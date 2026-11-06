@@ -363,7 +363,7 @@ magic
 ├── tools                工具  list
 │   └── toolsets         工具集  list / show / enable / disable
 ├── mcp                  MCP 服务器  list / add / connect / disconnect / health
-├── acp                  ACP 智能体互联  serve / connect / disconnect / list / ping / skills / call
+├── acp                  ACP 外部智能体  agents / prompt / reset / info / init / config
 ├── plugin               插件  list / search / discover / install / uninstall /
 │                               enable / disable / reload / update / info / check
 ├── agent                子智能体  spawn / list / kill / stats
@@ -1225,22 +1225,59 @@ magic mcp add --file ./mcp.json            # 从文件读
 - 接口返回的 `env` 只带 key，值一律是 `***`；表单原样回传掩码时后端会还原成
   磁盘上的真实值。
 
-### 15.2 ACP（Agent Communication Protocol）
+### 15.2 ACP（Agent Client Protocol）
 
-让多个 Agent 互相发现并调用彼此的技能。
+让 magic 驱动外部 ACP agent（Claude Code、Gemini CLI 等）。它们是独立子进程，
+自己的工具、自己的上下文；magic 只负责发提示词、收流式输出。
+
+配置在 magic home 下的 `acp.json`（`GO_MAGIC_ACP_CONFIG` 可覆盖路径，
+`magic acp config` 打印实际位置）：
+
+```jsonc
+{
+  "agents": {
+    "claude": {
+      "command": "npx",
+      "args": ["-y", "@zed-industries/claude-code-acp"],
+      "env": ["ANTHROPIC_API_KEY=sk-..."],   // 可选，接口与工具输出都不回显
+      "workspace": "/path/to/project",        // 会话 cwd，必须是绝对路径
+      "description": "Claude Code",
+      "timeout_seconds": 600,                 // 单轮超时，默认 600，上限 3600
+      "allow_write": false,                   // 是否允许 agent 调 fs/write_text_file
+      "auto_approve": ["read", "search"],     // 自动批准的工具种类；"all" = 全放行
+      "enabled": true
+    }
+  }
+}
+```
 
 ```bash
-magic acp serve --transport stdio                    # 默认 stdio
-magic acp serve --transport http --address ":8080" --agent-id my-agent
-
-magic acp connect helper --transport http --address http://localhost:8080
-magic acp connect local-helper --transport stdio --command /path/to/agent --args "--mode","acp"
-magic acp list
-magic acp ping [agent]
-magic acp skills [agent]
-magic acp call helper summarize --params '{"text":"..."}'
-magic acp disconnect helper
+magic acp init                                   # 写一份示例配置
+magic acp config                                 # 配置文件路径
+magic acp agents                                 # 列出已配置的 agent
+magic acp info claude                            # 协商结果：协议版本 / 能力 / 会话
+magic acp prompt claude "重构 auth 模块"          # 跑一轮，正文流式打印
+magic acp prompt claude -                        # 从 stdin 读提示词
+magic acp prompt claude "清理临时文件" --reset     # 先换新会话再发
+magic acp reset claude
 ```
+
+行为与边界：
+
+- **没有 connect / disconnect / list**。ACP 走 stdio，连接生命周期不可能超过宿主
+  进程，所以每个命令都是「按需拉起 → 做完 → 退出」；持久化的是配置，不是连接。
+- **工具**：`acp_agents` / `acp_prompt` / `acp_reset_session`，归在「ACP Agents」
+  分类。`acp_prompt` **每次调用都要人工确认**（外部 agent 会读改文件、跑命令）；
+  没配 agent 时这三个工具不会出现在工具清单里。
+- **上下文**：同一 agent 的会话跨调用复用（多轮累积），换任务用
+  `acp_reset_session` 或 `--reset` 清空。
+- **权限**：agent 请求授权（`session/request_permission`）时按 `auto_approve`
+  判定，默认只放行 read / search / think / fetch，写入与执行默认拒绝。
+- **文件访问**：`fs/read_text_file` 只能读 `workspace` 与 `additional_dirs`
+  内的文件（按解析后的真实路径判定，软链绕不出去）；写能力要 `allow_write: true`。
+- **超时**：CLI 直连按 `timeout_seconds`；作为工具调用时受执行器 300s 上限约束。
+- **取消**：Ctrl+C 走 ACP 的 `session/cancel` 通知，agent 以 `cancelled` 收尾，
+  不是直接杀进程。
 
 ### 15.3 CLI 连接器
 

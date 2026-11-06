@@ -2,325 +2,332 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 )
 
-// Manager manages multiple ACP connections (servers and clients)
+// manager.go —— ACP agent 的进程内管理器。
+//
+// 一个 agent 名字对应一条长活连接（子进程 + session）。连接是懒建立的：
+// 没人调用就不拉起子进程；进程死了（读到 EOF）就在下一次调用时重建。
+//
+// 这里刻意**不做**跨进程持久化：stdio 连接的生命周期不可能超过宿主进程，
+// 旧版 CLI 每条命令 new 一个 Manager 再退出，于是 list/call 永远查不到东西。
+// 现在的语义是"配置持久化在 acp.json，连接随宿主进程生死"。
+
+// connectTimeout 是拉起子进程 + initialize + session/new 的总预算。
+const connectTimeout = 90 * time.Second
+
+// Manager 管理若干 ACP agent 连接。
 type Manager struct {
-	clients map[string]*Client
-	servers map[string]*Server
-	mu      sync.RWMutex
+	configPath string
+
+	mu        sync.Mutex
+	clients   map[string]*Client
+	locks     map[string]*sync.Mutex
+	overrides map[string]time.Duration // 单次进程内的超时覆盖（不写盘）
+	closed    bool
 }
 
-// NewManager creates a new ACP manager
-func NewManager() *Manager {
+// NewManager 创建管理器。configPath 为空时用 DefaultConfigPath()。
+func NewManager(configPath string) *Manager {
+	if configPath == "" {
+		configPath = DefaultConfigPath()
+	}
 	return &Manager{
-		clients: make(map[string]*Client),
-		servers: make(map[string]*Server),
+		configPath: configPath,
+		clients:    make(map[string]*Client),
+		locks:      make(map[string]*sync.Mutex),
+		overrides:  make(map[string]time.Duration),
 	}
 }
 
-// ConnectStdio connects to an ACP agent using stdio transport
-func (m *Manager) ConnectStdio(name string, agentID string, command string, args, env []string) error {
+// SetTimeoutOverride 覆盖某个 agent 的单轮超时（仅本进程，不落盘）。
+// CLI 的 --timeout 用它；已建立的连接不受影响（下次重建才生效）。
+func (m *Manager) SetTimeoutOverride(name string, d time.Duration) {
+	if d <= 0 {
+		return
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.clients[name]; exists {
-		return fmt.Errorf("agent '%s' already connected", name)
-	}
-
-	transport, err := NewStdioTransport(command, args, env)
-	if err != nil {
-		return fmt.Errorf("failed to create stdio transport: %w", err)
-	}
-
-	client := NewClient(agentID, transport)
-	ctx := context.Background()
-	info, err := client.Connect(ctx)
-	if err != nil {
-		transport.Close()
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	m.clients[name] = client
-	_ = info // info is stored in client
-
-	return nil
+	m.overrides[name] = d
+	m.mu.Unlock()
 }
 
-// ConnectHTTP connects to an ACP agent using HTTP transport
-func (m *Manager) ConnectHTTP(name string, agentID string, baseURL string, headers map[string]string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+var (
+	defaultOnce sync.Once
+	defaultMgr  *Manager
+)
 
-	if _, exists := m.clients[name]; exists {
-		return fmt.Errorf("agent '%s' already connected", name)
-	}
-
-	transport := NewHTTPTransport(baseURL, headers)
-	client := NewClient(agentID, transport)
-	ctx := context.Background()
-	info, err := client.Connect(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	m.clients[name] = client
-	_ = info // info is stored in client
-
-	return nil
+// Default 返回进程级单例，供工具层使用。
+func Default() *Manager {
+	defaultOnce.Do(func() { defaultMgr = NewManager("") })
+	return defaultMgr
 }
 
-// ConnectSSE connects to an ACP agent using SSE transport
-func (m *Manager) ConnectSSE(name string, agentID string, url string, headers map[string]string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// ConfigPath 返回配置文件路径。
+func (m *Manager) ConfigPath() string { return m.configPath }
 
-	if _, exists := m.clients[name]; exists {
-		return fmt.Errorf("agent '%s' already connected", name)
-	}
+// Config 读取当前磁盘配置（不缓存：用户在编辑 acp.json 后应立刻生效）。
+func (m *Manager) Config() (*Config, error) { return LoadConfig(m.configPath) }
 
-	transport, err := NewSSETransport(url, headers)
-	if err != nil {
-		return fmt.Errorf("failed to create SSE transport: %w", err)
-	}
-
-	client := NewClient(agentID, transport)
-	ctx := context.Background()
-	info, err := client.Connect(ctx)
-	if err != nil {
-		transport.Close()
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	m.clients[name] = client
-	_ = info // info is stored in client
-
-	return nil
+// AgentSummary 是给工具/CLI 展示的 agent 概览。
+type AgentSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Command     string `json:"command"`
+	Enabled     bool   `json:"enabled"`
+	Connected   bool   `json:"connected"`
+	Workspace   string `json:"workspace,omitempty"`
 }
 
-// Connect connects using a pre-configured transport
-func (m *Manager) Connect(name string, agentID string, transport Transport) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.clients[name]; exists {
-		return fmt.Errorf("agent '%s' already connected", name)
-	}
-
-	client := NewClient(agentID, transport)
-	ctx := context.Background()
-	info, err := client.Connect(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	m.clients[name] = client
-	_ = info // info is stored in client
-
-	return nil
-}
-
-// Disconnect disconnects from an ACP agent
-func (m *Manager) Disconnect(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	client, exists := m.clients[name]
-	if !exists {
-		return fmt.Errorf("agent '%s' not found", name)
-	}
-
-	if err := client.Disconnect(); err != nil {
-		return fmt.Errorf("failed to disconnect: %w", err)
-	}
-
-	delete(m.clients, name)
-	return nil
-}
-
-// GetClient gets a client by name
-func (m *Manager) GetClient(name string) (*Client, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	client, exists := m.clients[name]
-	if !exists {
-		return nil, fmt.Errorf("agent '%s' not found", name)
-	}
-
-	return client, nil
-}
-
-// ListConnected lists all connected agent names
-func (m *Manager) ListConnected() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	names := make([]string, 0, len(m.clients))
-	for name := range m.clients {
-		names = append(names, name)
-	}
-	return names
-}
-
-// ListConnectedAgents returns detailed info about all connected agents
-func (m *Manager) ListConnectedAgents() []AgentInfo {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	agents := make([]AgentInfo, 0, len(m.clients))
-	for _, client := range m.clients {
-		info, err := client.GetAgentInfo(context.Background())
-		if err != nil {
-			// Skip client with error
-			continue
-		}
-		if info != nil {
-			agents = append(agents, *info)
-		}
-	}
-	return agents
-}
-
-// StartServer starts an ACP server
-func (m *Manager) StartServer(name string, agentID string, info AgentInfo, transport Transport) (*Server, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.servers[name]; exists {
-		return nil, fmt.Errorf("server '%s' already exists", name)
-	}
-
-	server := NewServerWithTransport(agentID, info, transport)
-	ctx := context.Background()
-	if err := server.Start(ctx); err != nil {
-		return nil, fmt.Errorf("failed to start server: %w", err)
-	}
-
-	m.servers[name] = server
-	return server, nil
-}
-
-// StopServer stops an ACP server
-func (m *Manager) StopServer(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	server, exists := m.servers[name]
-	if !exists {
-		return fmt.Errorf("server '%s' not found", name)
-	}
-
-	if err := server.Stop(); err != nil {
-		return fmt.Errorf("failed to stop server: %w", err)
-	}
-
-	delete(m.servers, name)
-	return nil
-}
-
-// GetServer gets a server by name
-func (m *Manager) GetServer(name string) (*Server, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	server, exists := m.servers[name]
-	if !exists {
-		return nil, fmt.Errorf("server '%s' not found", name)
-	}
-
-	return server, nil
-}
-
-// ListServers lists all running servers
-func (m *Manager) ListServers() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	names := make([]string, 0, len(m.servers))
-	for name := range m.servers {
-		names = append(names, name)
-	}
-	return names
-}
-
-// CallSkill calls a skill on a connected agent
-func (m *Manager) CallSkill(ctx context.Context, agentName string, skillName string, params map[string]interface{}) (interface{}, error) {
-	client, err := m.GetClient(agentName)
+// Agents 列出配置中的 agent。
+func (m *Manager) Agents() ([]AgentSummary, error) {
+	cfg, err := m.Config()
 	if err != nil {
 		return nil, err
 	}
 
-	return client.CallSkill(ctx, skillName, params)
-}
-
-// ListAllSkills lists all skills from all connected agents
-func (m *Manager) ListAllSkills() []Skill {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var allSkills []Skill
-	for name, client := range m.clients {
-		skills := client.GetSkills()
-		for _, skill := range skills {
-			// Prefix skill name with agent name to avoid conflicts
-			skill.Source = name
-			allSkills = append(allSkills, skill)
-		}
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
 	}
-	return allSkills
-}
+	sort.Strings(names)
 
-// Ping checks connectivity to an agent
-func (m *Manager) Ping(ctx context.Context, name string) error {
-	client, err := m.GetClient(name)
-	if err != nil {
-		return err
-	}
-
-	return client.Ping(ctx)
-}
-
-// HealthCheck checks health of all connections
-func (m *Manager) HealthCheck() map[string]bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	results := make(map[string]bool)
-	for name, client := range m.clients {
-		results[name] = client.Ping(context.Background()) == nil
-	}
-	return results
-}
-
-// Close closes all connections and servers
-func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var errs []error
-
-	// Close all clients
-	for name, client := range m.clients {
-		if err := client.Disconnect(); err != nil {
-			errs = append(errs, fmt.Errorf("client %s: %w", name, err))
+	out := make([]AgentSummary, 0, len(names))
+	for _, name := range names {
+		agent := cfg.Agents[name]
+		c, connected := m.clients[name]
+		if connected && c != nil && !c.alive() {
+			connected = false
 		}
+		out = append(out, AgentSummary{
+			Name:        name,
+			Description: agent.Description,
+			Command:     agent.Command,
+			Enabled:     agent.EnabledValue(),
+			Connected:   connected,
+			Workspace:   agent.Workspace,
+		})
+	}
+	return out, nil
+}
+
+// lockFor 返回某个 agent 的连接锁，保证并发调用只拉起一个子进程。
+func (m *Manager) lockFor(name string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mu, ok := m.locks[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		m.locks[name] = mu
+	}
+	return mu
+}
+
+// client 取得（必要时建立）某个 agent 的连接。
+func (m *Manager) client(ctx context.Context, name string) (*Client, error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, errPeerClosed
+	}
+	if c, ok := m.clients[name]; ok {
+		if c.alive() {
+			m.mu.Unlock()
+			return c, nil
+		}
+		// 进程已经死了：关掉残骸，下面重建。
+		delete(m.clients, name)
+		go func(c *Client) { _ = c.Close() }(c)
+	}
+	m.mu.Unlock()
+
+	mu := m.lockFor(name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// 双检：拿锁期间别的协程可能已经建好了。
+	m.mu.Lock()
+	if c, ok := m.clients[name]; ok && c.alive() {
+		m.mu.Unlock()
+		return c, nil
+	}
+	m.mu.Unlock()
+
+	cfg, err := m.Config()
+	if err != nil {
+		return nil, err
+	}
+	agent, ok := cfg.Agents[name]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoAgent, name)
+	}
+	if !agent.EnabledValue() {
+		return nil, fmt.Errorf("acp agent %q is disabled", name)
+	}
+	if err := agent.Validate(name); err != nil {
+		return nil, err
 	}
 
-	// Stop all servers
-	for name, server := range m.servers {
-		if err := server.Stop(); err != nil {
-			errs = append(errs, fmt.Errorf("server %s: %w", name, err))
-		}
+	opts, err := m.clientOptions(name, agent)
+	if err != nil {
+		return nil, err
 	}
 
+	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+
+	client, err := Connect(connectCtx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("connect acp agent %q: %w", name, err)
+	}
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		_ = client.Close()
+		return nil, errPeerClosed
+	}
+	m.clients[name] = client
+	m.mu.Unlock()
+	return client, nil
+}
+
+func (m *Manager) clientOptions(name string, agent AgentConfig) (ClientOptions, error) {
+	workspace := expandHome(agent.Workspace)
+	if workspace == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return ClientOptions{}, fmt.Errorf("resolve workspace: %w", err)
+		}
+		workspace = wd
+	}
+	workspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return ClientOptions{}, fmt.Errorf("resolve workspace: %w", err)
+	}
+
+	dirs := make([]string, 0, len(agent.AdditionalDirs))
+	for _, d := range agent.AdditionalDirs {
+		d = expandHome(d)
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			return ClientOptions{}, fmt.Errorf("resolve additional dir %s: %w", d, err)
+		}
+		dirs = append(dirs, abs)
+	}
+
+	return ClientOptions{
+		Name:           name,
+		Cwd:            workspace,
+		Command:        agent.Command,
+		Args:           agent.Args,
+		Env:            agent.Env,
+		WorkDir:        expandHome(agent.Cwd),
+		Timeout:        m.timeoutFor(name, agent),
+		AllowWrite:     agent.AllowWrite,
+		AdditionalDirs: dirs,
+		Permission:     agent.PermissionPolicy(),
+		ClientName:     "magic",
+		ClientVersion:  "1.0",
+	}, nil
+}
+
+func (m *Manager) timeoutFor(name string, agent AgentConfig) time.Duration {
+	m.mu.Lock()
+	override, ok := m.overrides[name]
+	m.mu.Unlock()
+	if ok {
+		return override
+	}
+	return agent.Timeout()
+}
+
+// Prompt 向指定 agent 发一轮消息。
+func (m *Manager) Prompt(ctx context.Context, name string, blocks []ContentBlock, onUpdate func(Update)) (*PromptOutcome, error) {
+	client, err := m.client(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	outcome, err := client.Prompt(ctx, blocks, onUpdate)
+	if err != nil && !client.alive() {
+		// 连接已死，丢弃残骸，下一次调用重建。
+		m.drop(name, client)
+	}
+	return outcome, err
+}
+
+// ResetSession 重置某个 agent 的会话上下文。
+func (m *Manager) ResetSession(ctx context.Context, name string) error {
+	client, err := m.client(ctx, name)
+	if err != nil {
+		return err
+	}
+	resetCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+
+	if err := client.ResetSession(resetCtx); err != nil {
+		if !client.alive() {
+			m.drop(name, client)
+		}
+		return err
+	}
+	return nil
+}
+
+// Cancel 取消某个 agent 正在进行的轮次。
+func (m *Manager) Cancel(name string) error {
+	m.mu.Lock()
+	client, ok := m.clients[name]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoAgent, name)
+	}
+	return client.Cancel()
+}
+
+// Client 返回底层连接（诊断用）。
+func (m *Manager) Client(ctx context.Context, name string) (*Client, error) {
+	return m.client(ctx, name)
+}
+
+func (m *Manager) drop(name string, client *Client) {
+	m.mu.Lock()
+	if cur, ok := m.clients[name]; ok && cur == client {
+		delete(m.clients, name)
+	}
+	m.mu.Unlock()
+
+	// 关闭放到锁外：Close 会等子进程退出（最多 5s），
+	// 持锁关闭会把其它 agent 的调用一起堵住。
+	go func() { _ = client.Close() }()
+}
+
+// Close 关闭所有连接。
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	m.closed = true
+	clients := m.clients
 	m.clients = make(map[string]*Client)
-	m.servers = make(map[string]*Server)
+	m.mu.Unlock()
 
+	var errs []error
+	for name, client := range clients {
+		if err := client.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("agent %s: %w", name, err))
+		}
+	}
 	if len(errs) > 0 {
-		return fmt.Errorf("errors during close: %v", errs)
+		return errors.Join(errs...)
 	}
 	return nil
 }
