@@ -140,9 +140,9 @@ type SubAgent struct {
 	// cancelFn 取消该子代理的执行 ctx，由 executeTask 在创建后注入。
 	// 只设 cancelled 标志拦不住正在运行的 runner（它检查的是 ctx），
 	// cancel_task 必须真正中断执行。
-	cancelFn  context.CancelFunc
-	parentID  string
-	taskID    string
+	cancelFn context.CancelFunc
+	parentID string
+	taskID   string
 }
 
 // Manager manages all subagents
