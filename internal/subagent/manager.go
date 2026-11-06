@@ -137,6 +137,10 @@ type SubAgent struct {
 	mu        sync.RWMutex
 	completed bool
 	cancelled bool
+	// cancelFn 取消该子代理的执行 ctx，由 executeTask 在创建后注入。
+	// 只设 cancelled 标志拦不住正在运行的 runner（它检查的是 ctx），
+	// cancel_task 必须真正中断执行。
+	cancelFn  context.CancelFunc
 	parentID  string
 	taskID    string
 }
@@ -152,7 +156,6 @@ type Manager struct {
 	tasks        map[string]*Task
 	results      map[string]*Result
 	taskQueue    chan *Task
-	resultChan   chan *Result
 	wg           sync.WaitGroup
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -176,7 +179,6 @@ func NewManager(cfg *Config, prov provider.Provider, registry ToolRegistry, fact
 		tasks:        make(map[string]*Task),
 		results:      make(map[string]*Result),
 		taskQueue:    make(chan *Task, cfg.MaxConcurrent*10),
-		resultChan:   make(chan *Result, 100),
 		ctx:          ctx,
 		cancel:       cancel,
 		semaphore:    make(chan struct{}, cfg.MaxConcurrent),
@@ -189,12 +191,12 @@ func (m *Manager) Start() {
 	go m.processTasks()
 }
 
-// Stop stops the subagent manager
+// Stop stops the subagent manager.
+// 不 close channel：任务队列/结果只经 map 权威读取（WaitForResult/GetResult），
+// GC 回收即可；close 与 SubmitTask/publish 的发送存在竞态 panic 风险。
 func (m *Manager) Stop() {
 	m.cancel()
 	m.wg.Wait()
-	close(m.taskQueue)
-	close(m.resultChan)
 }
 
 // SpawnTask spawns a new subagent task
@@ -265,6 +267,8 @@ func (m *Manager) SubmitTask(task *Task) error {
 	case m.taskQueue <- task:
 		return nil
 	default:
+		// 入队失败不留幽灵任务：从 map 摘除，否则会以 pending 状态永远挂着。
+		delete(m.tasks, task.ID)
 		return fmt.Errorf("task queue full")
 	}
 }
@@ -356,12 +360,40 @@ func (m *Manager) processTasks() {
 	}
 }
 
+// taskTimeout 返回单个任务的实际超时：优先用 delegate_task 传入的
+// timeout_seconds（JSON 反序列化后是 float64，Go 内部路径可能是 int），
+// 缺省回落到 Manager 配置。此前 executeTask 硬用 config.Timeout（默认 120s），
+// 而工具声明 default 300s——子任务一跑过 2 分钟就被误判为"系统取消"。
+func taskTimeout(task *Task, fallback time.Duration) time.Duration {
+	if task == nil || task.Context == nil {
+		return fallback
+	}
+	switch v := task.Context["timeout_seconds"].(type) {
+	case float64:
+		if v > 0 {
+			return time.Duration(v) * time.Second
+		}
+	case int:
+		if v > 0 {
+			return time.Duration(v) * time.Second
+		}
+	case int64:
+		if v > 0 {
+			return time.Duration(v) * time.Second
+		}
+	}
+	return fallback
+}
+
+// publishResult 已删除：resultChan 无消费者后整体移除，结果统一经
+// storeResult 落 map，WaitForResult / GetResult 从 map 读取。
+
 // executeTask executes a task with a subagent
 func (m *Manager) executeTask(task *Task) {
 	startTime := time.Now()
 
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(m.ctx, m.config.Timeout)
+	// Create context with timeout（per-task 超时优先，见 taskTimeout）
+	ctx, cancel := context.WithTimeout(m.ctx, taskTimeout(task, m.config.Timeout))
 	defer cancel()
 
 	// Update task status
@@ -380,18 +412,16 @@ func (m *Manager) executeTask(task *Task) {
 		task.SetStatus(TaskStatusCancelled)
 		result.Duration = time.Since(startTime)
 		m.storeResult(result)
-		m.resultChan <- result
 		return
 	}
 
-	subAgent, err := m.createSubAgent(task)
+	subAgent, err := m.createSubAgent(task, cancel)
 	if err != nil {
 		result.Success = false
 		result.Error = err.Error()
 		result.Duration = time.Since(startTime)
 		task.SetStatus(TaskStatusFailed)
 		m.storeResult(result)
-		m.resultChan <- result
 		return
 	}
 
@@ -410,6 +440,9 @@ func (m *Manager) executeTask(task *Task) {
 		if execErr != nil {
 			result.Success = false
 			result.Error = execErr.Error()
+			// 保留已产出的进度（如触达回合上限时 runner 随错误返回的内容），
+			// 主 agent 能从 poll_task 里看到 partial_output 而不是白跑一场。
+			result.Output = output
 			task.SetStatus(TaskStatusFailed)
 		} else {
 			result.Success = true
@@ -421,18 +454,26 @@ func (m *Manager) executeTask(task *Task) {
 		result.Error = "Task timeout or cancelled"
 		task.SetStatus(TaskStatusCancelled)
 		subAgent.cancel()
+
+		// 给 runner 一点时间响应 ctx 取消，尽量回收部分输出；
+		// provider 不响应取消时最多多等 5s，避免占住并发槽。
+		select {
+		case <-done:
+			result.Output = output
+		case <-time.After(5 * time.Second):
+		}
 	}
 
 	result.Duration = time.Since(startTime)
 	m.storeResult(result)
-	m.resultChan <- result
 
 	// Clean up subagent
 	m.removeSubAgent(subAgent.id)
 }
 
-// createSubAgent creates a new subagent for a task
-func (m *Manager) createSubAgent(task *Task) (*SubAgent, error) {
+// createSubAgent creates a new subagent for a task.
+// cancelFn 是该任务执行 ctx 的取消函数，注入 SubAgent 供 cancel_task 中断执行。
+func (m *Manager) createSubAgent(task *Task, cancelFn context.CancelFunc) (*SubAgent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -474,6 +515,7 @@ Task ID: %s
 		depth:    task.Depth,
 		maxDepth: m.config.MaxDepth,
 		tools:    task.Tools,
+		cancelFn: cancelFn,
 		parentID: task.ParentID,
 		taskID:   task.ID,
 	}
@@ -543,7 +585,9 @@ func (s *SubAgent) Run(ctx context.Context, input string) (string, error) {
 
 	output, err := s.runner.RunConversation(ctx, input)
 	if err != nil {
-		return "", err
+		// 保留已产出的部分结果（如触达回合上限时 runner 随错误返回的
+		// lastContent），调用方在 err != nil 时也应检查 output。
+		return output, err
 	}
 
 	s.mu.Lock()
@@ -553,11 +597,16 @@ func (s *SubAgent) Run(ctx context.Context, input string) (string, error) {
 	return output, nil
 }
 
-// cancel marks the subagent as cancelled
+// cancel marks the subagent as cancelled and aborts its execution ctx.
+// cancelFn 可能为 nil（尚未开始执行），重复调用幂等。
 func (s *SubAgent) cancel() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.cancelled = true
+	cancelFn := s.cancelFn
+	s.mu.Unlock()
+	if cancelFn != nil {
+		cancelFn()
+	}
 }
 
 // storeResult stores a result
@@ -608,11 +657,15 @@ func (m *Manager) KillSubAgent(id string) error {
 	return nil
 }
 
-// WaitForResult waits for a task result with timeout
+// WaitForResult waits for a task result with timeout.
+// 只轮询 results map，不消费共享 resultChan：此前从 channel 读取时，
+// 若先到的是别的任务的结果会被永久丢弃（并发委托时结果丢失）。
 func (m *Manager) WaitForResult(taskID string, timeout time.Duration) (*Result, error) {
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-	for time.Now().Before(deadline) {
+	for {
 		m.mu.RLock()
 		result, exists := m.results[taskID]
 		m.mu.RUnlock()
@@ -621,22 +674,17 @@ func (m *Manager) WaitForResult(taskID string, timeout time.Duration) (*Result, 
 			return result, nil
 		}
 
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("timeout waiting for result")
+		}
+
 		select {
-		case result, ok := <-m.resultChan:
-			if !ok {
-				return nil, fmt.Errorf("result channel closed")
-			}
-			if result.TaskID == taskID {
-				return result, nil
-			}
 		case <-m.ctx.Done():
 			return nil, m.ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
 			// Check again
 		}
 	}
-
-	return nil, fmt.Errorf("timeout waiting for result")
 }
 
 // SpawnMultiple spawns multiple tasks and waits for all results
@@ -658,15 +706,15 @@ func (m *Manager) SpawnMultiple(tasks []struct {
 		mu.Unlock()
 	}
 
-	// Wait for all results
+	// Wait for all results：逐个按 taskID 等待（结果在 storeResult 里已落到
+	// results map），与到达顺序无关。
 	var results []Result
-	for range taskIDs {
-		select {
-		case result := <-m.resultChan:
-			results = append(results, *result)
-		case <-m.ctx.Done():
-			return results, m.ctx.Err()
+	for _, id := range taskIDs {
+		result, err := m.WaitForResult(id, m.config.Timeout)
+		if err != nil {
+			return results, err
 		}
+		results = append(results, *result)
 	}
 
 	return results, nil

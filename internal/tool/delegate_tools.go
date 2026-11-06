@@ -3,6 +3,8 @@ package tool
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/magicwubiao/go-magic/internal/subagent"
 	"github.com/magicwubiao/go-magic/pkg/utils"
@@ -254,6 +256,10 @@ func (t *PollTaskTool) buildTaskResponse(task *subagent.Task, result *subagent.R
 			resp["result"] = result.Output
 		} else {
 			resp["error"] = result.Error
+			// 失败/取消也可能带部分产出（触达回合上限、超时前已完成的进度）
+			if strings.TrimSpace(result.Output) != "" {
+				resp["partial_output"] = result.Output
+			}
 		}
 	} else {
 		switch task.GetStatus() {
@@ -261,7 +267,7 @@ func (t *PollTaskTool) buildTaskResponse(task *subagent.Task, result *subagent.R
 			resp["message"] = "Task is queued and waiting to start..."
 		case subagent.TaskStatusRunning:
 			if task.StartedAt != nil {
-				resp["message"] = fmt.Sprintf("Task is running for %s...", task.CreatedAt.Sub(*task.StartedAt).Round(60))
+				resp["message"] = fmt.Sprintf("Task is running for %s...", time.Since(*task.StartedAt).Round(time.Second))
 			} else {
 				resp["message"] = "Task is running..."
 			}
@@ -454,7 +460,7 @@ func (t *CancelTaskTool) Execute(ctx context.Context, params map[string]interfac
 		"task_id":   taskID,
 		"status":    "cancelled",
 		"message":   "Task has been cancelled",
-		"cancelled": "2006-01-02T15:04:05Z",
+		"cancelled": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 	}
 
 	if reason != "" {

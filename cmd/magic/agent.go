@@ -164,8 +164,9 @@ func runAgentSpawn(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Spawned task: %s\n", taskID)
 
-	// Wait for result
-	result, err := mgr.WaitForResult(taskID, subCfg.Timeout)
+	// Wait for result（比任务自身超时多留 30s：等待从 spawn 时刻起算，
+	// 排队时间也算在内，否则任务还没跑完等待就先超时了）
+	result, err := mgr.WaitForResult(taskID, subCfg.Timeout+30*time.Second)
 	if err != nil {
 		fmt.Printf("Error waiting for result: %v\n", err)
 		os.Exit(1)

@@ -537,6 +537,40 @@ type SubAgentConfig struct {
 	Timeout       time.Duration `json:"timeout"`
 }
 
+// UnmarshalJSON 兼容两种 timeout 写法：数字=秒、字符串=Go duration（如 "5m"）。
+// 此前裸 time.Duration 直解 JSON 期望纳秒，用户写 "timeout": 300 会被当成
+// 300 纳秒，子任务瞬间超时。
+func (c *SubAgentConfig) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		MaxConcurrent int             `json:"max_concurrent"`
+		MaxDepth      int             `json:"max_depth"`
+		Timeout       json.RawMessage `json:"timeout"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	c.MaxConcurrent = raw.MaxConcurrent
+	c.MaxDepth = raw.MaxDepth
+	if len(raw.Timeout) == 0 || string(raw.Timeout) == "null" {
+		return nil
+	}
+	var secs float64
+	if err := json.Unmarshal(raw.Timeout, &secs); err == nil {
+		c.Timeout = time.Duration(secs * float64(time.Second))
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw.Timeout, &s); err == nil {
+		d, perr := time.ParseDuration(s)
+		if perr != nil {
+			return fmt.Errorf("subagent.timeout: %w", perr)
+		}
+		c.Timeout = d
+		return nil
+	}
+	return fmt.Errorf("subagent.timeout must be seconds (number) or a duration string")
+}
+
 // VoiceConfig represents voice configuration (alias for voice.VoiceConfig)
 type VoiceConfig = voice.VoiceConfig
 

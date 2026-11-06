@@ -505,8 +505,9 @@ Your working directory is: %s
 	// 主 agent 可以把任务切分成子任务并行执行，各自独立消耗回合预算。
 	var subagentMgr *subagent.Manager
 	if prov != nil {
+		subCfg := buildSubagentConfig(cfg)
 		subagentMgr = subagent.NewManager(
-			buildSubagentConfig(cfg),
+			subCfg,
 			prov,
 			&subagentRegistryAdapter{registry: registry},
 			newSubagentRunner,
@@ -514,7 +515,7 @@ Your working directory is: %s
 		subagentMgr.Start()
 		registry.RegisterDelegationTools(subagentMgr)
 		log.Infof("[Subagent] Delegation tools registered (max_concurrent=%d, max_depth=%d)",
-			buildSubagentConfig(cfg).MaxConcurrent, buildSubagentConfig(cfg).MaxDepth)
+			subCfg.MaxConcurrent, subCfg.MaxDepth)
 	} else {
 		log.Warnf("[Subagent] No provider configured; delegate_task will not be available")
 	}
