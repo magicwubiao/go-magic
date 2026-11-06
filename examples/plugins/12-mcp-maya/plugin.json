@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "local-maya",
+  "version": "1.0.0",
+  "description": "Autodesk Maya MCP bridge — the server drives a running Maya through its Python command port on the same machine",
+  "author": {
+    "name": "go-magic"
+  },
+  "license": "MIT",
+  "keywords": ["example", "mcp", "stdio", "local", "3d", "dcc", "maya", "autodesk", "animation"],
+  "examples": [
+    "在 Maya 里摆一组三个几何体的静物，相机拉个特写，然后截一张视口图给我",
+    "把当前场景的灯光换成三点布光，再把选中的模型导成 FBX 放到桌面"
+  ]
+}

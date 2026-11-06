@@ -770,7 +770,7 @@ var catalog = []Connector{
 	},
 
 	// --- 这里刻意没有「本地软件桥」条目 ---
-	// Blender / Unity / Godot、Figma 桌面版、即时设计这些 MCP 的 server 侧没问题，
+	// Blender / Unity / Godot、Figma 桌面版、即时设计、FreeCAD、Maya 这些 MCP 的 server 侧没问题，
 	// 但真正干活的是**装在同一台机器上**的宿主软件（引擎 / 设计客户端 / 桥接插件）。
 	// go-magic 经常部署在服务器或另一台机器上，内置进目录就等于一条"点了必然连不上"
 	// 的条目——用户只会看到超时或空工具列表，无法自己判断是环境问题。
@@ -780,6 +780,8 @@ var catalog = []Connector{
 	//   examples/plugins/08-mcp-godot
 	//   examples/plugins/09-mcp-figma-desktop
 	//   examples/plugins/10-mcp-jsdesign
+	//   examples/plugins/11-mcp-freecad
+	//   examples/plugins/12-mcp-maya
 	// 要加回内置前先想清楚服务端部署场景。Unreal 也在这批里，但理由不同：它要
 	// UE 5.8+ 的内置 ModelContextProtocol 插件，且必须同时启用 All Toolsets
 	// （只开前者时 server 在跑、tools/list 却是空的）再勾 Auto Start Server，
