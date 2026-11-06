@@ -1288,3 +1288,85 @@ func copyUploadFile(src, dst string) error {
 	}
 	return nil
 }
+
+// materializedUploadsTTL 是工作目录里物化附件副本（<workDir>/.magic-uploads/）
+// 的保留时长。副本只是给沙箱内文件工具用的临时投影，但历史消息里的提示文本
+// 会引用这些路径，删太早会让"再处理一下刚才那张图"这类后续轮次扑空；完全不
+// 删又会在用户目录里无限堆积。7 天在"近期多轮仍可用"与"垃圾有界"之间取平衡；
+// 过期后权威件仍在 uploads/<session>/ 下，需要时重新上传或重新发送即可。
+const materializedUploadsTTL = 7 * 24 * time.Hour
+
+// sweepMaterializedCopies 对一组工作目录执行过期副本清理，返回删除的文件数。
+//
+// 只碰我们自己创建的 .magic-uploads/ 点目录（工作目录本身与用户文件不动）；
+// 同一目录可能出现多次（多个会话共用一个用户指定的工作目录），用 seen 去重。
+// 单个文件删除失败（Windows 上被占用等）只记日志，留给下一轮再试。
+func sweepMaterializedCopies(workDirs []string, ttl time.Duration, now time.Time) int {
+	if ttl <= 0 {
+		return 0
+	}
+	cutoff := now.Add(-ttl)
+	seen := make(map[string]bool, len(workDirs))
+	removed := 0
+	for _, workDir := range workDirs {
+		workDir = strings.TrimSpace(workDir)
+		if workDir == "" || seen[workDir] {
+			continue
+		}
+		seen[workDir] = true
+		attDir := filepath.Join(workDir, workdirAttachmentsDir)
+		entries, err := os.ReadDir(attDir)
+		if err != nil {
+			continue // 目录不存在 = 从未物化过，静默跳过
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			// copyUploadFile 用 temp+rename 落盘，mtime 即物化时刻。
+			if info.ModTime().After(cutoff) {
+				continue
+			}
+			target := filepath.Join(attDir, entry.Name())
+			if err := os.Remove(target); err != nil {
+				log.Warnf("[uploads] materialize sweep: remove %s failed: %v", target, err)
+				continue
+			}
+			removed++
+		}
+	}
+	return removed
+}
+
+// sweepMaterializedUploads 枚举全部会话的工作目录并清理其中的过期附件副本。
+func (s *Server) sweepMaterializedUploads(ttl time.Duration) {
+	if s.sessionStore == nil || ttl <= 0 {
+		return
+	}
+	sessions, err := s.sessionStore.ListSessions(context.Background(), "")
+	if err != nil {
+		log.Warnf("[uploads] materialize sweep: list sessions failed: %v", err)
+		return
+	}
+	dirs := make([]string, 0, len(sessions))
+	for _, sess := range sessions {
+		dirs = append(dirs, sess.WorkDir)
+	}
+	if removed := sweepMaterializedCopies(dirs, ttl, time.Now()); removed > 0 {
+		log.Infof("[uploads] materialize sweep: removed %d stale attachment copies (ttl=%s)", removed, ttl)
+	}
+}
+
+// materializeSweepLoop 启动即清一次，之后每天清一次过期副本。
+func (s *Server) materializeSweepLoop() {
+	s.sweepMaterializedUploads(materializedUploadsTTL)
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.sweepMaterializedUploads(materializedUploadsTTL)
+	}
+}

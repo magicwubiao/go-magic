@@ -825,6 +825,11 @@ Your working directory is: %s
 	// Start agent cleanup goroutine to prevent memory leaks
 	go s.agentCleanupLoop()
 
+	// 工作目录物化附件副本（<workDir>/.magic-uploads/）的过期清理：启动即扫
+	// 一次，之后每天一次（TTL 7 天，见 uploads.go 的 materializedUploadsTTL）。
+	// 没有这一步，发过的附件副本会在用户工作目录里无限堆积。
+	go s.materializeSweepLoop()
+
 	// Load Agent Plugins (OpenAI Agent Plugins 1.0.0 spec) and inject
 	// plugin skills / MCP tools into the skills manager and tool registry.
 	// Plugin-level failures are isolated and never block server startup.
