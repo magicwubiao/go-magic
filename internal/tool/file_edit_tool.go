@@ -324,6 +324,9 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 	if err := atomicWriteFile(absPath, []byte(newContent), fileMode); err != nil {
 		return nil, fmt.Errorf("failed to write file (mode=%v): %w", fileMode, err)
 	}
+	// file_edit 天然免疫丢失更新（old_content 必须精确匹配），但它的写入同样
+	// 会改变文件版本，必须登记租约，否则随后别人的 write_file 检测不到这次改动。
+	noteFileWritten(ctx, absPath)
 
 	result := map[string]interface{}{
 		"path":           absPath,

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -92,5 +93,39 @@ func TestTaskResponseIncludesUnixTimestamps(t *testing.T) {
 		if _, exists := presp[key]; exists {
 			t.Fatalf("pending 任务不应输出 %s", key)
 		}
+	}
+}
+
+// TestFailedTaskResponseCarriesWorkspaceHint 锁死"failed ≠ 没干活"的提示。
+// 实测场景：子代理改完文件、跑过测试，只在最后写摘要时上游断流，任务状态却是
+// failed。若响应里只有 error，调用方很可能直接重派，白烧 token 并覆盖正确实现。
+func TestFailedTaskResponseCarriesWorkspaceHint(t *testing.T) {
+	created := time.Now()
+	task := &subagent.Task{ID: "task-fail", Status: subagent.TaskStatusFailed, CreatedAt: created}
+	res := &subagent.Result{
+		TaskID:  task.ID,
+		Success: false,
+		Error:   "stream operation aborted: context deadline exceeded",
+		Output:  "[aborted run salvage] turns=3 tool_calls=9",
+	}
+
+	resp := (&PollTaskTool{}).buildTaskResponse(task, res)
+
+	hint, ok := resp["hint"].(string)
+	if !ok {
+		t.Fatalf("失败任务必须带 hint，实际响应：%#v", resp)
+	}
+	if !strings.Contains(hint, "git status") || !strings.Contains(hint, "partial_output") {
+		t.Fatalf("hint 应同时指向 partial_output 与工作区检查，实际：%q", hint)
+	}
+	if resp["partial_output"] != res.Output {
+		t.Fatalf("partial_output 未透传：%#v", resp["partial_output"])
+	}
+
+	// 成功任务不该出现这条提示（否则等于每天喊狼来了）
+	okTask := &subagent.Task{ID: "task-ok", Status: subagent.TaskStatusCompleted, CreatedAt: created}
+	okResp := (&PollTaskTool{}).buildTaskResponse(okTask, &subagent.Result{TaskID: okTask.ID, Success: true, Output: "done"})
+	if _, exists := okResp["hint"]; exists {
+		t.Fatalf("completed 任务不应输出 hint：%#v", okResp["hint"])
 	}
 }

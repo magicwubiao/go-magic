@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/pkg/types"
+	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
 // ToolRegistry is an interface for tool registry to avoid circular imports
@@ -396,6 +397,10 @@ func (m *Manager) executeTask(task *Task) {
 	ctx, cancel := context.WithTimeout(m.ctx, taskTimeout(task, m.config.Timeout))
 	defer cancel()
 
+	// 把 task ID 注入 ctx：并行子代理可能写同一个文件，文件工具靠这个标识
+	// 区分写者，从而拦截"整文件覆盖丢掉别人刚写的内容"（见 tool.write_conflict）。
+	ctx = utils.WithWriterID(ctx, task.ID)
+
 	// Update task status
 	task.SetStatus(TaskStatusRunning)
 
@@ -493,7 +498,12 @@ func (m *Manager) createSubAgent(task *Task, cancelFn context.CancelFunc) (*SubA
 Task: %s
 Depth: %d/%d
 Task ID: %s
-%s`,
+%s
+File editing discipline: other subagents may be running in parallel in this same workspace.
+Prefer file_edit (replace/insert) for targeted changes — it matches exact text and fails loudly
+instead of guessing. write_file replaces the whole file and is refused if the file changed on
+disk since you last read it (lost-update protection): if that happens, call read_file on the
+path and retry.`,
 		name,
 		task.Description,
 		task.Depth,

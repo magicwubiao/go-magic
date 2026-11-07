@@ -169,7 +169,11 @@ func NewPollTaskTool(manager *subagent.Manager) *PollTaskTool {
 			`Poll for the status and result of a delegated sub-agent task.
 Use the task_id returned by delegate_task to check progress and retrieve results.
 Timestamps come in pairs: created_at/started_at/completed_at are UTC RFC3339 strings,
-and the matching *_unix fields are epoch seconds — prefer those for sorting or cross-source comparison.`,
+and the matching *_unix fields are epoch seconds — prefer those for sorting or cross-source comparison.
+IMPORTANT: a failed or cancelled task does NOT mean no work happened. A subagent may have
+already edited files and only died while writing its final summary — partial_output carries
+salvaged evidence of what it did. Before re-delegating or reverting, inspect the workspace
+(git status / git diff); re-running blind can waste tokens and overwrite an already-correct fix.`,
 			map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -285,6 +289,14 @@ func (t *PollTaskTool) buildTaskResponse(task *subagent.Task, result *subagent.R
 				resp["message"] = "Task is running..."
 			}
 		}
+	}
+
+	// 失败/取消不等于没干活：子代理常把活干完了，只在最后生成回传摘要时断流。
+	// 明写一句提示，避免调用方只看 status 就重派一遍（白烧 token，还可能覆盖正确实现）。
+	switch task.GetStatus() {
+	case subagent.TaskStatusFailed, subagent.TaskStatusCancelled:
+		resp["hint"] = "Task did not complete, but its work may already be on disk. " +
+			"Read partial_output, then check the workspace (git status / git diff) before re-delegating or reverting."
 	}
 
 	return resp

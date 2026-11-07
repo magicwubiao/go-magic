@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/magicwubiao/go-magic/internal/provider"
 	"github.com/magicwubiao/go-magic/internal/subagent"
@@ -325,4 +326,117 @@ func (p *plainProvider) Name() string { return "plain" }
 
 func (p *plainProvider) Chat(_ context.Context, _ []provider.Message) (*provider.ChatResponse, error) {
 	return &provider.ChatResponse{Content: p.content}, nil
+}
+
+// abortingProvider 按序返回若干响应，随后让下一次请求失败，模拟上游断流。
+type abortingProvider struct {
+	responses []*provider.ChatResponse
+	idx       int
+	err       error
+}
+
+func (p *abortingProvider) Name() string { return "aborting" }
+
+func (p *abortingProvider) Chat(_ context.Context, _ []provider.Message) (*provider.ChatResponse, error) {
+	return nil, errors.New("Chat should not be used when tools are available")
+}
+
+func (p *abortingProvider) ChatWithTools(_ context.Context, _ []provider.Message, _ []map[string]interface{}) (*provider.ChatResponse, error) {
+	if p.idx >= len(p.responses) {
+		return nil, p.err
+	}
+	resp := p.responses[p.idx]
+	p.idx++
+	return resp, nil
+}
+
+// TestRunConversationStreamAbortKeepsWorkEvidence 复现真实故障：子代理已经改完
+// 文件、跑完测试，只在生成最终回传摘要时上游断流（stream operation aborted:
+// context deadline exceeded）。此时任务状态是 failed，但工作成果完整落盘。
+//
+// 若中断时只返回空字符串，poll_task 的 partial_output 会是空的，调用方只看
+// status 就会重派一遍——白烧 token，还可能覆盖掉已经正确的实现。这个测试锁死：
+// 中断返回的 output 必须带上"做过了什么"的证据。
+func TestRunConversationStreamAbortKeepsWorkEvidence(t *testing.T) {
+	registry := tool.NewRegistry()
+	echo := &echoTool{}
+	registry.Register(echo)
+
+	prov := &abortingProvider{
+		responses: []*provider.ChatResponse{
+			{
+				Content:   "改 price.go：Total 补上 quantity 相乘",
+				ToolCalls: []types.ToolCall{{ID: "c1", Name: "echo", Arguments: map[string]interface{}{"msg": "go test ./cart/..."}}},
+			},
+			{
+				Content:   "补充表驱动测试",
+				ToolCalls: []types.ToolCall{{ID: "c2", Name: "echo", Arguments: map[string]interface{}{"msg": "git diff"}}},
+			},
+		},
+		err: errors.New("stream operation aborted: context deadline exceeded"),
+	}
+
+	runner := newTestRunner(prov, &testAdapter{registry: registry}, registry.ListWithSchemas())
+	out, err := runner.RunConversation(context.Background(), "修 cart 的 Total bug")
+
+	if err == nil {
+		t.Fatal("expected an error when the upstream stream aborts")
+	}
+	if !strings.Contains(err.Error(), "stream operation aborted") {
+		t.Fatalf("expected upstream error to be preserved, got: %v", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Fatal("中断时必须回传抢救内容，否则调用方无法判断改动是否已落盘")
+	}
+
+	for _, want := range []string{
+		"aborted run salvage",
+		"tool_calls=2",
+		"does NOT mean nothing happened", // 明确提示"失败≠没干活"
+		"改 price.go",                     // 中断时最后一轮助手的说明文字被保留
+		"补充表驱动测试",                        // 且是"最后"那段，不是更早那段
+		"echo:go test ./cart/...",        // 最近工具输出（已执行过的动作）
+		"echo:git diff",
+		"echo", // 工具名标注
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("抢救内容缺少 %q，实际输出：\n%s", want, out)
+		}
+	}
+
+	if len(echo.calls) != 2 {
+		t.Fatalf("两个工具调用都应已执行，实际 %d", len(echo.calls))
+	}
+}
+
+// TestSalvageAbortedRunTruncatesOnRuneBoundary 保证截断按 rune 进行：
+// 按字节切会把中文劈成乱码，回传给主 agent 后无法阅读。
+func TestSalvageAbortedRunTruncatesOnRuneBoundary(t *testing.T) {
+	longCN := strings.Repeat("多件商品少收钱，必须乘上数量。", 200)
+	messages := []provider.Message{
+		{Role: "assistant", Content: "写测试", ToolCalls: []types.ToolCall{{ID: "x", Name: "write_file"}}},
+		{Role: "tool", ToolCallID: "x", Content: longCN},
+	}
+
+	out := salvageAbortedRun(messages, map[string]string{"x": "write_file"}, "总结一下", 3, 1)
+	if !utf8.ValidString(out) {
+		t.Fatal("截断后产生了非法 UTF-8（按字节截断的典型症状）")
+	}
+	if strings.ContainsRune(out, '\uFFFD') {
+		t.Fatal("截断产生了替换字符，说明切在了多字节字符中间")
+	}
+	if !strings.Contains(out, "[truncated, original") {
+		t.Fatalf("超长工具输出应被截断并标注，实际输出：\n%s", out)
+	}
+	if len([]rune(out)) > salvageMaxNotes*salvageNoteRunes+salvageMaxToolResults*salvageToolResultRunes+800 {
+		t.Fatalf("抢救内容超出预算：%d runes", len([]rune(out)))
+	}
+}
+
+// TestSalvageAbortedRunEmptyWhenNothingHappened 保证"确实什么都没做"时返回空串，
+// 不伪造一段看似有产出的文本。
+func TestSalvageAbortedRunEmptyWhenNothingHappened(t *testing.T) {
+	if out := salvageAbortedRun(nil, nil, "", 0, 0); out != "" {
+		t.Fatalf("无任何内容时应返回空串，实际：%q", out)
+	}
 }

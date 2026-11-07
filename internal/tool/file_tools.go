@@ -331,6 +331,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
+	// 记录"该写者已看到这个版本"，供后续 write_file 的丢弃更新检测使用。
+	// 放在偏移越界判断之前：即使本次只读到空窗口，看到的仍是这个文件版本。
+	noteFileSeen(ctx, absPath)
+
 	// If offset is beyond the file, return a clear message instead of
 	// silently falling back to the beginning of the file.
 	if offset > 0 && offset >= totalLines {
@@ -451,7 +455,10 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write or create a file with the given content"
+	return "Write or create a file with the given content. " +
+		"Replaces the WHOLE file. If the file changed on disk since you last read or wrote it, " +
+		"the write is refused (lost-update protection) — read_file the path and retry, or use file_edit " +
+		"for a targeted change that matches exact text."
 }
 
 func (t *WriteFileTool) Schema() map[string]interface{} {
@@ -495,6 +502,18 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	security := FileSecurityFromContext(ctx)
 
 	appendMode := paramBool(args, "append", false)
+
+	// 整文件覆盖：与 file_edit 共用同一把按路径的锁，把"检查冲突 + 写入"变成
+	// 一个临界区，否则两个并发 write_file 之间的检查和写入仍会互相穿透。
+	// append 是纯追加，不会抹掉别人的改动，不需要冲突检查。
+	if !appendMode {
+		unlock := lockFileEditPath(absPath)
+		defer unlock()
+		if cerr := checkWriteConflict(ctx, absPath); cerr != nil {
+			return nil, cerr
+		}
+	}
+
 	// 新建文件使用 0644（常规用户文件的默认权限）。security.DefaultFileMode 是
 	// 面向私有数据（如 todo 存储）的 0600，不适合普通工作区文件，这里不再沿用。
 	// 已存在的文件沿用其原有权限（见下方 Stat 分支）。
@@ -553,6 +572,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat written file: %w", err)
 	}
+
+	// 更新租约与"本写者已见版本"，否则本写者紧接着的下一次覆盖会被自己误判。
+	noteFileWritten(ctx, absPath)
 
 	lineCount := 0
 	if content != "" {

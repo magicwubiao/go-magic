@@ -22,6 +22,15 @@ const subAgentMaxTurns = 20
 // 并发槽里运行，一个卡死的工具会占住整个槽位。
 const subAgentToolTimeout = 120 * time.Second
 
+// 中断抢救内容的规模上限：主 agent 的上下文有限，这里只留"够判断工作是否
+// 已经落盘"的证据，不做完整回放。
+const (
+	salvageMaxNotes        = 2
+	salvageNoteRunes       = 400
+	salvageMaxToolResults  = 3
+	salvageToolResultRunes = 1200
+)
+
 // simpleAgentRunner 是 subagent.AgentRunner 的实现：带完整工具循环的子代理。
 //
 // 早期实现只调一次 provider.Chat 就返回，既没把 toolsSchema 传给模型，也没有
@@ -56,18 +65,28 @@ func (r *simpleAgentRunner) RunConversation(ctx context.Context, input string) (
 	}
 
 	var lastContent string
+	// toolNames 记下 tool_call_id → 工具名，用于中断时标注"这一步做了什么"。
+	// provider 回喂的 tool 消息本身不含工具名。
+	toolNames := make(map[string]string)
+	toolCalls := 0
 
 	for turn := 0; turn < subAgentMaxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
-			return "", fmt.Errorf("subagent aborted after %d turn(s): %w", turn, err)
+			return salvageAbortedRun(messages, toolNames, lastContent, turn, toolCalls),
+				fmt.Errorf("subagent aborted after %d turn(s): %w", turn, err)
 		}
 
 		resp, err := toolCaller.ChatWithTools(ctx, messages, r.toolsSchema)
 		if err != nil {
-			return "", fmt.Errorf("provider chat failed (turn %d): %w", turn, err)
+			// 上游断流/超时最常见的就是"活全干完了、只差最后一段总结"。
+			// 此时若只回一句错误，调用方拿不到任何"改动已落盘"的信号，
+			// 重派一次就是白烧 token，还可能覆盖掉正确实现。
+			return salvageAbortedRun(messages, toolNames, lastContent, turn, toolCalls),
+				fmt.Errorf("provider chat failed (turn %d): %w", turn, err)
 		}
 		if resp == nil {
-			return "", fmt.Errorf("empty response from provider (turn %d)", turn)
+			return salvageAbortedRun(messages, toolNames, lastContent, turn, toolCalls),
+				fmt.Errorf("empty response from provider (turn %d)", turn)
 		}
 
 		// 保留已有内容：模型可能在调用工具的同时输出一段说明文字。
@@ -93,6 +112,10 @@ func (r *simpleAgentRunner) RunConversation(ctx context.Context, input string) (
 
 		for _, tc := range resp.ToolCalls {
 			output := r.executeTool(ctx, tc)
+			if name := tc.GetToolName(); name != "" && tc.ID != "" {
+				toolNames[tc.ID] = name
+			}
+			toolCalls++
 			messages = append(messages, provider.Message{
 				Role:       "tool",
 				Content:    output,
@@ -107,6 +130,93 @@ func (r *simpleAgentRunner) RunConversation(ctx context.Context, input string) (
 		return lastContent, fmt.Errorf("subagent exceeded maximum turns (%d)", subAgentMaxTurns)
 	}
 	return "", fmt.Errorf("subagent exceeded maximum turns (%d)", subAgentMaxTurns)
+}
+
+// salvageAbortedRun 在子代理因上游断流 / ctx 到期而中断时，拼出一段"中断前
+// 已经发生了什么"的摘要，随错误一起返回给 Manager（最终出现在 poll_task 的
+// partial_output 里）。
+//
+// 为什么需要它：任务状态 failed 不等于工作没做。实测过一个真实场景——子代理
+// 已经改完源文件、写完表驱动测试、跑过 go test、执行了 git add -N，只在最后
+// 生成回传摘要时被上游断掉。此时 output 为空，调用方只看 status 就会判定"白跑
+// 了"，重派一遍既烧 token，又可能覆盖掉已经正确的实现。
+//
+// 因此这里不强求还原完整结果，只给出足以让调用方决定"先去看一眼工作区"的证据：
+// 最近两轮助手的说明文字 + 最近几次工具调用的名称与输出片段。
+// 完全没有内容可抢救时返回空串，避免伪造一段看似有产出的文本。
+func salvageAbortedRun(messages []provider.Message, toolNames map[string]string, lastContent string, turns, toolCalls int) string {
+	lastContent = strings.TrimSpace(lastContent)
+	if lastContent == "" && toolCalls == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[aborted run salvage] turns=%d tool_calls=%d — upstream stream ended before the final answer.\n", turns, toolCalls)
+	b.WriteString("NOTE: a failed task does NOT mean nothing happened. Files may already be modified on disk.\n")
+	b.WriteString("Inspect the workspace (git status / git diff) before re-delegating or reverting; the work below may be complete.\n")
+
+	if lastContent != "" {
+		// 助手在每轮工具调用旁写的说明往往就是"我改了什么"的线索，
+		// 取最近两条即可，再多就挤占工具输出的预算。
+		var notes []string
+		for _, msg := range messages {
+			if msg.Role != "assistant" {
+				continue
+			}
+			if c := strings.TrimSpace(msg.Content); c != "" {
+				notes = append(notes, c)
+			}
+		}
+		// lastContent 可能来自本轮尚未写回 messages 的响应，补齐但不重复。
+		if len(notes) == 0 || notes[len(notes)-1] != lastContent {
+			notes = append(notes, lastContent)
+		}
+		if len(notes) > salvageMaxNotes {
+			notes = notes[len(notes)-salvageMaxNotes:]
+		}
+		fmt.Fprintf(&b, "\n--- last %d assistant note(s), oldest first ---\n", len(notes))
+		for _, n := range notes {
+			fmt.Fprintf(&b, "- %s\n", clipRunes(n, salvageNoteRunes))
+		}
+	}
+
+	// 取最后 N 条工具输出，按时间正序呈现：越靠后越接近"最后做了什么"。
+	type toolEntry struct{ name, output string }
+	var entries []toolEntry
+	for _, msg := range messages {
+		if msg.Role != "tool" || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		name := toolNames[msg.ToolCallID]
+		if name == "" {
+			name = "unknown"
+		}
+		entries = append(entries, toolEntry{name: name, output: msg.Content})
+	}
+	if len(entries) > salvageMaxToolResults {
+		entries = entries[len(entries)-salvageMaxToolResults:]
+	}
+	if len(entries) > 0 {
+		fmt.Fprintf(&b, "\n--- last %d tool result(s), oldest first (truncated) ---\n", len(entries))
+		for i, e := range entries {
+			fmt.Fprintf(&b, "[%d] %s\n%s\n", i+1, e.name, clipRunes(strings.TrimSpace(e.output), salvageToolResultRunes))
+		}
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// clipRunes 按 rune 截断并标注省略位置。
+// 不能用 s[:n]：中文按字节切会把多字节字符劈成乱码。
+func clipRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + fmt.Sprintf("\n…[truncated, original %d runes]", len(runes))
 }
 
 // executeTool 执行一次工具调用并把结果序列化为字符串。
