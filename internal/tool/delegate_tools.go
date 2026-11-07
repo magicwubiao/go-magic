@@ -10,6 +10,13 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/utils"
 )
 
+// stampTime 输出真正的 UTC RFC3339 时间串。
+// 注意：不能用 t.Format("2006-01-02T15:04:05Z") —— 布局里的 Z 是字面量，
+// 会把本地时间（如 GMT+8）原样贴上 "Z"，产出偏移 8 小时的假 UTC 时间。
+func stampTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
+}
+
 // DelegateTaskTool allows spawning isolated sub-agents for complex subtasks
 type DelegateTaskTool struct {
 	baseTool *BaseTool
@@ -160,7 +167,9 @@ func NewPollTaskTool(manager *subagent.Manager) *PollTaskTool {
 		baseTool: NewBaseTool(
 			"poll_task",
 			`Poll for the status and result of a delegated sub-agent task.
-Use the task_id returned by delegate_task to check progress and retrieve results.`,
+Use the task_id returned by delegate_task to check progress and retrieve results.
+Timestamps come in pairs: created_at/started_at/completed_at are UTC RFC3339 strings,
+and the matching *_unix fields are epoch seconds — prefer those for sorting or cross-source comparison.`,
 			map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -232,17 +241,21 @@ func (t *PollTaskTool) Execute(ctx context.Context, params map[string]interface{
 
 func (t *PollTaskTool) buildTaskResponse(task *subagent.Task, result *subagent.Result) map[string]interface{} {
 	resp := map[string]interface{}{
-		"task_id":    task.ID,
-		"status":     task.GetStatus(),
-		"created_at": task.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"task_id": task.ID,
+		"status":  task.GetStatus(),
+		// created_at 是给人看的 UTC RFC3339；需要排序/对账时用 created_at_unix（秒级 epoch，无时区歧义）
+		"created_at":      stampTime(task.CreatedAt),
+		"created_at_unix": task.CreatedAt.Unix(),
 	}
 
 	if task.StartedAt != nil {
-		resp["started_at"] = task.StartedAt.Format("2006-01-02T15:04:05Z")
+		resp["started_at"] = stampTime(*task.StartedAt)
+		resp["started_at_unix"] = task.StartedAt.Unix()
 	}
 
 	if task.CompletedAt != nil {
-		resp["completed_at"] = task.CompletedAt.Format("2006-01-02T15:04:05Z")
+		resp["completed_at"] = stampTime(*task.CompletedAt)
+		resp["completed_at_unix"] = task.CompletedAt.Unix()
 	}
 
 	if task.ParentID != "" {
@@ -359,18 +372,21 @@ func (t *ListTasksTool) Execute(ctx context.Context, params map[string]interface
 		}
 
 		taskInfo := map[string]interface{}{
-			"task_id":     task.ID,
-			"status":      task.GetStatus(),
-			"description": utils.Truncate(task.Description, 100),
-			"created_at":  task.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"task_id":         task.ID,
+			"status":          task.GetStatus(),
+			"description":     utils.Truncate(task.Description, 100),
+			"created_at":      stampTime(task.CreatedAt),
+			"created_at_unix": task.CreatedAt.Unix(),
 		}
 
 		if task.StartedAt != nil {
-			taskInfo["started_at"] = task.StartedAt.Format("2006-01-02T15:04:05Z")
+			taskInfo["started_at"] = stampTime(*task.StartedAt)
+			taskInfo["started_at_unix"] = task.StartedAt.Unix()
 		}
 
 		if task.CompletedAt != nil {
-			taskInfo["completed_at"] = task.CompletedAt.Format("2006-01-02T15:04:05Z")
+			taskInfo["completed_at"] = stampTime(*task.CompletedAt)
+			taskInfo["completed_at_unix"] = task.CompletedAt.Unix()
 		}
 
 		if task.ParentID != "" {
@@ -456,11 +472,13 @@ func (t *CancelTaskTool) Execute(ctx context.Context, params map[string]interfac
 		return nil, err
 	}
 
+	now := time.Now()
 	resp := map[string]interface{}{
-		"task_id":   taskID,
-		"status":    "cancelled",
-		"message":   "Task has been cancelled",
-		"cancelled": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		"task_id":        taskID,
+		"status":         "cancelled",
+		"message":        "Task has been cancelled",
+		"cancelled":      stampTime(now),
+		"cancelled_unix": now.Unix(),
 	}
 
 	if reason != "" {
