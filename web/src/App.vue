@@ -33,18 +33,10 @@
                 :value="activeKey"
                 @update:value="handleMenuClick"
               />
-              <!-- 底部"手机扫码访问"+"设置"：一行放下，扫码入口只占一个图标（参照
+              <!-- 底部"设置"+"手机扫码访问"：一行放下，设置在左、扫码图标在右（参照
                    WorkBuddy 底栏右角的图标形态），不整行占位；侧边栏收起时两图标上下排 -->
               <div class="sider-footer">
                 <div class="footer-actions" :class="{ collapsed: siderCollapsed }">
-                  <n-popover trigger="click" placement="top-end" :show-arrow="false">
-                    <template #trigger>
-                      <div class="footer-icon" :title="t('nav.mobileAccess')">
-                        <n-icon size="18"><phone-portrait-outline /></n-icon>
-                      </div>
-                    </template>
-                    <MobileAccessCard />
-                  </n-popover>
                   <!-- 统一改为点击弹出（hover 误触频繁，点击意图更明确） -->
                   <n-dropdown
                     placement="top-start"
@@ -57,6 +49,14 @@
                       <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.settings') }}</span>
                     </div>
                   </n-dropdown>
+                  <n-popover trigger="click" placement="top-end" :show-arrow="false">
+                    <template #trigger>
+                      <div class="footer-icon" :title="t('nav.mobileAccess')">
+                        <n-icon size="18"><phone-portrait-outline /></n-icon>
+                      </div>
+                    </template>
+                    <MobileAccessCard />
+                  </n-popover>
                 </div>
               </div>
             </div>
