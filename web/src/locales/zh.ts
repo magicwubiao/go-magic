@@ -1466,6 +1466,11 @@ export default {
     scheduleUpdated: '定时推送已更新',
     scheduleRemoved: '定时推送已删除',
     scheduledPush: '定时推送',
+    presetDaily9: '每天 9:00',
+    presetWorkday830: '工作日 8:30',
+    presetMonWedFri10: '周一三五 10:00',
+    presetFriday18: '周五 18:00',
+    presetEvery30min: '每 30 分钟',
   },
   profiles: {
     title: '分身',

@@ -1462,6 +1462,11 @@ export default {
     scheduleUpdated: 'Schedule updated',
     scheduleRemoved: 'Schedule removed',
     scheduledPush: 'Scheduled push',
+    presetDaily9: 'Daily 9:00',
+    presetWorkday830: 'Weekdays 8:30',
+    presetMonWedFri10: 'Mon/Wed/Fri 10:00',
+    presetFriday18: 'Friday 18:00',
+    presetEvery30min: 'Every 30 min',
   },
   profiles: {
     title: 'Profiles',

@@ -1066,6 +1066,19 @@
             <n-input v-model:value="scheduleForm.schedule" placeholder="0 9 * * *" />
           </n-form-item-gi>
         </n-grid>
+        <div class="preset-chips">
+          <n-tag
+            v-for="p in schedulePresets"
+            :key="p.value"
+            size="small"
+            round
+            :type="scheduleForm.schedule === p.value ? 'primary' : 'default'"
+            class="preset-chip"
+            @click="applySchedulePreset(p)"
+          >
+            {{ p.label }}
+          </n-tag>
+        </div>
         <n-form-item :label="t('rooms.schedulePrompt')">
           <n-input
             v-model:value="scheduleForm.prompt"
@@ -2173,6 +2186,23 @@ const scheduleForm = reactive({
 
 /** Schedules of the selected room, always an array (old rooms have none). */
 const roomSchedules = computed<RoomSchedule[]>(() => activeRoom.value?.schedules || [])
+
+/** Built-in cron presets (常用表达式). Labels double as the default name. */
+const schedulePresets = computed(() => [
+  { label: t('rooms.presetDaily9'), value: '0 9 * * *' },
+  { label: t('rooms.presetWorkday830'), value: '30 8 * * 1-5' },
+  { label: t('rooms.presetMonWedFri10'), value: '0 10 * * 1,3,5' },
+  { label: t('rooms.presetFriday18'), value: '0 18 * * 5' },
+  { label: t('rooms.presetEvery30min'), value: '*/30 * * * *' },
+])
+
+/** One click fills the cron; a blank name inherits the preset's label. */
+function applySchedulePreset(p: { label: string; value: string }) {
+  scheduleForm.schedule = p.value
+  if (!scheduleForm.name.trim()) {
+    scheduleForm.name = p.label
+  }
+}
 
 function openSchedules() {
   showSchedules.value = true
@@ -3744,6 +3774,17 @@ async function loadCandidates() {
   font-size: 12px;
   flex: 1;
   min-width: 0;
+}
+
+.preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 12px;
+}
+
+.preset-chip {
+  cursor: pointer;
 }
 
 .schedule-list {
