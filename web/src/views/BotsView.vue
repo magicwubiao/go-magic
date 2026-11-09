@@ -515,6 +515,13 @@
             </n-tag>
           </div>
           <n-space :size="6" align="center" class="chat-actions">
+            <n-button quaternary size="small" :title="t('rooms.notes')" @click="openNotesPanel">
+              <template #icon><n-icon><DocumentOutline /></n-icon></template>
+            </n-button>
+            <n-button quaternary size="small" :title="t('rooms.schedules')" @click="openSchedules">
+              <template #icon><n-icon><TimeOutline /></n-icon></template>
+              <span v-if="activeRoom.schedules && activeRoom.schedules.length" class="schedule-badge">{{ activeRoom.schedules.length }}</span>
+            </n-button>
             <n-button quaternary size="small" @click="openRoomEdit">
               <template #icon><n-icon><CreateOutline /></n-icon></template>
             </n-button>
@@ -945,6 +952,20 @@
               </template>
             </div>
           </n-form-item>
+          <n-form-item :label="t('rooms.host')">
+            <n-select
+              v-model:value="roomForm.host"
+              :options="roomHostOptions"
+              clearable
+              :placeholder="t('rooms.hostPlaceholder')"
+            />
+          </n-form-item>
+          <n-form-item :label="t('rooms.autoRoute')">
+            <div class="switch-row">
+              <n-switch v-model:value="roomForm.auto_route" />
+              <n-text depth="3" class="switch-hint">{{ t('rooms.autoRouteHint') }}</n-text>
+            </div>
+          </n-form-item>
           <n-grid :cols="2" :x-gap="12">
             <n-form-item-gi :label="t('rooms.maxRounds')">
               <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
@@ -972,6 +993,106 @@
           <n-button @click="closeRoomEditor">{{ t('common.cancel') }}</n-button>
           <n-button type="primary" :loading="roomSaving" @click="saveRoomEditor">
             {{ editingRoomId ? t('common.save') : t('common.create') }}
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- ========== Room notes (群共享笔记) ========== -->
+    <n-modal v-model:show="showNotesPanel" preset="card" class="modal-responsive" style="width: 620px; max-width: 96vw;">
+      <template #header>{{ t('rooms.notesTitle', { name: activeRoom?.name || '' }) }}</template>
+      <n-spin :show="roomsStore.notesLoading">
+        <n-input
+          v-model:value="notesDraft"
+          type="textarea"
+          :autosize="{ minRows: 10, maxRows: 20 }"
+          :placeholder="t('rooms.notesPlaceholder')"
+        />
+      </n-spin>
+      <template #action>
+        <div class="notes-actions">
+          <n-text depth="3" class="notes-hint">{{ t('rooms.notesHint') }}</n-text>
+          <n-button type="primary" :loading="roomsStore.notesSaving" :disabled="roomsStore.notesLoading" @click="saveRoomNotes">
+            {{ t('common.save') }}
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- ========== Room schedules (群聊定时推送) ========== -->
+    <n-modal v-model:show="showSchedules" preset="card" class="modal-responsive" style="width: 640px; max-width: 96vw;">
+      <template #header>{{ t('rooms.schedulesTitle', { name: activeRoom?.name || '' }) }}</template>
+      <div class="schedule-list">
+        <n-empty v-if="!roomSchedules.length" size="small" :description="t('rooms.noSchedules')" />
+        <div v-for="sc in roomSchedules" :key="sc.id" class="schedule-row">
+          <div class="schedule-main">
+            <div class="schedule-name">
+              <span class="schedule-label">{{ sc.name || sc.prompt }}</span>
+              <n-tag size="tiny" :bordered="false" :type="sc.enabled ? 'success' : 'default'">
+                {{ sc.enabled ? t('rooms.scheduleEnabled') : t('rooms.schedulePaused') }}
+              </n-tag>
+              <span v-if="sc.target" class="schedule-target">→ {{ sc.target }}</span>
+            </div>
+            <div class="schedule-meta">
+              <code>{{ sc.schedule }}</code>
+              <span v-if="sc.last_run">{{ t('rooms.scheduleLastRun') }} {{ roomFormatTime(sc.last_run) }}</span>
+              <span v-if="sc.last_status" class="schedule-status" :class="{ failed: sc.last_status.startsWith('failed') }">{{ sc.last_status }}</span>
+            </div>
+            <div v-if="sc.last_error" class="schedule-error">{{ sc.last_error }}</div>
+          </div>
+          <n-space :size="4" align="center">
+            <n-switch size="small" :value="sc.enabled" @update:value="(v: boolean) => toggleSchedule(sc, v)" />
+            <n-button quaternary size="tiny" :title="t('common.edit')" @click="startEditSchedule(sc)">
+              <template #icon><n-icon><CreateOutline /></n-icon></template>
+            </n-button>
+            <n-popconfirm @positive-click="removeSchedule(sc.id)">
+              <template #trigger>
+                <n-button quaternary size="tiny" type="error">
+                  <template #icon><n-icon><TrashOutline /></n-icon></template>
+                </n-button>
+              </template>
+              {{ t('rooms.confirmDeleteSchedule') }}
+            </n-popconfirm>
+          </n-space>
+        </div>
+      </div>
+      <n-divider style="margin: 14px 0;" />
+      <n-form label-placement="top">
+        <n-grid :cols="2" :x-gap="12">
+          <n-form-item-gi :label="t('rooms.scheduleName')">
+            <n-input v-model:value="scheduleForm.name" :placeholder="t('rooms.scheduleNamePlaceholder')" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="t('rooms.scheduleCron')">
+            <n-input v-model:value="scheduleForm.schedule" placeholder="0 9 * * *" />
+          </n-form-item-gi>
+        </n-grid>
+        <n-form-item :label="t('rooms.schedulePrompt')">
+          <n-input
+            v-model:value="scheduleForm.prompt"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            :placeholder="t('rooms.schedulePromptPlaceholder')"
+          />
+        </n-form-item>
+        <n-form-item :label="t('rooms.scheduleTarget')">
+          <n-select
+            v-model:value="scheduleForm.target"
+            :options="activeRoomMemberOptions"
+            clearable
+            :placeholder="t('rooms.scheduleTargetPlaceholder')"
+          />
+        </n-form-item>
+      </n-form>
+      <template #action>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <n-button v-if="editingScheduleId" @click="resetScheduleForm">{{ t('common.cancel') }}</n-button>
+          <n-button
+            type="primary"
+            :loading="scheduleSaving"
+            :disabled="!scheduleForm.schedule.trim() || !scheduleForm.prompt.trim()"
+            @click="saveSchedule"
+          >
+            {{ editingScheduleId ? t('common.save') : t('common.add') }}
           </n-button>
         </div>
       </template>
@@ -1007,7 +1128,7 @@ import { useModelsStore } from '@/stores/models'
 import { useRoomsStore } from '@/stores/rooms'
 import type { Bot, BotRoutine, BotMessage, BotMessageAttachment } from '@/api/bots'
 import { aiFillBot } from '@/api/bots'
-import type { RoomMessage, RoomSendResult, RoomAttachment, RoomSendPayload } from '@/api/rooms'
+import type { RoomMessage, RoomSendResult, RoomAttachment, RoomSendPayload, RoomSchedule } from '@/api/rooms'
 import * as sessionsApi from '@/api/sessions'
 import { request } from '@/api/client'
 import { marked } from 'marked'
@@ -1889,16 +2010,35 @@ const roomForm = reactive({
   name: '',
   topic: '',
   members: [] as string[],
+  /** Moderator tag ('' = none). Must stay inside `members`; toggleRoomMember
+   *  clears it when the host is removed, so the backend never rejects the save. */
+  host: '',
+  auto_route: true,
   max_rounds: DEFAULT_MAX_ROUNDS,
   max_messages: DEFAULT_MAX_MESSAGES,
   history_cap: DEFAULT_HISTORY_CAP,
 })
+
+function memberOptions(names: string[]) {
+  return names.map((name) => {
+    const bot = botsStore.bots.find((b) => b.name === name)
+    return { label: bot?.title ? `${name} · ${bot.title}` : name, value: name }
+  })
+}
+
+/** Host picker options: only the members currently ticked in the editor. */
+const roomHostOptions = computed(() => memberOptions(roomForm.members))
+
+/** Schedule "first speaker" options: the selected room's live members. */
+const activeRoomMemberOptions = computed(() => memberOptions(activeRoom.value?.members || []))
 
 function openRoomCreate() {
   editingRoomId.value = null
   roomForm.name = ''
   roomForm.topic = ''
   roomForm.members = []
+  roomForm.host = ''
+  roomForm.auto_route = true
   roomForm.max_rounds = DEFAULT_MAX_ROUNDS
   roomForm.max_messages = DEFAULT_MAX_MESSAGES
   roomForm.history_cap = DEFAULT_HISTORY_CAP
@@ -1914,6 +2054,8 @@ function openRoomEdit() {
   roomForm.name = activeRoom.value.name
   roomForm.topic = activeRoom.value.topic || ''
   roomForm.members = [...activeRoom.value.members]
+  roomForm.host = activeRoom.value.host || ''
+  roomForm.auto_route = activeRoom.value.auto_route !== false
   // Old rooms may carry 0 / missing limits — normalize before rendering so the
   // sliders never show an out-of-range thumb (0 on a min=1 slider).
   roomForm.max_rounds = normRounds(activeRoom.value.max_rounds)
@@ -1937,6 +2079,9 @@ function toggleRoomMember(name: string) {
   const idx = roomForm.members.indexOf(name)
   if (idx >= 0) {
     roomForm.members.splice(idx, 1)
+    // A removed member cannot moderate: keep the form self-consistent instead
+    // of letting the save fail with "host is not a member".
+    if (roomForm.host === name) roomForm.host = ''
   } else if (roomForm.members.length < 6) {
     roomForm.members.push(name)
   } else {
@@ -1960,6 +2105,8 @@ async function saveRoomEditor() {
     name: roomForm.name.trim(),
     topic: roomForm.topic.trim(),
     members: [...roomForm.members],
+    host: roomForm.host || '',
+    auto_route: roomForm.auto_route,
     max_rounds: normRounds(roomForm.max_rounds),
     max_messages: normMessages(roomForm.max_messages),
     history_cap: normHistory(roomForm.history_cap),
@@ -1987,6 +2134,114 @@ async function handleDeleteRoom(id: string) {
     message.success(t('rooms.deleted'))
   } catch (e: any) {
     message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+// ---------- room notes & scheduled pushes ----------
+const showNotesPanel = ref(false)
+const notesDraft = ref('')
+
+async function openNotesPanel() {
+  const room = activeRoom.value
+  if (!room) return
+  showNotesPanel.value = true
+  await roomsStore.loadNotes(room.id)
+  notesDraft.value = roomsStore.notes
+}
+
+async function saveRoomNotes() {
+  const room = activeRoom.value
+  if (!room) return
+  try {
+    await roomsStore.saveNotes(room.id, notesDraft.value)
+    message.success(t('rooms.notesSaved'))
+    showNotesPanel.value = false
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+const showSchedules = ref(false)
+const scheduleSaving = ref(false)
+const editingScheduleId = ref<string | null>(null)
+const scheduleForm = reactive({
+  name: '',
+  schedule: '0 9 * * *',
+  prompt: '',
+  target: '',
+})
+
+/** Schedules of the selected room, always an array (old rooms have none). */
+const roomSchedules = computed<RoomSchedule[]>(() => activeRoom.value?.schedules || [])
+
+function openSchedules() {
+  showSchedules.value = true
+  resetScheduleForm()
+}
+
+function resetScheduleForm() {
+  editingScheduleId.value = null
+  scheduleForm.name = ''
+  scheduleForm.schedule = '0 9 * * *'
+  scheduleForm.prompt = ''
+  scheduleForm.target = ''
+}
+
+function startEditSchedule(sc: RoomSchedule) {
+  editingScheduleId.value = sc.id
+  scheduleForm.name = sc.name || ''
+  scheduleForm.schedule = sc.schedule
+  scheduleForm.prompt = sc.prompt
+  scheduleForm.target = sc.target || ''
+}
+
+async function saveSchedule() {
+  const room = activeRoom.value
+  if (!room || scheduleSaving.value) return
+  const schedule = scheduleForm.schedule.trim()
+  const prompt = scheduleForm.prompt.trim()
+  if (!schedule || !prompt) return
+  scheduleSaving.value = true
+  const data = {
+    name: scheduleForm.name.trim(),
+    schedule,
+    prompt,
+    target: scheduleForm.target || '',
+  }
+  try {
+    if (editingScheduleId.value) {
+      await roomsStore.updateSchedule(room.id, editingScheduleId.value, data)
+    } else {
+      await roomsStore.createSchedule(room.id, data)
+    }
+    message.success(editingScheduleId.value ? t('rooms.scheduleUpdated') : t('rooms.scheduleAdded'))
+    resetScheduleForm()
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  } finally {
+    scheduleSaving.value = false
+  }
+}
+
+async function toggleSchedule(sc: RoomSchedule, enabled: boolean) {
+  const room = activeRoom.value
+  if (!room) return
+  try {
+    await roomsStore.updateSchedule(room.id, sc.id, { enabled })
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
+  }
+}
+
+async function removeSchedule(scheduleId: string) {
+  const room = activeRoom.value
+  if (!room) return
+  try {
+    await roomsStore.deleteSchedule(room.id, scheduleId)
+    message.success(t('rooms.scheduleRemoved'))
+    if (editingScheduleId.value === scheduleId) resetScheduleForm()
+  } catch (e: any) {
+    message.error(e?.message || t('common.operationFailed'))
   }
 }
 
@@ -2222,11 +2477,15 @@ function isRoomUserMsg(msg: RoomMessage): boolean {
 function roomDisplayName(from: string): string {
   if (from === '@user' || from === 'user') return t('rooms.you')
   if (from === '@system') return 'System'
+  // Scheduled pushes are not a member: label them so the human can tell a
+  // cron-triggered round from a bot speaking on its own.
+  if (from === 'schedule') return t('rooms.scheduledPush')
   return from
 }
 
 function roomAvatarText(from: string): string {
   if (from === '@user' || from === 'user') return t('rooms.you').slice(0, 1)
+  if (from === 'schedule') return '⏰'
   const n = from.replace(/^@/, '')
   return n ? n.slice(0, 1).toUpperCase() : 'B'
 }
@@ -3448,6 +3707,111 @@ async function loadCandidates() {
   overflow: hidden;
   max-width: 40%;
   justify-content: flex-end;
+}
+
+.schedule-badge {
+  margin-left: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--n-primary-color, #18a058);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.switch-hint {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.notes-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notes-hint {
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.schedule-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--n-border-color, #efeff5);
+  border-radius: 8px;
+}
+
+.schedule-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.schedule-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.schedule-label {
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.schedule-target {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.schedule-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.schedule-meta code {
+  font-family: var(--n-font-family-mono, monospace);
+  background: var(--n-action-color, #f5f5f5);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.schedule-status.failed {
+  color: #d03050;
+}
+
+.schedule-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #d03050;
+  word-break: break-word;
 }
 
 .room-topic {

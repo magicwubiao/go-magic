@@ -142,7 +142,13 @@ type Manager struct {
 	// the same snapshot and saved it back, dropping one update.
 	//
 	// Lock order: roomMu is acquired BEFORE m.mu and never while m.mu is held.
-	roomMu  sync.Mutex
+	roomMu sync.Mutex
+	// notesMu serializes read-modify-write cycles over room notes files.
+	// Every member of a round may append a note, and two rooms can be active
+	// at once, so "load -> append -> save" needs its own lock. It is
+	// independent of roomMu (notes live in their own file and never touch the
+	// room config), and must be acquired WITHOUT holding m.mu.
+	notesMu sync.Mutex
 	stopCh  chan struct{}
 	rootCtx context.Context // lifecycle context passed to Start(); used by late-joined workers
 	wg      sync.WaitGroup

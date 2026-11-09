@@ -109,6 +109,11 @@ Connect to external MCP (Model Context Protocol) servers to extend agent capabil
 
 Create group conversations with multiple AI agents. Each agent can have different providers and models.
 
+- **Smart routing**: a message that @mentions a bot goes to that bot; when nobody is addressed, the bot whose title/description matches best opens the round (gateway group chats need `bot_mode.auto_route`; DMs need `bot_mode.auto_route_dms` as well).
+- **Scheduled pushes**: give a room a cron schedule (5 or 6 fields) and it injects the prompt on time, through the same multi-bot round — never in parallel with a user round.
+- **Shared notes**: every room has a notes document that is never trimmed with the message log; all members read it on every turn, and a member can append one with `@note` on its first line.
+- **Moderator**: assign one member as host; it opens every round and may steer with `@route @a, @b` (next round's order), `@route all` (reset) and `@route stop` (end the discussion).
+
 ### Session Management
 
 SQLite-based persistence with FTS5 full-text search across all sessions.

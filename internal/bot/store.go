@@ -351,6 +351,56 @@ type RoomConfig struct {
 	HistoryCap int   `json:"history_cap,omitempty"`
 	CreatedAt  int64 `json:"created_at"`
 	UpdatedAt  int64 `json:"updated_at"`
+	// Host is the moderator member tag: it opens every round and is the only
+	// member whose routing directives (@route) reorder or end the discussion.
+	// Empty = no moderator; the opening speaker is then picked by auto-routing.
+	Host string `json:"host,omitempty"`
+	// AutoRoute decides who opens a round when the user did not @mention
+	// anyone: the bot whose title/description best matches the message speaks
+	// first. nil = on (safest default: ordering only, everyone still speaks).
+	AutoRoute *bool `json:"auto_route,omitempty"`
+	// Schedules are recurring pushes into the room ("每天 9 点让 @researcher
+	// 汇报进度"). They share the room coordinator, so a scheduled push can
+	// never run in parallel with a user round.
+	Schedules []RoomSchedule `json:"schedules,omitempty"`
+}
+
+// RoomSchedule is one recurring prompt pushed into a room.
+type RoomSchedule struct {
+	ID string `json:"id"`
+	// Name is a short human label ("早会汇报"); falls back to the prompt head.
+	Name string `json:"name,omitempty"`
+	// Schedule is a cron expression (5 or 6 fields, seconds optional).
+	Schedule string `json:"schedule"`
+	// Prompt is the text injected into the room as a scheduled message.
+	Prompt string `json:"prompt"`
+	// Target optionally @addresses the first speaker (bot tag, no @).
+	Target string `json:"target,omitempty"`
+	// Disabled marks the schedule paused. Absent/false = running, so a room
+	// written before this feature keeps firing whatever it already has.
+	Disabled   bool   `json:"disabled,omitempty"`
+	LastRun    *int64 `json:"last_run,omitempty"`    // Unix seconds
+	LastStatus string `json:"last_status,omitempty"` // triggered / success / failed: …
+	LastError  string `json:"last_error,omitempty"`
+	CreatedAt  int64  `json:"created_at,omitempty"`
+}
+
+// AutoRoutes reports whether an un-addressed message gets its opening speaker
+// picked by relevance. Unset (nil) defaults to true: it changes the order of
+// speakers, never whether a member speaks at all.
+func (r *RoomConfig) AutoRoutes() bool {
+	return r.AutoRoute == nil || *r.AutoRoute
+}
+
+// FindSchedule resolves a schedule by ID or (case-insensitive) name.
+func (r *RoomConfig) FindSchedule(idOrName string) *RoomSchedule {
+	for i := range r.Schedules {
+		s := &r.Schedules[i]
+		if s.ID == idOrName || (s.Name != "" && strings.EqualFold(s.Name, idOrName)) {
+			return s
+		}
+	}
+	return nil
 }
 
 // RoomDefaults mirror Hermes' hard caps.
@@ -461,4 +511,51 @@ func (s *Store) ListRooms() ([]*RoomConfig, error) {
 	}
 	sort.Slice(rooms, func(i, j int) bool { return rooms[i].Name < rooms[j].Name })
 	return rooms, nil
+}
+
+// MaxRoomNotesBytes caps a room's shared notes. Notes are injected into every
+// member's prompt on every turn, so an unbounded file would quietly multiply
+// token spend by the member count.
+const MaxRoomNotesBytes = 64 << 10
+
+// roomNotesPath is the shared notes file for a room. It lives next to the room
+// config but with a .md suffix: ListRooms only reads *.json, so a room's notes
+// can never be mistaken for another room definition.
+func (s *Store) roomNotesPath(id string) string {
+	return filepath.Join(s.dir, "rooms", safeBase(id)+".notes.md")
+}
+
+// LoadRoomNotes reads a room's shared notes. A missing file is empty notes,
+// not an error: rooms start without notes.
+func (s *Store) LoadRoomNotes(id string) (string, error) {
+	data, err := os.ReadFile(s.roomNotesPath(strings.ToLower(id)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// SaveRoomNotes atomically replaces a room's shared notes (capped).
+func (s *Store) SaveRoomNotes(id, content string) error {
+	if len(content) > MaxRoomNotesBytes {
+		return fmt.Errorf("room notes exceed %d bytes", MaxRoomNotesBytes)
+	}
+	return writeFileAtomic(s.roomNotesPath(strings.ToLower(id)), []byte(content), 0644)
+}
+
+// DeleteRoomNotes removes a room's notes; missing file is a no-op.
+func (s *Store) DeleteRoomNotes(id string) error {
+	err := os.Remove(s.roomNotesPath(strings.ToLower(id)))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// NewRoomScheduleID generates a stable identifier for a room schedule.
+func NewRoomScheduleID() string {
+	return "rs_" + uuid.New().String()[:8]
 }

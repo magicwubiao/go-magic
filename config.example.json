@@ -147,7 +147,11 @@
     "comment_turn_timeout_minutes": "Time limit for one inbound message (all LLM calls + tool runs). 0 = default (30), the same value agent.turn_timeout_minutes uses.",
     "turn_timeout_minutes": 30,
     "comment_relay_token": "Shared secret remote instances must present on /api/relay/v1/dm. Empty = the relay only accepts requests from localhost; set a value to allow cross-machine peer DMs.",
-    "relay_token": ""
+    "relay_token": "",
+    "comment_auto_route": "When a group message addresses no bot (@tag or /bot), answer with the bot whose title/description best matches instead of the general gateway agent. Omit or false = off.",
+    "auto_route": false,
+    "comment_auto_route_dms": "Also auto-route direct messages. Off by default: a DM is a private chat with the assistant.",
+    "auto_route_dms": false
   },
   "agent": {
     "max_turns": 150,

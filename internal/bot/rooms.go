@@ -94,6 +94,10 @@ type roomRuntime struct {
 	// stopGen，协调器只跑 gen 仍然新鲜的请求 —— 这是"停止"对排队消息
 	// 生效的唯一无竞态写法。
 	stopGen uint64
+	// sched fires the room's recurring pushes (RoomConfig.Schedules). It is
+	// created and stopped with the coordinator so a deleted room cannot keep
+	// scheduling rounds against a log that no longer exists.
+	sched *roomScheduler
 }
 
 // roomRoundBudget bounds one whole coordinated round (all members, all
@@ -146,6 +150,13 @@ func (m *Manager) CreateRoom(cfg *RoomConfig) error {
 	// (max_rounds=1000) cannot stay on disk as a landmine.
 	cfg.MaxRounds = cfg.Rounds()
 	cfg.HistoryCap = cfg.History()
+	// Normalize the moderator: a host outside the member list can never speak,
+	// so "host opens every round" would silently do nothing.
+	cfg.Host = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(cfg.Host), "@"))
+	if cfg.Host != "" && !roomHasMember(cfg.Members, cfg.Host) {
+		return fmt.Errorf("room host %q is not a member", cfg.Host)
+	}
+	normalizeRoomSchedules(cfg)
 	now := time.Now().Unix()
 	cfg.CreatedAt = now
 	cfg.UpdatedAt = now
@@ -204,6 +215,11 @@ func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, 
 	}
 	cfg.MaxRounds = cfg.Rounds()
 	cfg.HistoryCap = cfg.History()
+	cfg.Host = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(cfg.Host), "@"))
+	if cfg.Host != "" && !roomHasMember(cfg.Members, cfg.Host) {
+		return nil, fmt.Errorf("room host %q is not a member", cfg.Host)
+	}
+	normalizeRoomSchedules(cfg)
 	if err := m.store.SaveRoom(cfg); err != nil {
 		return nil, fmt.Errorf("failed to save room: %w", err)
 	}
@@ -225,13 +241,30 @@ func (m *Manager) UpdateRoom(id string, mutate func(*RoomConfig)) (*RoomConfig, 
 		return cfg, nil
 	}
 
-	// Metadata-only update: swap the config the live coordinator reads.
-	m.mu.Lock()
-	if rt, ok := m.rooms[id]; ok && rt != nil {
-		rt.cfg = cfg
-	}
-	m.mu.Unlock()
+	// Metadata-only update: swap the config the live coordinator reads and
+	// reconcile its cron entries (a schedule edit must take effect without a
+	// restart, and must not disturb an in-flight round).
+	m.publishRoomConfig(cfg)
 	return cfg, nil
+}
+
+// normalizeRoomSchedules fills in missing IDs and trims operator-typed
+// whitespace. It does NOT validate cron expressions: a room saved with a typo
+// must still load and be editable, and the scheduler skips invalid entries with
+// a log line rather than silently dropping the whole room.
+func normalizeRoomSchedules(cfg *RoomConfig) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Schedules {
+		sc := &cfg.Schedules[i]
+		if sc.ID == "" {
+			sc.ID = NewRoomScheduleID()
+		}
+		sc.Schedule = strings.TrimSpace(sc.Schedule)
+		sc.Prompt = strings.TrimSpace(sc.Prompt)
+		sc.Target = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(sc.Target), "@"))
+	}
 }
 
 // sameMembers reports whether two member lists are identical (order matters:
@@ -246,6 +279,18 @@ func sameMembers(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// roomHasMember reports whether tag is in members (all lowercase by
+// construction, but compared case-insensitively anyway).
+func roomHasMember(members []string, tag string) bool {
+	tag = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(tag), "@"))
+	for _, mem := range members {
+		if strings.ToLower(mem) == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // DeleteRoom removes a room and stops its coordinator.
@@ -273,6 +318,11 @@ func (m *Manager) DeleteRoom(id string) error {
 	if err := m.store.DeleteRoom(cfg.ID); err != nil {
 		m.roomMu.Unlock()
 		return fmt.Errorf("failed to delete room: %w", err)
+	}
+	// Notes live beside the room config; dropping the config without them would
+	// resurrect stale notes if a room with the same ID is ever created again.
+	if err := m.store.DeleteRoomNotes(cfg.ID); err != nil {
+		log.Warnf("[BotMode] Failed to delete notes for room %s: %v", cfg.ID, err)
 	}
 	m.roomMu.Unlock()
 	m.answerDroppedRequests(stopped, dropped)
@@ -385,19 +435,35 @@ func (m *Manager) SendToRoom(ctx context.Context, roomID, text, target string) (
 	return m.SendToRoomWithMedia(ctx, roomID, text, nil, nil, target)
 }
 
+// SendToRoomFrom delivers a message whose author is not the human ("schedule"
+// for scheduled pushes). The attribution rides into the shared log, so the
+// model — and the dashboard — can tell "the user said this" from "the 9am
+// cron pushed this".
+func (m *Manager) SendToRoomFrom(ctx context.Context, roomID, text, from, target string) (*RoomResult, error) {
+	return m.sendToRoom(ctx, roomID, text, from, nil, nil, target)
+}
+
 // SendToRoomWithMedia is SendToRoom for multimodal input: persisted carries
 // the ref-form attachment parts (file parts with Name/URL/Mime — images
 // included) that every member turn receives, and items lists the canonical
 // uploads copies to materialize into each member bot's workdir.
 func (m *Manager) SendToRoomWithMedia(ctx context.Context, roomID, text string, persisted []types.ContentPart, items []RoomUploadItem, target string) (*RoomResult, error) {
+	return m.sendToRoom(ctx, roomID, text, "user", persisted, items, target)
+}
+
+func (m *Manager) sendToRoom(ctx context.Context, roomID, text, from string, persisted []types.ContentPart, items []RoomUploadItem, target string) (*RoomResult, error) {
 	key := strings.ToLower(roomID)
+	from = strings.TrimSpace(from)
+	if from == "" {
+		from = "user"
+	}
 	if target != "" {
 		target = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(target), "@"))
 	}
 
 	req := roomRequest{
 		Text:      text,
-		From:      "user",
+		From:      from,
 		Target:    target,
 		Persisted: persisted,
 		Items:     items,
@@ -476,11 +542,16 @@ func (m *Manager) startRoomLocked(cfg *RoomConfig) {
 		triggerCh: make(chan roomRequest, 16),
 		stopCh:    make(chan struct{}),
 	}
+	// Schedules belong to the coordinator's lifetime: created here, stopped in
+	// teardownRoomLocked, so a deleted room stops pushing messages at once.
+	rt.sched = newRoomScheduler(m, key)
 	m.rooms[key] = rt
 	// Add while mu is held so it can't race Stop()'s wg.Wait().
 	m.wg.Add(1)
 	go m.roomLoop(rt)
 	m.mu.Unlock()
+
+	rt.sched.start(cfg)
 
 	log.Infof("[BotMode] Room %q is online", cfg.Name)
 }
@@ -581,14 +652,31 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 		log.Warnf("[BotMode] Room %s: failed to load log at round start: %v", room.Name, err)
 	}
 	// Persist the human's message into the room log (with attachment refs so
-	// reloads still show what was shared).
-	logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "user", req.Text, roomAttachmentsFromParts(req.Persisted))
+	// reloads still show what was shared). Scheduled pushes carry their own
+	// author ("schedule"), so the model can tell them from the human.
+	author := req.From
+	if author == "" {
+		author = "user"
+	}
+	logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, author, req.Text, roomAttachmentsFromParts(req.Persisted))
 
 	members := room.Members
-	if req.Target != "" && req.Target != "user" {
+	// Speaking order: an explicit @target wins, then the moderator, then
+	// relevance-based auto-routing. Auto-routing only decides who OPENS the
+	// round — every member still gets a turn, so a wrong guess costs one
+	// out-of-order reply instead of silencing the right bot.
+	switch {
+	case req.Target != "" && req.Target != "user":
 		if tc := m.FindByTag(req.Target); tc != nil {
-			// Move the targeted member to the front of this round.
 			members = prependMember(members, strings.ToLower(tc.Name))
+		}
+	case room.Host != "":
+		members = prependMember(members, room.Host)
+	case room.AutoRoutes():
+		if decision, ok := m.RouteRoomOpeningSpeaker(room, req.Text); ok {
+			members = prependMember(members, decision.Bot)
+			log.Infof("[BotMode] Room %s: auto-routed opening speaker @%s (%s, score %.1f)",
+				room.Name, decision.Bot, decision.Reason, decision.Score)
 		}
 	}
 	// Skip bots that are offline before the round starts. A paused member used
@@ -616,10 +704,22 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 
 	maxRounds := room.Rounds()
 	needsUser := false
+	// pendingOrder is the routing directive a member issued for the NEXT round.
+	// Applying it mid-round would restart the speaking order and let someone
+	// speak twice in one round, so it is staged here and consumed at the top of
+	// the next iteration.
+	var pendingOrder []string
+	stopRound := false
 
 	for round := 0; round < maxRounds; round++ {
 		if m.roomClosed(rt) || m.roundStopped(rt) {
 			break
+		}
+		if pendingOrder != nil {
+			if ordered := filterMembers(pendingOrder, room.Members); len(ordered) > 0 {
+				members = ordered
+			}
+			pendingOrder = nil
 		}
 		// 活图只跟首轮投递：req.Persisted 会被每一个成员、每一轮重复使用，
 		// 一次用户发图会变成 4 成员 × 3 轮 = 12 次投递，每投一次成员就重新
@@ -674,22 +774,76 @@ func (m *Manager) runRoomRound(rt *roomRuntime, req roomRequest) {
 			if reply == "" {
 				continue
 			}
+			// Control lines (@route / @note) are stripped from the broadcast
+			// text: they are instructions to the room, not something the human
+			// should read as speech. Only the moderator may steer the order —
+			// without that, any member could silence the others. A room with no
+			// moderator keeps accepting directives so the feature works without
+			// extra setup.
+			clean, directive := parseRoomDirective(reply)
+			if directive.Note != "" {
+				if err := m.appendRoomNote(room.ID, member, directive.Note); err != nil {
+					log.Warnf("[BotMode] Room %s: failed to append note from %s: %v", room.Name, member, err)
+				}
+			}
+			canRoute := room.Host == "" || strings.EqualFold(member, room.Host)
+			if canRoute && (directive.Stop || directive.Clear || len(directive.Order) > 0) {
+				anySpoke = true
+				actor := "@" + member
+				if strings.EqualFold(member, room.Host) {
+					actor = "主持人 @" + member
+				}
+				switch {
+				case directive.Stop:
+					stopRound = true
+					logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "@system",
+						actor+" 结束了本轮讨论。", nil)
+				case directive.Clear:
+					// "all" restores the room's configured order (host first when
+					// there is one), not whatever order was last directed.
+					pendingOrder = append([]string(nil), room.Members...)
+					if room.Host != "" {
+						pendingOrder = prependMember(pendingOrder, room.Host)
+					}
+					logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "@system",
+						actor+" 恢复了默认发言顺序。", nil)
+				default:
+					pendingOrder = directive.Order
+					names := make([]string, 0, len(directive.Order))
+					for _, name := range directive.Order {
+						names = append(names, "@"+name)
+					}
+					logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "@system",
+						actor+" 指定下一轮发言顺序："+strings.Join(names, " → "), nil)
+				}
+			}
+			if clean == "" {
+				if stopRound {
+					break
+				}
+				continue
+			}
 			anySpoke = true
-			logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, member, reply, nil)
-			if needsHuman(reply) {
+			logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, member, clean, nil)
+			if stopRound {
+				// The moderator both spoke and ended the round: keep the reply,
+				// then stop instead of letting the remaining members pile on.
+				break
+			}
+			if needsHuman(clean) {
 				needsUser = true
 				log.Infof("[BotMode] Room %s: @%s escalated to user", room.Name, member)
 				break
 			}
 		}
-		if needsUser || !anySpoke {
+		if needsUser || stopRound || !anySpoke {
 			break
 		}
 	}
 
 	// The round budget (not the user) ended the round: say so in the log so the
 	// silence is explainable instead of looking like every bot went mute.
-	if !needsUser && !m.roomClosed(rt) && errors.Is(roundCtx.Err(), context.DeadlineExceeded) {
+	if !needsUser && !stopRound && !m.roomClosed(rt) && errors.Is(roundCtx.Err(), context.DeadlineExceeded) {
 		logHistory, _ = m.appendRoomMessageTo(rt, room, logHistory, "@system",
 			"本轮已达到群聊时间上限，剩余发言被跳过。", nil)
 	}
@@ -768,6 +922,12 @@ func (m *Manager) teardownRoomLocked(rt *roomRuntime) []roomRequest {
 	// Mark closed BEFORE stopping: a member turn that outlives the teardown
 	// must not append to (and recreate) a room log that is being deleted.
 	rt.closed.Store(true)
+	if rt.sched != nil {
+		// Stop the ticker first: reload() must not re-add entries for a room
+		// that is going away, and a firing schedule would otherwise enqueue a
+		// round into a closed coordinator.
+		rt.sched.stop()
+	}
 	cancelRoomRoundLocked(rt)
 	close(rt.stopCh)
 	var dropped []roomRequest
@@ -920,10 +1080,21 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 		if mc.Title != "" {
 			entry += " (" + mc.Title + ")"
 		}
+		if room.Host != "" && strings.EqualFold(mem, room.Host) {
+			entry += " [主持人]"
+		}
 		parts = append(parts, entry)
 	}
 	sb.WriteString(strings.Join(parts, ", "))
-	sb.WriteString("\n\nRecent room messages:\n")
+	sb.WriteString("\n\n")
+	// Shared notes are standing context, not chat: they are injected ahead of
+	// the message window so a decision made 600 messages ago still reaches
+	// every member after the log has been trimmed.
+	if notes := m.roomNotesPrompt(room.ID); notes != "" {
+		sb.WriteString(notes)
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("Recent room messages:\n")
 	capN := room.MessagesCap()
 	if len(history) > capN {
 		history = history[len(history)-capN:]
@@ -932,18 +1103,33 @@ func (m *Manager) buildRoomPrompt(room *RoomConfig, member string, history []Roo
 		sb.WriteString("(no messages yet)\n")
 	}
 	for _, msg := range history {
+		author := "@" + msg.From
+		if strings.EqualFold(msg.From, "schedule") {
+			author = "[定时推送]"
+		} else if strings.EqualFold(msg.From, "user") {
+			author = "@user (human)"
+		}
 		if len(msg.Attachments) > 0 {
 			names := make([]string, 0, len(msg.Attachments))
 			for _, a := range msg.Attachments {
 				names = append(names, a.Name)
 			}
-			fmt.Fprintf(&sb, "- @%s: %s [附件: %s]\n", msg.From, msg.Content, strings.Join(names, ", "))
+			fmt.Fprintf(&sb, "- %s: %s [附件: %s]\n", author, msg.Content, strings.Join(names, ", "))
 			continue
 		}
-		fmt.Fprintf(&sb, "- @%s: %s\n", msg.From, msg.Content)
+		fmt.Fprintf(&sb, "- %s: %s\n", author, msg.Content)
 	}
 	fmt.Fprintf(&sb, "\nYour turn (round %d/%d). You are @%s.\n", round+1, maxRounds, member)
+	if room.Host != "" && strings.EqualFold(member, room.Host) {
+		sb.WriteString("You are the room's moderator (主持人): you open every round and you alone may steer the discussion. ")
+		sb.WriteString("Control lines go on their own FIRST line and are not shown as speech: ")
+		sb.WriteString("\"@route @a, @b\" sets the next round's speaking order, \"@route all\" restores the default order, \"@route stop\" ends the discussion. ")
+		sb.WriteString("Use them sparingly — a normal reply that just answers is usually better.\n")
+	} else if room.Host != "" {
+		fmt.Fprintf(&sb, "@%s is the moderator and may reorder or end the discussion.\n", room.Host)
+	}
 	sb.WriteString("Reply to the room conversation directly. Address @<member> when your message is meant for a specific bot. ")
+	sb.WriteString("Start a line with \"@note <text>\" to keep a durable conclusion in the room's shared notes. ")
 	sb.WriteString("If the task needs the human's input or approval, start your reply with @user to stop the round and escalate.")
 	return sb.String()
 }
@@ -1102,6 +1288,83 @@ func prependMember(members []string, name string) []string {
 		if mem != name {
 			out = append(out, mem)
 		}
+	}
+	return out
+}
+
+// roomDirective is one moderator control line parsed out of a member reply.
+type roomDirective struct {
+	// Order restricts/reorders the NEXT round to these members.
+	Order []string
+	// Stop ends the discussion immediately.
+	Stop bool
+	// Clear resets the speaking order to the room's configured order.
+	Clear bool
+	// Note is a durable line to append to the room's shared notes.
+	Note string
+}
+
+// parseRoomDirective extracts a control line from the head of a reply and
+// returns the reply with that line removed.
+//
+// Only the FIRST line is inspected, for the same reason needsHuman does: a
+// member explaining the protocol ("you can write @route stop to end this")
+// must not actually trigger it.
+func parseRoomDirective(reply string) (string, roomDirective) {
+	var d roomDirective
+	line, rest := reply, ""
+	if i := strings.IndexAny(reply, "\r\n"); i >= 0 {
+		line, rest = reply[:i], reply[i+1:]
+	}
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+
+	switch {
+	case strings.HasPrefix(lower, "@route"):
+		payload := strings.TrimSpace(trimmed[len("@route"):])
+		fields := strings.FieldsFunc(payload, func(r rune) bool {
+			return r == ',' || r == '，' || r == '、' || r == '→' || r == ' ' || r == '\t'
+		})
+		for _, f := range fields {
+			name := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(f), "@"))
+			switch name {
+			case "":
+			case "stop", "end":
+				d.Stop = true
+			case "all", "reset":
+				d.Clear = true
+			default:
+				d.Order = append(d.Order, name)
+			}
+		}
+		return strings.TrimSpace(rest), d
+	case strings.HasPrefix(lower, "@note"):
+		d.Note = strings.TrimSpace(trimmed[len("@note"):])
+		return strings.TrimSpace(rest), d
+	}
+	return reply, d
+}
+
+// filterMembers keeps order members that really belong to the room (in the
+// caller's order, de-duplicated). A directive naming a deleted bot or a
+// non-member must never shrink the round to "nobody speaks".
+func filterMembers(order, members []string) []string {
+	if len(order) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(members))
+	for _, mem := range members {
+		allowed[strings.ToLower(mem)] = true
+	}
+	seen := make(map[string]bool, len(order))
+	out := make([]string, 0, len(order))
+	for _, raw := range order {
+		name := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
+		if name == "" || !allowed[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
 	}
 	return out
 }

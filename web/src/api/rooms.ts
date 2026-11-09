@@ -2,11 +2,36 @@ import { request, getAuthToken } from './client'
 
 const BASE_URL = '/api'
 
+/** One recurring push into a room ("每天 9 点让 @researcher 汇报进度"). */
+export interface RoomSchedule {
+  id: string
+  name: string
+  /** Cron expression, 5 or 6 fields (seconds optional). */
+  schedule: string
+  /** Text pushed into the room as a scheduled message. */
+  prompt: string
+  /** Optional bot tag addressed first (no @). */
+  target: string
+  enabled: boolean
+  /** Unix milliseconds of the last firing. */
+  last_run?: number
+  /** triggered / success / success (needs user) / failed. */
+  last_status?: string
+  last_error?: string
+  created_at?: number
+}
+
 export interface Room {
   id: string
   name: string
   topic: string
   members: string[]
+  /** Moderator bot tag: opens every round and may reorder/end the discussion. */
+  host: string
+  /** When nobody is @mentioned, the best-matching bot speaks first. */
+  auto_route: boolean
+  /** Recurring pushes into this room. */
+  schedules: RoomSchedule[]
   /** Speaking rounds per user message (server clamps to 10). */
   max_rounds: number
   /** How many recent messages each member sees in its prompt (token window). */
@@ -72,6 +97,57 @@ export async function deleteRoom(id: string): Promise<{ deleted: string }> {
 
 export async function getRoomMessages(id: string): Promise<RoomMessage[]> {
   return request(`/rooms/${encodeURIComponent(id)}/messages`)
+}
+
+/** Shared room notes: standing context every member reads on every turn. */
+export interface RoomNotes {
+  content: string
+  /** Server-side byte cap. */
+  limit: number
+}
+
+export async function getRoomNotes(id: string): Promise<RoomNotes> {
+  return request(`/rooms/${encodeURIComponent(id)}/notes`)
+}
+
+export async function saveRoomNotes(id: string, content: string): Promise<RoomNotes> {
+  return request(`/rooms/${encodeURIComponent(id)}/notes`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  })
+}
+
+export interface RoomScheduleInput {
+  name?: string
+  schedule?: string
+  prompt?: string
+  target?: string
+  enabled?: boolean
+}
+
+/** Create a scheduled push. Returns the room with the refreshed schedule list. */
+export async function createRoomSchedule(id: string, data: RoomScheduleInput): Promise<Room> {
+  return request(`/rooms/${encodeURIComponent(id)}/schedules`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateRoomSchedule(
+  id: string,
+  scheduleId: string,
+  data: RoomScheduleInput
+): Promise<Room> {
+  return request(`/rooms/${encodeURIComponent(id)}/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteRoomSchedule(id: string, scheduleId: string): Promise<Room> {
+  return request(`/rooms/${encodeURIComponent(id)}/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: 'DELETE',
+  })
 }
 
 export interface RoomStatus {

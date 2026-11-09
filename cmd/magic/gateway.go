@@ -521,6 +521,44 @@ func (h *gatewayAgentHandler) turnContext(ctx context.Context, msg gateway.Messa
 	return tool.WithSessionID(ctx, msg.UserID)
 }
 
+// autoRouteBot picks a bot for an un-addressed group (or, when enabled, DM)
+// message. It returns ok=false whenever the general gateway agent should keep
+// the message: auto-routing is a routing hint, not a replacement for the
+// assistant, and a wrong guess is only acceptable while the score is
+// unambiguous (see bot.MinAutoRouteScore).
+//
+// Media messages are never auto-routed: SendToBot takes text only, so routing
+// an image to a bot would silently drop the attachment.
+func (h *gatewayAgentHandler) autoRouteBot(msg gateway.Message) (string, bool) {
+	if h.botMgr == nil || len(msg.MediaURLs) > 0 {
+		return "", false
+	}
+	if strings.TrimSpace(msg.Content) == "" {
+		return "", false
+	}
+	h.mu.Lock()
+	cfg := h.cfg
+	h.mu.Unlock()
+	var botCfg *config.BotModeConfig
+	if cfg != nil {
+		botCfg = cfg.BotMode
+	}
+	if msg.IsGroup {
+		if !botCfg.AutoRouteEnabled() {
+			return "", false
+		}
+	} else if !botCfg.AutoRouteDMsEnabled() {
+		return "", false
+	}
+	decision, ok := h.botMgr.RouteMessage(msg.Content)
+	if !ok {
+		return "", false
+	}
+	log.Infof("[Gateway] Auto-routed message from user=%s platform=%s to bot %q (%s, score %.1f)",
+		msg.UserID, msg.Platform, decision.Bot, decision.Reason, decision.Score)
+	return decision.Bot, true
+}
+
 // Process processes a message from a gateway platform and returns a response.
 // It handles both plain text and multimodal messages.
 // When Bot Mode is active, messages addressed to a bot (via /bot prefix or
@@ -530,6 +568,16 @@ func (h *gatewayAgentHandler) Process(ctx context.Context, msg gateway.Message) 
 	if h.botMgr != nil {
 		if target, text, ok := bot.ParseBotMention(msg.Content, h.botMgr.HasBot); ok && text != "" {
 			reply, err := h.botMgr.SendToBot(target, text)
+			if err != nil {
+				return "", err
+			}
+			return reply, nil
+		}
+		// Nothing addressed: let the fleet claim the message when one bot is
+		// clearly the right owner (群聊智能路由). Off unless bot_mode.auto_route
+		// is enabled; a low-confidence message still goes to the general agent.
+		if target, ok := h.autoRouteBot(msg); ok {
+			reply, err := h.botMgr.SendToBot(target, msg.Content)
 			if err != nil {
 				return "", err
 			}

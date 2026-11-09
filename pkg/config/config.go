@@ -515,6 +515,26 @@ type BotModeConfig struct {
 	// must present when DMing this instance's bots through /api/relay/v1/dm.
 	// Empty = relay accepts anonymous requests (use only on trusted networks).
 	RelayToken string `json:"relay_token,omitempty"`
+	// AutoRoute hands GROUP chat messages that address nobody (@tag / /bot)
+	// to the bot whose title/description best matches, instead of answering
+	// with the general gateway agent. nil = off: silently changing who answers
+	// every message on an existing deployment is not something a version bump
+	// should do on its own.
+	AutoRoute *bool `json:"auto_route,omitempty"`
+	// AutoRouteDMs extends AutoRoute to direct messages. A separate switch
+	// because a DM is a private conversation with the assistant: handing it to
+	// a specialist bot is a much bigger surprise than in a group.
+	AutoRouteDMs *bool `json:"auto_route_dms,omitempty"`
+}
+
+// AutoRouteEnabled reports whether the gateway auto-assigns group messages.
+func (b *BotModeConfig) AutoRouteEnabled() bool {
+	return b != nil && b.AutoRoute != nil && *b.AutoRoute
+}
+
+// AutoRouteDMsEnabled reports whether auto-assignment also covers DMs.
+func (b *BotModeConfig) AutoRouteDMsEnabled() bool {
+	return b != nil && b.AutoRouteDMs != nil && *b.AutoRouteDMs
 }
 
 // DefaultBotModeConfig returns default Bot Mode settings.

@@ -13,6 +13,10 @@ import (
 
 // roomToResponse serializes a room config for the dashboard API.
 func roomToResponse(r *bot.RoomConfig) map[string]interface{} {
+	schedules := make([]map[string]interface{}, 0, len(r.Schedules))
+	for _, sc := range r.Schedules {
+		schedules = append(schedules, roomScheduleToWire(sc))
+	}
 	return map[string]interface{}{
 		"id":           r.ID,
 		"name":         r.Name,
@@ -21,9 +25,38 @@ func roomToResponse(r *bot.RoomConfig) map[string]interface{} {
 		"max_rounds":   r.Rounds(),
 		"max_messages": r.MessagesCap(),
 		"history_cap":  r.History(),
+		"host":         r.Host,
+		"auto_route":   r.AutoRoutes(),
+		"schedules":    schedules,
 		"created_at":   r.CreatedAt,
 		"updated_at":   r.UpdatedAt,
 	}
+}
+
+// roomScheduleToWire serializes one scheduled room push.
+func roomScheduleToWire(sc bot.RoomSchedule) map[string]interface{} {
+	out := map[string]interface{}{
+		"id":       sc.ID,
+		"name":     sc.Name,
+		"schedule": sc.Schedule,
+		"prompt":   sc.Prompt,
+		"target":   sc.Target,
+		"enabled":  !sc.Disabled,
+	}
+	if sc.LastRun != nil {
+		// Unix seconds -> milliseconds, matching the rest of the dashboard API.
+		out["last_run"] = *sc.LastRun * 1000
+	}
+	if sc.LastStatus != "" {
+		out["last_status"] = sc.LastStatus
+	}
+	if sc.LastError != "" {
+		out["last_error"] = sc.LastError
+	}
+	if sc.CreatedAt > 0 {
+		out["created_at"] = sc.CreatedAt * 1000
+	}
+	return out
 }
 
 // handleRooms routes /api/rooms (list, create).
@@ -93,6 +126,37 @@ func (s *Server) handleRoomByID(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case len(parts) == 2 && parts[1] == "notes":
+		// 群共享笔记：所有人（成员 bot 与人类）读同一份，不随时间线裁剪。
+		switch r.Method {
+		case http.MethodGet, http.MethodPut:
+			s.handleRoomNotes(w, r, id)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	case len(parts) == 2 && parts[1] == "schedules":
+		switch r.Method {
+		case http.MethodGet, http.MethodPost:
+			s.handleRoomSchedules(w, r, id)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	case len(parts) == 3 && parts[1] == "schedules":
+		// Schedule ids are generated (rs_xxxxxxxx), but the manager also
+		// resolves by human name, so the segment is only checked for path
+		// safety rather than against the bot-name pattern.
+		if strings.ContainsAny(parts[2], `/\`) || parts[2] == "." || parts[2] == ".." {
+			http.Error(w, "invalid schedule id", http.StatusBadRequest)
+			return
+		}
+		switch r.Method {
+		case http.MethodPatch, http.MethodPut:
+			s.handleRoomScheduleUpdate(w, r, id, parts[2])
+		case http.MethodDelete:
+			s.handleRoomScheduleDelete(w, r, id, parts[2])
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
@@ -127,6 +191,8 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 		Name        string   `json:"name"`
 		Topic       string   `json:"topic"`
 		Members     []string `json:"members"`
+		Host        string   `json:"host,omitempty"`
+		AutoRoute   *bool    `json:"auto_route,omitempty"`
 		MaxRounds   *int     `json:"max_rounds,omitempty"`
 		MaxMessages *int     `json:"max_messages,omitempty"`
 		HistoryCap  *int     `json:"history_cap,omitempty"`
@@ -136,9 +202,11 @@ func (s *Server) handleRoomsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := &bot.RoomConfig{
-		Name:    req.Name,
-		Topic:   req.Topic,
-		Members: req.Members,
+		Name:      req.Name,
+		Topic:     req.Topic,
+		Members:   req.Members,
+		Host:      req.Host,
+		AutoRoute: req.AutoRoute,
 	}
 	if req.MaxRounds != nil {
 		cfg.MaxRounds = *req.MaxRounds
@@ -182,6 +250,8 @@ func (s *Server) handleRoomUpdate(w http.ResponseWriter, r *http.Request, id str
 		Name        *string  `json:"name,omitempty"`
 		Topic       *string  `json:"topic,omitempty"`
 		Members     []string `json:"members,omitempty"`
+		Host        *string  `json:"host,omitempty"`
+		AutoRoute   *bool    `json:"auto_route,omitempty"`
 		MaxRounds   *int     `json:"max_rounds,omitempty"`
 		MaxMessages *int     `json:"max_messages,omitempty"`
 		HistoryCap  *int     `json:"history_cap,omitempty"`
@@ -200,6 +270,12 @@ func (s *Server) handleRoomUpdate(w http.ResponseWriter, r *http.Request, id str
 		}
 		if req.Members != nil {
 			c.Members = req.Members
+		}
+		if req.Host != nil {
+			c.Host = *req.Host
+		}
+		if req.AutoRoute != nil {
+			c.AutoRoute = req.AutoRoute
 		}
 		if req.MaxRounds != nil {
 			c.MaxRounds = *req.MaxRounds
@@ -398,4 +474,174 @@ func (s *Server) handleRoomSend(w http.ResponseWriter, r *http.Request, id strin
 		"needs_user": res.NeedsUser,
 		"messages":   result,
 	})
+}
+
+// handleRoomNotes GET/PUT /api/rooms/{id}/notes — the room's shared notes.
+//
+// Notes are a small markdown file every member reads on every turn; unlike the
+// message log they are neither capped by HistoryCap nor trimmed, so a decision
+// made weeks ago still reaches the room. PUT replaces the whole document
+// (the editor is a plain textarea) and is capped server-side.
+func (s *Server) handleRoomNotes(w http.ResponseWriter, r *http.Request, id string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		notes, err := mgr.RoomNotes(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"content": notes,
+			"limit":   bot.MaxRoomNotesBytes,
+		})
+	case http.MethodPut:
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, bot.MaxRoomNotesBytes*2)).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		notes, err := mgr.SaveRoomNotes(id, req.Content)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			if strings.Contains(err.Error(), "exceed") {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"content": notes, "limit": bot.MaxRoomNotesBytes})
+	}
+}
+
+// handleRoomSchedules GET/POST /api/rooms/{id}/schedules — recurring pushes.
+func (s *Server) handleRoomSchedules(w http.ResponseWriter, r *http.Request, id string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		room, err := mgr.GetRoom(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		out := make([]map[string]interface{}, 0, len(room.Schedules))
+		for _, sc := range room.Schedules {
+			out = append(out, roomScheduleToWire(sc))
+		}
+		jsonResponse(w, out)
+	case http.MethodPost:
+		var req struct {
+			Name     string `json:"name"`
+			Schedule string `json:"schedule"`
+			Prompt   string `json:"prompt"`
+			Target   string `json:"target"`
+			Enabled  *bool  `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		sc := &bot.RoomSchedule{
+			Name:     strings.TrimSpace(req.Name),
+			Schedule: req.Schedule,
+			Prompt:   req.Prompt,
+			Target:   req.Target,
+		}
+		if req.Enabled != nil && !*req.Enabled {
+			sc.Disabled = true
+		}
+		room, err := mgr.AddRoomSchedule(id, sc)
+		if err != nil {
+			http.Error(w, err.Error(), roomErrorStatus(err))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		jsonResponse(w, roomToResponse(room))
+	}
+}
+
+// handleRoomScheduleUpdate PATCH/PUT /api/rooms/{id}/schedules/{sid}.
+func (s *Server) handleRoomScheduleUpdate(w http.ResponseWriter, r *http.Request, id, sid string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	var req struct {
+		Name     *string `json:"name"`
+		Schedule *string `json:"schedule"`
+		Prompt   *string `json:"prompt"`
+		Target   *string `json:"target"`
+		Enabled  *bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	room, err := mgr.UpdateRoomSchedule(id, sid, func(sc *bot.RoomSchedule) {
+		if req.Name != nil {
+			sc.Name = strings.TrimSpace(*req.Name)
+		}
+		if req.Schedule != nil {
+			sc.Schedule = *req.Schedule
+		}
+		if req.Prompt != nil {
+			sc.Prompt = *req.Prompt
+		}
+		if req.Target != nil {
+			sc.Target = *req.Target
+		}
+		if req.Enabled != nil {
+			sc.Disabled = !*req.Enabled
+		}
+	})
+	if err != nil {
+		http.Error(w, err.Error(), roomErrorStatus(err))
+		return
+	}
+	jsonResponse(w, roomToResponse(room))
+}
+
+// handleRoomScheduleDelete DELETE /api/rooms/{id}/schedules/{sid}.
+func (s *Server) handleRoomScheduleDelete(w http.ResponseWriter, r *http.Request, id, sid string) {
+	mgr := s.requireBotManager(w)
+	if mgr == nil {
+		return
+	}
+	room, err := mgr.RemoveRoomSchedule(id, sid)
+	if err != nil {
+		http.Error(w, err.Error(), roomErrorStatus(err))
+		return
+	}
+	jsonResponse(w, roomToResponse(room))
+}
+
+// roomErrorStatus maps room/schedule errors to HTTP status codes without
+// string-matching at every call site.
+func roomErrorStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		return http.StatusNotFound
+	case strings.Contains(msg, "invalid schedule"),
+		strings.Contains(msg, "is required"),
+		strings.Contains(msg, "is not a member"),
+		strings.Contains(msg, "exceed"):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
 }

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as roomsApi from '@/api/rooms'
-import type { Room, RoomMessage, RoomSendResult } from '@/api/rooms'
+import type { Room, RoomMessage, RoomScheduleInput, RoomSendResult } from '@/api/rooms'
 
 /**
  * Identity of one optimistic send: its local bubble id plus the user-message
@@ -20,6 +20,12 @@ export const useRoomsStore = defineStore('rooms', () => {
   const messages = ref<RoomMessage[]>([])
   const loading = ref(false)
   const sending = ref(false)
+  // Shared room notes (群共享笔记). Loaded on demand when the notes panel
+  // opens, not with the room: it is a separate document, and most sessions
+  // never touch it.
+  const notes = ref('')
+  const notesLoading = ref(false)
+  const notesSaving = ref(false)
 
   // AbortController for the in-flight blocking round so the user can cancel.
   let sendAbort: AbortController | null = null
@@ -59,6 +65,7 @@ export const useRoomsStore = defineStore('rooms', () => {
     activeRoomId.value = id
     // Clear previous room messages first so switching never flashes stale chat.
     messages.value = []
+    notes.value = ''
     loading.value = true
     try {
       const [msgs] = await Promise.all([roomsApi.getRoomMessages(id)])
@@ -256,7 +263,52 @@ export const useRoomsStore = defineStore('rooms', () => {
     if (activeRoomId.value === roomId) {
       activeRoomId.value = null
       messages.value = []
+      notes.value = ''
     }
+  }
+
+  // ---------- shared notes ----------
+
+  async function loadNotes(roomId: string): Promise<void> {
+    notesLoading.value = true
+    try {
+      notes.value = (await roomsApi.getRoomNotes(roomId)).content
+    } catch {
+      notes.value = ''
+    } finally {
+      notesLoading.value = false
+    }
+  }
+
+  async function saveNotes(roomId: string, content: string): Promise<void> {
+    notesSaving.value = true
+    try {
+      const res = await roomsApi.saveRoomNotes(roomId, content)
+      notes.value = res.content
+    } finally {
+      notesSaving.value = false
+    }
+  }
+
+  // ---------- scheduled pushes ----------
+
+  /** Replace one room in the local list with the server's authoritative copy. */
+  function applyRoom(updated: Room): Room {
+    const idx = rooms.value.findIndex(r => r.id === updated.id)
+    if (idx >= 0) rooms.value[idx] = updated
+    return updated
+  }
+
+  async function createSchedule(roomId: string, data: RoomScheduleInput): Promise<Room> {
+    return applyRoom(await roomsApi.createRoomSchedule(roomId, data))
+  }
+
+  async function updateSchedule(roomId: string, scheduleId: string, data: RoomScheduleInput): Promise<Room> {
+    return applyRoom(await roomsApi.updateRoomSchedule(roomId, scheduleId, data))
+  }
+
+  async function deleteSchedule(roomId: string, scheduleId: string): Promise<Room> {
+    return applyRoom(await roomsApi.deleteRoomSchedule(roomId, scheduleId))
   }
 
   return {
@@ -265,6 +317,9 @@ export const useRoomsStore = defineStore('rooms', () => {
     messages,
     loading,
     sending,
+    notes,
+    notesLoading,
+    notesSaving,
     loadRooms,
     createRoom,
     selectRoom,
@@ -275,5 +330,10 @@ export const useRoomsStore = defineStore('rooms', () => {
     refreshMessages,
     updateRoom,
     deleteRoom,
+    loadNotes,
+    saveNotes,
+    createSchedule,
+    updateSchedule,
+    deleteSchedule,
   }
 })
