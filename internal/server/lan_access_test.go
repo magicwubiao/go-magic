@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -146,5 +147,56 @@ func TestAccessInfo(t *testing.T) {
 	res := decodeBody(t, w)
 	if got, _ := res["pairing_enabled"].(bool); got {
 		t.Fatalf("pairing_enabled should default to false, got %v", res)
+	}
+}
+
+// cidr 构造一个 *net.IPNet 形式的网卡地址（pickLanIP 的输入形态）。
+// 注意 ParseCIDR 返回的 IPNet.IP 是掩码后的网络地址（如 10.10.22.0），
+// 而 InterfaceAddrs 给出的是完整主机地址 —— 这里必须用 ParseCIDR 的第一个
+// 返回值（原始 IP）重建，否则测出来的和真实网卡形态对不上。
+func cidr(t *testing.T, s string) *net.IPNet {
+	t.Helper()
+	ip, ipNet, err := net.ParseCIDR(s)
+	if err != nil {
+		t.Fatalf("parse cidr %q: %v", s, err)
+	}
+	return &net.IPNet{IP: ip, Mask: ipNet.Mask}
+}
+
+// 选 IP 必须：跳过回环与 169.254 链路本地（断网网卡的 APIPA 地址），
+// 优先 RFC1918 私网段，公网地址只作兜底。
+func TestPickLanIP(t *testing.T) {
+	cases := []struct {
+		name  string
+		addrs []net.Addr
+		want  string
+	}{
+		{
+			name:  "prefer private over link-local",
+			addrs: []net.Addr{cidr(t, "169.254.108.14/16"), cidr(t, "10.10.22.242/24")},
+			want:  "10.10.22.242",
+		},
+		{
+			name:  "only link-local means no LAN",
+			addrs: []net.Addr{cidr(t, "169.254.108.14/16")},
+			want:  "",
+		},
+		{
+			name:  "public address as fallback",
+			addrs: []net.Addr{cidr(t, "203.0.113.7/24")},
+			want:  "203.0.113.7",
+		},
+		{
+			name:  "loopback ignored",
+			addrs: []net.Addr{cidr(t, "127.0.0.1/8"), cidr(t, "192.168.1.5/24")},
+			want:  "192.168.1.5",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pickLanIP(tc.addrs); got != tc.want {
+				t.Fatalf("pickLanIP = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

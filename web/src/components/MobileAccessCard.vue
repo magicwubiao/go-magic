@@ -115,7 +115,11 @@ async function loadInfo(): Promise<void> {
     info.value = res
     pairingEnabled.value = res.pairing_enabled
     if (res.pairing_enabled) {
-      await regenerate(false)
+      await regenerate(true)
+    } else if (res.url) {
+      // 免密关闭时二维码编码普通地址：扫码后仍可打开面板，只是要手动输密码。
+      // 此前只在免密开启时才渲染二维码，关着开关面板就一直是"未检测到地址"空态。
+      await renderQR(res.url)
     }
   } catch {
     error.value = t('mobileAccess.loadFailed')

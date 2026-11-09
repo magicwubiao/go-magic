@@ -25,23 +25,64 @@ import (
 // 完成，5 分钟已足够宽裕；过期后面板上点"刷新"重新生成即可。
 const pairTokenTTL = 5 * time.Minute
 
-// lanIPv4 返回本机第一个非回环 IPv4 地址（用于拼局域网访问 URL）。
-// 找不到（纯 IPv6 环境或无网卡）返回空串，前端据此提示"未检测到局域网地址"。
+// lanIPv4 返回本机对局域网最可能可达的 IPv4 地址（用于拼扫码 URL）。
+//
+// 两级策略：
+//  1. UDP 拨号探测（不真正发包，只查路由表）拿到默认路由出口 IP —— 实测最准，
+//     能天然避开 VMware/Hyper-V 虚拟网卡的 host-only 网段；
+//  2. 探测失败（纯离线内网）退回枚举网卡：跳过回环与 169.254 链路本地
+//     （断网网卡自动分配的 APIPA 地址，扫了也连不上），优先 RFC1918 私网段。
 func lanIPv4() string {
+	if ip := lanIPOutbound(); ip != "" {
+		return ip
+	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return ""
 	}
+	return pickLanIP(addrs)
+}
+
+// lanIPOutbound 用 UDP "拨" 一个公网地址获取默认路由的出口 IP。
+// UDP connect 不产生网络流量，离线时只是失败，无副作用。
+func lanIPOutbound() string {
+	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 500*time.Millisecond)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return ""
+	}
+	ip4 := udpAddr.IP.To4()
+	if ip4 == nil || ip4.IsLoopback() {
+		return ""
+	}
+	return ip4.String()
+}
+
+// pickLanIP 从网卡地址列表里挑最合适的局域网 IPv4：
+// 跳过回环与链路本地，优先私网段（RFC1918），其余非回环地址作兜底。
+func pickLanIP(addrs []net.Addr) string {
+	fallback := ""
 	for _, addr := range addrs {
 		ipNet, ok := addr.(*net.IPNet)
 		if !ok || ipNet.IP.IsLoopback() {
 			continue
 		}
-		if ip4 := ipNet.IP.To4(); ip4 != nil {
+		ip4 := ipNet.IP.To4()
+		if ip4 == nil || ip4.IsLinkLocalUnicast() {
+			continue
+		}
+		if ip4.IsPrivate() {
 			return ip4.String()
 		}
+		if fallback == "" {
+			fallback = ip4.String()
+		}
 	}
-	return ""
+	return fallback
 }
 
 // accessBaseURL 返回局域网访问根地址（不含路径）。端口取 Start 注入的值，
@@ -71,9 +112,10 @@ func (s *Server) handleAccessInfo(w http.ResponseWriter, r *http.Request) {
 	enabled := s.pairingEnabledLocked()
 	s.pairMu.Unlock()
 
+	base := s.accessBaseURL()
 	jsonResponse(w, map[string]interface{}{
-		"url":             s.accessBaseURL(),
-		"has_lan":         lanIPv4() != "",
+		"url":             base,
+		"has_lan":         base != "",
 		"pairing_enabled": enabled,
 	})
 }

@@ -33,30 +33,31 @@
                 :value="activeKey"
                 @update:value="handleMenuClick"
               />
-              <!-- 底部"手机扫码访问"+"设置"下拉:点击向上弹出 -->
+              <!-- 底部"手机扫码访问"+"设置"：一行放下，扫码入口只占一个图标（参照
+                   WorkBuddy 底栏右角的图标形态），不整行占位；侧边栏收起时两图标上下排 -->
               <div class="sider-footer">
-                <!-- 手机扫码访问：面板内含局域网地址二维码与"扫码免密登录"开关 -->
-                <n-popover trigger="click" placement="top-start" :show-arrow="false">
-                  <template #trigger>
+                <div class="footer-actions" :class="{ collapsed: siderCollapsed }">
+                  <n-popover trigger="click" placement="top-end" :show-arrow="false">
+                    <template #trigger>
+                      <div class="footer-icon" :title="t('nav.mobileAccess')">
+                        <n-icon size="18"><phone-portrait-outline /></n-icon>
+                      </div>
+                    </template>
+                    <MobileAccessCard />
+                  </n-popover>
+                  <!-- 统一改为点击弹出（hover 误触频繁，点击意图更明确） -->
+                  <n-dropdown
+                    placement="top-start"
+                    :options="headerOptions"
+                    trigger="click"
+                    @select="handleHeaderSelect"
+                  >
                     <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
-                      <n-icon size="20"><phone-portrait-outline /></n-icon>
-                      <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.mobileAccess') }}</span>
+                      <n-icon size="20"><settings-outline /></n-icon>
+                      <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.settings') }}</span>
                     </div>
-                  </template>
-                  <MobileAccessCard />
-                </n-popover>
-                <!-- 统一改为点击弹出（hover 误触频繁，点击意图更明确） -->
-                <n-dropdown
-                  placement="top-start"
-                  :options="headerOptions"
-                  trigger="click"
-                  @select="handleHeaderSelect"
-                >
-                  <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
-                    <n-icon size="20"><settings-outline /></n-icon>
-                    <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.settings') }}</span>
-                  </div>
-                </n-dropdown>
+                  </n-dropdown>
+                </div>
               </div>
             </div>
           </n-layout-sider>
@@ -362,6 +363,40 @@ body {
 .sider-footer {
   border-top: 1px solid #e0e0e0;
   flex-shrink: 0;
+}
+/* 底部一行：左侧"设置"占满，右侧扫码入口只占一个图标（参照 WorkBuddy 底栏） */
+.footer-actions {
+  display: flex;
+  align-items: center;
+}
+/* 侧边栏收起（64px）时放不下两个横排图标，改为上下排列、各自居中 */
+.footer-actions.collapsed {
+  flex-direction: column;
+}
+.footer-actions .settings-trigger {
+  flex: 1;
+  min-width: 0;
+}
+.footer-actions.collapsed .settings-trigger {
+  flex: none;
+  width: 100%;
+}
+.footer-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #333;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.footer-icon:hover {
+  background: #f5f5f5;
+}
+.footer-actions.collapsed .footer-icon {
+  width: 100%;
 }
 .settings-trigger {
   display: flex;
