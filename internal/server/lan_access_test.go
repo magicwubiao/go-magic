@@ -89,11 +89,15 @@ func TestAccessPairRedeemFlow(t *testing.T) {
 		t.Fatalf("issue pair: want 200, got %d", wPair.Code)
 	}
 	res := decodeBody(t, wPair)
-	url, _ := res["url"].(string)
-	if !strings.Contains(url, "/#/login?pair=") {
-		t.Fatalf("pair url should contain hash-router login link, got %q", url)
+	// 前端按当前浏览器 origin 组链接，所以 token 字段是必需产物；
+	// url 只是桌面端兜底（服务器/容器部署时后端探测的 IP 手机不可达）。
+	pairToken, _ := res["token"].(string)
+	if pairToken == "" {
+		t.Fatalf("pair response must carry token, got %v", res)
 	}
-	pairToken := strings.SplitN(url, "pair=", 2)[1]
+	if u, _ := res["url"].(string); u != "" && !strings.Contains(u, "pair="+pairToken) {
+		t.Fatalf("optional url should embed the token, got %q", u)
+	}
 
 	// 错误码拒绝（4xx，不能是 401 —— 前端把 401 当会话失效做全局登出跳转）。
 	wBad := httptest.NewRecorder()

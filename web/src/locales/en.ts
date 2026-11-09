@@ -42,6 +42,7 @@ export default {
     pairHint: 'Pairing on: scanning logs you in automatically, no password needed',
     expiresIn: 'Pair code valid for about {minutes} min, tap refresh to renew',
     refresh: 'Refresh pair code',
+    firewallHint: 'Cannot open on your phone? Make sure the firewall / cloud security group allows this port',
     loadFailed: 'Failed to get access address, please retry',
   },
   common: {

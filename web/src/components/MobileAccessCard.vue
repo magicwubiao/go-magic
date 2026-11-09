@@ -13,8 +13,8 @@
       <n-empty v-else size="small" :description="error || t('mobileAccess.noLan')" class="ma-empty" />
     </div>
 
-    <div v-if="info?.url" class="ma-url-row">
-      <span class="ma-url" :title="info.url">{{ info.url }}</span>
+    <div v-if="displayUrl" class="ma-url-row">
+      <span class="ma-url" :title="displayUrl">{{ displayUrl }}</span>
       <n-button quaternary circle size="tiny" :title="t('common.copy')" @click="copyUrl">
         <template #icon>
           <n-icon :size="14"><copy-outline /></n-icon>
@@ -22,6 +22,7 @@
       </n-button>
     </div>
     <div class="ma-hint">{{ pairingEnabled ? t('mobileAccess.pairHint') : t('mobileAccess.qrHint') }}</div>
+    <div v-if="isIpUrl" class="ma-firewall-hint">{{ t('mobileAccess.firewallHint') }}</div>
 
     <div class="ma-divider"></div>
 
@@ -47,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { NButton, NEmpty, NIcon, NSpin, NSwitch } from 'naive-ui'
@@ -72,6 +73,38 @@ const error = ref('')
 const pairingEnabled = ref(false)
 /** 配对码剩余秒数；0 表示当前二维码不带配对码（或已过期）。 */
 const expiresIn = ref(0)
+
+/**
+ * 二维码/链接应使用的访问根地址。
+ *
+ * 优先跟随当前浏览器 origin —— 服务器部署时手机真正可达的地址是「你访问面板
+ * 用的那个地址」：域名、反向代理、端口映射（如 8642）都在 origin 里；而容器/
+ * 云主机的网卡 IP（172.x 内网、被安全组挡住的公网 IP）从手机往往不可达。
+ * 只有桌面端场景（localhost / WebView 自定义协议）才退回后端探测的局域网 IP。
+ */
+function resolveBaseUrl(): string {
+  const { protocol, host, hostname } = window.location
+  if (protocol === 'http:' || protocol === 'https:') {
+    const isLocal =
+      hostname === 'localhost' || hostname === '127.0.0.1' ||
+      hostname === '::1' || hostname === '[::1]'
+    if (!isLocal) return `${protocol}//${host}`
+  }
+  return info.value?.url || ''
+}
+
+const displayUrl = computed(() => resolveBaseUrl())
+
+/** 地址是裸 IP 时提示排查防火墙/安全组；域名访问（反代已通）则不需要。 */
+const isIpUrl = computed(() => {
+  if (!displayUrl.value) return false
+  try {
+    const host = new URL(displayUrl.value).hostname
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')
+  } catch {
+    return false
+  }
+})
 
 let expireTimer: number | undefined
 
@@ -114,12 +147,14 @@ async function loadInfo(): Promise<void> {
     const res = await getAccessInfo()
     info.value = res
     pairingEnabled.value = res.pairing_enabled
+    // 免密关闭时二维码编码普通地址：扫码后仍可打开面板，只是要手动输密码。
+    const base = resolveBaseUrl()
     if (res.pairing_enabled) {
       await regenerate(true)
-    } else if (res.url) {
-      // 免密关闭时二维码编码普通地址：扫码后仍可打开面板，只是要手动输密码。
-      // 此前只在免密开启时才渲染二维码，关着开关面板就一直是"未检测到地址"空态。
-      await renderQR(res.url)
+    } else if (base) {
+      await renderQR(base)
+    } else {
+      error.value = t('mobileAccess.noLan')
     }
   } catch {
     error.value = t('mobileAccess.loadFailed')
@@ -133,7 +168,14 @@ async function regenerate(silent = true): Promise<void> {
   if (!silent) refreshing.value = true
   try {
     const res = await createPairToken()
-    await renderQR(res.url)
+    // 用当前浏览器 origin 拼链接，而不是后端返回的 url（容器/云主机 IP 手机不可达）。
+    const base = resolveBaseUrl()
+    if (!base) {
+      qrData.value = ''
+      error.value = t('mobileAccess.noLan')
+      return
+    }
+    await renderQR(`${base}/#/login?pair=${encodeURIComponent(res.token)}`)
     startExpireTimer(res.expires_in)
     if (!silent) message.success(t('common.refreshed'))
   } catch {
@@ -155,7 +197,8 @@ async function handleToggle(enabled: boolean): Promise<void> {
       await regenerate(true)
     } else {
       // 关闭后二维码退回普通地址形态（扫码后需手动输密码）。
-      if (info.value?.url) await renderQR(info.value.url)
+      const base = resolveBaseUrl()
+      if (base) await renderQR(base)
       expiresIn.value = 0
     }
   } catch {
@@ -166,9 +209,9 @@ async function handleToggle(enabled: boolean): Promise<void> {
 }
 
 async function copyUrl(): Promise<void> {
-  if (!info.value?.url) return
+  if (!displayUrl.value) return
   try {
-    await navigator.clipboard.writeText(info.value.url)
+    await navigator.clipboard.writeText(displayUrl.value)
     message.success(t('common.copied'))
   } catch {
     message.error(t('common.copyFailed'))
@@ -232,6 +275,14 @@ onUnmounted(stopExpireTimer)
   font-size: 12px;
   color: #999;
   text-align: center;
+}
+.mobile-access-panel .ma-firewall-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #d03050;
+  opacity: 0.8;
+  text-align: center;
+  line-height: 1.4;
 }
 .mobile-access-panel .ma-divider {
   height: 1px;

@@ -169,16 +169,19 @@ func (s *Server) handleAccessPair(w http.ResponseWriter, r *http.Request) {
 	s.pairTokens[tok] = now.Add(pairTokenTTL)
 	s.pairMu.Unlock()
 
+	// 地址交给前端按"当前浏览器 origin"组合：服务器部署时真实可达地址是域名/
+	// 反代地址（容器内网卡 IP 如 172.x 从手机不可达），只有桌面端 localhost
+	// 场景才需要后端探测的局域网 IP。这里仍回 url 作为兜底。
 	base := s.accessBaseURL()
-	if base == "" {
-		jsonError(w, http.StatusServiceUnavailable, "no LAN address available")
-		return
-	}
-	jsonResponse(w, map[string]interface{}{
+	resp := map[string]interface{}{
 		"ok":         true,
-		"url":        base + "/#/login?pair=" + tok,
+		"token":      tok,
 		"expires_in": int(pairTokenTTL.Seconds()),
-	})
+	}
+	if base != "" {
+		resp["url"] = base + "/#/login?pair=" + tok
+	}
+	jsonResponse(w, resp)
 }
 
 // handleAccessPairRedeem 用配对码兑换正式会话（免登录通道，刻意不套 requireAuth）。

@@ -42,6 +42,7 @@ export default {
     pairHint: '已开启免密：手机扫码后自动登录，无需输入密码',
     expiresIn: '配对码约 {minutes} 分钟内有效，可点击刷新',
     refresh: '刷新配对码',
+    firewallHint: '手机打不开？请确认服务器防火墙 / 云安全组已放行该端口',
     loadFailed: '获取访问地址失败，请重试',
   },
   common: {

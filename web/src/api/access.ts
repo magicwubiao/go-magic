@@ -13,8 +13,13 @@ export interface AccessInfo {
 /** 一次性配对码签发结果（/api/access/pair）。 */
 export interface PairResponse {
   ok: boolean
-  /** 携带配对码的完整登录 URL，直接编码进二维码。 */
-  url: string
+  /** 一次性配对码。前端按当前浏览器 origin 组合成完整登录链接。 */
+  token: string
+  /**
+   * 后端拼好的完整登录 URL（用本机网卡 IP）。仅作兜底：服务器/Docker 部署时
+   * 后端探测的 IP 从手机不可达，应优先用 window.location.origin。
+   */
+  url?: string
   /** 配对码有效期（秒）。 */
   expires_in: number
 }
