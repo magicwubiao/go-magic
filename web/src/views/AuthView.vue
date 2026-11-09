@@ -62,15 +62,18 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import type { AuthErrorCode } from '@/stores/auth'
 import { useMessage } from 'naive-ui'
 import { NAlert, NButton, NCard, NCheckbox, NForm, NFormItem, NIcon, NInput, NText } from 'naive-ui'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
+import { redeemPairToken } from '@/api/access'
+import { setAuthToken } from '@/api/client'
 
 const { t } = useI18n()
+const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const authStore = useAuthStore()
@@ -106,6 +109,23 @@ function clearError(): void {
 }
 
 onMounted(async () => {
+  // 手机扫码免密登录：URL 形如 /#/login?pair=<一次性配对码>。
+  // 先尝试兑换配对码，成功即直接进主界面；失败（过期/已用/被关开关）提示
+  // 走正常密码登录。兑换失败不该把 pair 参数留在地址栏，清一下避免刷新重试。
+  const pair = typeof route.query.pair === 'string' ? route.query.pair : ''
+  if (pair) {
+    try {
+      const res = await redeemPairToken(pair)
+      authStore.token = res.token
+      setAuthToken(res.token)
+      message.success(t('auth.loginSuccess'))
+      router.replace('/')
+      return
+    } catch {
+      localError.value = t('auth.pairInvalid')
+      router.replace({ query: { ...route.query, pair: undefined } })
+    }
+  }
   await authStore.checkStatus()
   if (authStore.isAuthenticated) {
     router.replace('/')

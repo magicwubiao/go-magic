@@ -33,8 +33,18 @@
                 :value="activeKey"
                 @update:value="handleMenuClick"
               />
-              <!-- 底部"设置"下拉:点击向上弹出 -->
+              <!-- 底部"手机扫码访问"+"设置"下拉:点击向上弹出 -->
               <div class="sider-footer">
+                <!-- 手机扫码访问：面板内含局域网地址二维码与"扫码免密登录"开关 -->
+                <n-popover trigger="click" placement="top-start" :show-arrow="false">
+                  <template #trigger>
+                    <div class="settings-trigger" :class="{ collapsed: siderCollapsed }">
+                      <n-icon size="20"><phone-portrait-outline /></n-icon>
+                      <span v-if="!siderCollapsed" class="settings-label">{{ t('nav.mobileAccess') }}</span>
+                    </div>
+                  </template>
+                  <MobileAccessCard />
+                </n-popover>
                 <!-- 统一改为点击弹出（hover 误触频繁，点击意图更明确） -->
                 <n-dropdown
                   placement="top-start"
@@ -108,7 +118,7 @@
 <script setup lang="ts">
 import { computed, h, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NIcon, NConfigProvider, NDialogProvider, NDropdown, NLayout, NLayoutContent, NLayoutSider, NMenu, NMessageProvider, NModal, NNotificationProvider, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
+import { NIcon, NConfigProvider, NDialogProvider, NDropdown, NLayout, NLayoutContent, NLayoutSider, NMenu, NMessageProvider, NModal, NNotificationProvider, NPopover, zhCN, dateZhCN, enUS, dateEnUS } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   ChatbubbleOutline,
@@ -124,6 +134,7 @@ import {
   GitNetworkOutline,
   PersonOutline,
   FlagOutline,
+  PhonePortraitOutline,
   ShieldCheckmarkOutline,
   FolderOutline,
   PieChartOutline,
@@ -134,6 +145,7 @@ import {
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
+import MobileAccessCard from '@/components/MobileAccessCard.vue'
 
 const { t, locale } = useI18n()
 const route = useRoute()

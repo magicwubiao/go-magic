@@ -31,6 +31,18 @@ export default {
     workspaces: '工作区',
     manage: '管理',
     settings: '设置',
+    mobileAccess: '手机访问',
+  },
+  // 手机扫码访问面板（侧边栏底部入口）
+  mobileAccess: {
+    title: '手机扫码访问',
+    qrHint: '手机与电脑需在同一局域网，扫码后在手机浏览器打开',
+    noLan: '未检测到局域网地址',
+    allowPair: '允许扫码免密登录',
+    pairHint: '已开启免密：手机扫码后自动登录，无需输入密码',
+    expiresIn: '配对码约 {minutes} 分钟内有效，可点击刷新',
+    refresh: '刷新配对码',
+    loadFailed: '获取访问地址失败，请重试',
   },
   common: {
     save: '保存',
@@ -2437,6 +2449,7 @@ export default {
     serverError: '服务端错误，请稍后重试',
     serverUnreachable: '无法连接服务器，请检查网络后重试',
     loginSuccess: '登录成功',
+    pairInvalid: '配对码无效或已过期，请输入密码登录',
   },
   // 工具调用的人类可读标签。key 为原始工具名；缺失时调用方回退为原始 name。
   toolLabels: {

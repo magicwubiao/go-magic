@@ -31,6 +31,18 @@ export default {
     workspaces: 'Workspaces',
     manage: 'Manage',
     settings: 'Settings',
+    mobileAccess: 'Mobile Access',
+  },
+  // Mobile scan-to-access panel (sidebar footer entry)
+  mobileAccess: {
+    title: 'Scan to Access on Mobile',
+    qrHint: 'Phone and computer must be on the same LAN; scan to open in your phone browser',
+    noLan: 'No LAN address detected',
+    allowPair: 'Allow password-free login via QR',
+    pairHint: 'Pairing on: scanning logs you in automatically, no password needed',
+    expiresIn: 'Pair code valid for about {minutes} min, tap refresh to renew',
+    refresh: 'Refresh pair code',
+    loadFailed: 'Failed to get access address, please retry',
   },
   common: {
     save: 'Save',
@@ -2432,6 +2444,7 @@ export default {
     serverError: 'Server error, please try again later',
     serverUnreachable: 'Cannot reach the server — please check your network',
     loginSuccess: 'Login successful',
+    pairInvalid: 'Pair code is invalid or expired — please sign in with your password',
   },
   // Human-readable labels for tool calls. Keys are raw tool names; the caller
   // falls back to the raw name when a key is missing.

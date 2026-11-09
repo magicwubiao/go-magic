@@ -213,6 +213,13 @@ type Server struct {
 	sessions     *webSessionManager
 	loginLimiter *loginRateLimiter
 
+	// 手机扫码接入（见 lan_access.go）：局域网地址端口、扫码免密开关与
+	// 未兑换的一次性配对码。全部只在内存里，重启即失效。
+	pairMu         sync.Mutex
+	accessPort     int
+	pairingEnabled bool
+	pairTokens     map[string]time.Time
+
 	// CORS allowed origins (empty list => default to local-only)
 	allowedOrigins []string
 
@@ -710,6 +717,7 @@ Your working directory is: %s
 		authToken:            authToken,
 		sessions:             newWebSessionManagerFile(filepath.Join(magicHome, ".web_sessions.json")),
 		loginLimiter:         newLoginRateLimiter(10*time.Minute, 5),
+		pairTokens:           make(map[string]time.Time),
 		allowedOrigins:       allowedOrigins,
 		shareTokens:          make(map[string]*ShareToken),
 		metricsMgr:           metrics.NewMetrics(),
@@ -1732,6 +1740,12 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/auth/login", withCORS(s.handleAuthLogin))
 	mux.HandleFunc("/api/auth/logout", withCORS(requireAuth(s.handleAuthLogout)))
 	mux.HandleFunc("/api/auth/reset", withCORS(requireAuth(s.handleAuthReset)))
+	// 手机扫码接入：info/pairing/pair 都需要已登录的桌面端操作；redeem 是
+	// 手机扫码后自动兑换会话的通道（凭一次性配对码，刻意不套 requireAuth）。
+	mux.HandleFunc("/api/access/info", withCORS(requireAuth(s.handleAccessInfo)))
+	mux.HandleFunc("/api/access/pairing", withCORS(requireAuth(s.handleAccessPairing)))
+	mux.HandleFunc("/api/access/pair", withCORS(requireAuth(s.handleAccessPair)))
+	mux.HandleFunc("/api/access/pair/redeem", withCORS(s.handleAccessPairRedeem))
 
 	// Base API handler for CORS preflight
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -2072,6 +2086,12 @@ func (s *Server) buildRouter() *http.ServeMux {
 func (s *Server) Start(port int) error {
 	mux := s.buildRouter()
 	s.startupTrace.mark("router built")
+
+	// 供扫码接入（lan_access.go）拼局域网 URL 用；在 ListenAndServe 之前写入，
+	// 请求只会在这之后进来。
+	s.pairMu.Lock()
+	s.accessPort = port
+	s.pairMu.Unlock()
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("[server] Magic Agent Dashboard starting on http://localhost:%d\n", port)
