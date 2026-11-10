@@ -1,5 +1,5 @@
 <template>
-  <div class="file-preview-panel" :class="`file-preview-panel--${variant}`">
+  <div ref="panelRoot" class="file-preview-panel" :class="`file-preview-panel--${variant}`">
     <div v-if="loading" class="preview-state" @mousedown="onChromeMouseDown">
       <!-- 加载 / 错误两态没有工具栏（在 preview-ready 里才渲染），但浮窗模式
            下用户仍需要拖动窗口与最小化的入口，因此：
@@ -427,6 +427,10 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
+
+// 面板根节点：滚轮隔离监听挂在这里（覆盖工具栏 + 正文，两种承载方式共用）
+const panelRoot = ref<HTMLElement | null>(null)
+let wheelHost: HTMLElement | null = null
 
 // 行号只渲染到这个行数；再多就没必要看行号了（也避免生成几万行的字符串）
 const MAX_GUTTER_LINES = 20000
@@ -1138,6 +1142,56 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+/**
+ * 判断元素是否还能沿本次滚轮的主方向继续滚动。
+ * 只看真正可滚的容器（overflow auto/scroll），且必须还没到边界；
+ * overflow:hidden 的渲染器画布不算——它是虚拟滚动，不靠浏览器默认行为。
+ */
+function canScrollInDirection(el: HTMLElement, e: WheelEvent): boolean {
+  const vertical = Math.abs(e.deltaY) >= Math.abs(e.deltaX)
+  // 先读滚动尺寸再读 computed style：滚轮很密集，绝大多数节点在这一步
+  // 就排除了，避免每一下滚轮都对路径上十几个节点做样式解析。
+  if (vertical) {
+    if (e.deltaY === 0 || el.scrollHeight <= el.clientHeight + 1) return false
+    if (!/(auto|scroll|overlay)/.test(getComputedStyle(el).overflowY)) return false
+    return e.deltaY > 0
+      ? el.scrollTop + el.clientHeight < el.scrollHeight - 1
+      : el.scrollTop > 1
+  }
+  if (e.deltaX === 0 || el.scrollWidth <= el.clientWidth + 1) return false
+  if (!/(auto|scroll|overlay)/.test(getComputedStyle(el).overflowX)) return false
+  return e.deltaX > 0
+    ? el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+    : el.scrollLeft > 1
+}
+
+/**
+ * 滚轮只在预览内部消化，不许外溢到对话区。
+ *
+ * 复现（xlsx 最明显）：e-virt-table 的虚拟表格自己按 deltaY 改 scrollY，
+ * 但只有「表格还有余量」时才 preventDefault；滚到顶/底、或表格压根没有
+ * 滚动条时，这一下 wheel 的默认行为会沿滚动链落到外层容器，把对话一起
+ * 带着滚——所以是「有时候」才出现。图片/文本预览滚到边界同理。
+ *
+ * 在面板根节点用捕获阶段兜底：从事件目标沿 composedPath 往上找还有余量的
+ * 滚动容器（渲染器挂在 shadow root 里，普通冒泡路径看不到内部节点）；只要
+ * 预览自己还能滚就放行，全都滚不动了就掐掉默认行为。
+ *
+ * 绝不能 stopPropagation：表格的 wheel 监听还要收事件，否则表格反而不滚了。
+ * Ctrl/Cmd + 滚轮是 FileViewer 的缩放手势（它会检查 defaultPrevented），放行。
+ */
+function onPanelWheel(e: WheelEvent) {
+  if (e.ctrlKey || e.metaKey || (e.deltaY === 0 && e.deltaX === 0)) return
+  const root = panelRoot.value
+  if (!root) return
+  for (const node of e.composedPath()) {
+    if (node === root) break
+    // 内部还能滚的容器（正文、放大后的图片、表格标签栏…）优先自己滚
+    if (node instanceof HTMLElement && canScrollInDirection(node, e)) return
+  }
+  e.preventDefault()
+}
+
 // 打开/关闭，以及**在面板保持打开时切换文件**，都要重新加载。
 //
 // 这几个来源必须合并在一个 watcher 里：父组件打开预览时是「文件路径 + active」
@@ -1158,10 +1212,16 @@ watch(
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown, true)
+  // 捕获阶段 + 显式非 passive：必须早于渲染器的 wheel 监听拿到事件，
+  // 且要能 preventDefault（passive 监听里调用会被浏览器忽略）。
+  wheelHost = panelRoot.value
+  wheelHost?.addEventListener('wheel', onPanelWheel, { capture: true, passive: false })
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown, true)
+  wheelHost?.removeEventListener('wheel', onPanelWheel, true)
+  wheelHost = null
   clearWebTimer()
   if (markdownTimer) {
     clearTimeout(markdownTimer)
@@ -1320,6 +1380,10 @@ onUnmounted(() => {
 
 .preview-content-container {
   overflow: auto;
+  /* 滚到边界时不再把滚动链交还给外层（对话/弹窗卡片）。
+     与 onPanelWheel 的 JS 兜底互为保险：CSS 管原生滚动链，JS 管
+     xlsx 这类虚拟滚动「根本没滚动容器」时直接落到外层的 wheel 默认行为。 */
+  overscroll-behavior: contain;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
 }

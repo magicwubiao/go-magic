@@ -5093,6 +5093,10 @@ onActivated(() => {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
   /* 圆角内侧不能露出内容的直角 */
   overflow: hidden;
+  /* 浮窗是 fixed 覆盖层：滚轮（含触屏惯性）在浮窗内到边界后不许再带动
+     底下的对话/文档滚动。xlsx 虚拟表格的边界泄漏另由 FilePreviewPanel
+     的捕获阶段 wheel 兜底处理。 */
+  overscroll-behavior: contain;
 }
 
 /* 面板本体吃掉浮窗扣掉内边距后的全部高度；不写死 height 免得和内边距打架 */
