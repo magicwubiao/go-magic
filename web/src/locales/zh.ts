@@ -34,16 +34,20 @@ export default {
     mobileAccess: '手机访问',
   },
   // 手机扫码访问面板（侧边栏底部入口）
+  // 用户看到的是二维码，界面统一说「二维码」而不是内部术语「配对码」。
   mobileAccess: {
     title: '手机扫码访问',
-    qrHint: '手机与电脑需在同一局域网，扫码后在手机浏览器打开',
-    noLan: '未检测到局域网地址',
-    allowPair: '允许扫码免密登录',
-    pairHint: '已开启免密：手机扫码后自动登录，无需输入密码',
-    expiresIn: '配对码约 {minutes} 分钟内有效，可点击刷新',
-    refresh: '刷新配对码',
-    firewallHint: '手机打不开？请确认服务器防火墙 / 云安全组已放行该端口',
-    loadFailed: '获取访问地址失败，请重试',
+    qrHint: '同一网络扫码打开本面板',
+    noLan: '未找到可访问地址',
+    allowPair: '扫码免密登录',
+    pairHint: '同一网络扫码即自动登录',
+    expiresIn: '二维码 {time} 后失效',
+    expired: '二维码已过期，请刷新',
+    refresh: '刷新二维码',
+    retry: '重试',
+    copyUrl: '复制访问地址',
+    firewallHint: '打不开？检查防火墙 / 安全组端口',
+    loadFailed: '获取访问地址失败',
   },
   common: {
     save: '保存',
@@ -2482,7 +2486,7 @@ export default {
     serverError: '服务端错误，请稍后重试',
     serverUnreachable: '无法连接服务器，请检查网络后重试',
     loginSuccess: '登录成功',
-    pairInvalid: '配对码无效或已过期，请输入密码登录',
+    pairInvalid: '二维码已失效，请输入密码登录',
   },
   // 工具调用的人类可读标签。key 为原始工具名；缺失时调用方回退为原始 name。
   toolLabels: {

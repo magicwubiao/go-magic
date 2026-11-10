@@ -34,16 +34,20 @@ export default {
     mobileAccess: 'Mobile Access',
   },
   // Mobile scan-to-access panel (sidebar footer entry)
+  // Users see a QR code, so the UI says "QR code" rather than the internal "pair code".
   mobileAccess: {
-    title: 'Scan to Access on Mobile',
-    qrHint: 'Phone and computer must be on the same LAN; scan to open in your phone browser',
-    noLan: 'No LAN address detected',
-    allowPair: 'Allow password-free login via QR',
-    pairHint: 'Pairing on: scanning logs you in automatically, no password needed',
-    expiresIn: 'Pair code valid for about {minutes} min, tap refresh to renew',
-    refresh: 'Refresh pair code',
-    firewallHint: 'Cannot open on your phone? Make sure the firewall / cloud security group allows this port',
-    loadFailed: 'Failed to get access address, please retry',
+    title: 'Scan to Open on Phone',
+    qrHint: 'Scan on the same network to open this panel',
+    noLan: 'No reachable address found',
+    allowPair: 'Password-free login',
+    pairHint: 'Scan on the same network to sign in automatically',
+    expiresIn: 'QR code expires in {time}',
+    expired: 'QR code expired, please refresh',
+    refresh: 'Refresh QR code',
+    retry: 'Retry',
+    copyUrl: 'Copy access URL',
+    firewallHint: 'Not opening? Check firewall / security group port',
+    loadFailed: 'Failed to get access address',
   },
   common: {
     save: 'Save',
@@ -2477,7 +2481,7 @@ export default {
     serverError: 'Server error, please try again later',
     serverUnreachable: 'Cannot reach the server — please check your network',
     loginSuccess: 'Login successful',
-    pairInvalid: 'Pair code is invalid or expired — please sign in with your password',
+    pairInvalid: 'This QR code is no longer valid — sign in with your password',
   },
   // Human-readable labels for tool calls. Keys are raw tool names; the caller
   // falls back to the raw name when a key is missing.
