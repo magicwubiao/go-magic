@@ -1,34 +1,5 @@
 <template>
-  <div class="media-page">
-    <!-- 页头：标题 + 未保存状态 + 重新加载（与配置页同款） -->
-    <div class="page-head">
-      <div class="page-head-main">
-        <div class="page-head-icon">
-          <n-icon :component="ImagesOutline" :size="22" />
-        </div>
-        <div>
-          <h2 class="page-head-title">{{ t('media.title') }}</h2>
-          <p class="page-head-sub">{{ t('media.subtitle') }}</p>
-        </div>
-      </div>
-      <div class="page-head-actions">
-        <div class="live-pill">
-          <span class="live-dot" :class="dirtyCount ? 'tone-warn' : 'tone-ok'" />
-          <span class="live-label">
-            {{ dirtyCount ? t('config.unsavedTitle', { count: dirtyCount }) : t('config.allSaved') }}
-          </span>
-        </div>
-        <n-button text @click="copyConfigPath" v-if="config?.config_path">
-          <template #icon><n-icon><CopyOutline /></n-icon></template>
-          {{ t('media.copyConfigPath') }}
-        </n-button>
-        <n-button secondary :loading="loading" @click="handleReload">
-          <template #icon><n-icon><RefreshOutline /></n-icon></template>
-          {{ t('config.reload') }}
-        </n-button>
-      </div>
-    </div>
-
+  <div class="media-settings">
     <n-alert v-if="loadError" type="error" style="margin-bottom: 16px;" :title="t('media.loadFailed')">
       <n-space align="center">
         <n-text>{{ loadError }}</n-text>
@@ -37,22 +8,34 @@
     </n-alert>
 
     <n-spin v-if="loading && !config" />
-    <div v-else-if="config" class="media-grid">
-      <!-- 侧边分区导航 -->
-      <nav class="media-nav">
-        <button
-          v-for="s in sectionList"
-          :key="s.key"
-          type="button"
-          class="nav-item"
-          :class="{ active: active === s.key }"
-          @click="active = s.key"
-        >
-          <n-icon :component="s.icon" :size="17" class="nav-icon" />
-          <span class="nav-label">{{ s.label }}</span>
-          <span v-if="sectionDirty(s.key)" class="nav-dot" />
-        </button>
-      </nav>
+    <div v-else-if="config" class="media-body">
+      <!-- 顶栏：横向分区切换 + 复制配置路径。媒体配置走独立的 /api/media/config，
+           刷新由配置页顶部的全局「重新加载」统一触发（本组件经 defineExpose 暴露
+           reload，配置页 doReload 时调用）；配置文件路径（媒体配置写的是
+           config.json 里的段）偶尔需要人肉核对，保留复制入口。 -->
+      <div class="media-topbar">
+        <div class="media-tabs" role="tablist">
+          <button
+            v-for="s in sectionList"
+            :key="s.key"
+            type="button"
+            role="tab"
+            class="media-tab"
+            :class="{ active: active === s.key }"
+            @click="active = s.key"
+          >
+            <n-icon :component="s.icon" :size="16" class="tab-icon" />
+            <span class="tab-label">{{ s.label }}</span>
+            <span v-if="sectionDirty(s.key)" class="tab-dot" />
+          </button>
+        </div>
+        <div class="topbar-actions">
+          <n-button text size="small" @click="copyConfigPath" v-if="config?.config_path">
+            <template #icon><n-icon><CopyOutline /></n-icon></template>
+            {{ t('media.copyConfigPath') }}
+          </n-button>
+        </div>
+      </div>
 
       <!-- 分区内容 -->
       <div class="media-main">
@@ -656,9 +639,7 @@ import {
   FlaskOutline,
   FolderOpenOutline,
   ImageOutline,
-  ImagesOutline,
   MusicalNotesOutline,
-  RefreshOutline,
   SaveOutline,
 } from '@vicons/ionicons5'
 
@@ -866,7 +847,8 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
 
 // 有未保存修改时重新加载会丢掉改动，先让用户确认（与配置页同款交互；
 // 必须用 naive-ui 的 dialog：桌面 WebView 里原生 confirm/alert 不弹会卡死）。
-function handleReload(): void {
+// 由配置页的全局「重新加载」经 defineExpose 调用，本组件不再单独放刷新按钮。
+async function reload(): Promise<void> {
   if (dirtyCount.value > 0) {
     dialog.warning({
       title: t('config.reloadConfirmTitle'),
@@ -879,8 +861,11 @@ function handleReload(): void {
     })
     return
   }
-  load()
+  await load()
 }
+
+// 供配置页（ConfigView）的全局刷新调用
+defineExpose({ reload })
 
 // ---------------------------------------------------------------- 表单同步
 function syncImageForm(c: MediaConfig) {
@@ -1308,154 +1293,88 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.media-page {
-  max-width: 1180px;
-  margin: 0 auto;
-}
-
-/* ---------- 页头 ---------- */
-.page-head {
+.media-settings {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
 }
 
-.page-head-main {
+/* ---------- 顶栏：横向分区切换 + 本节工具 ----------
+   组件已并入配置页（配置页左侧有自己的分区导航），内部不再竖着重复一套
+   侧边栏：图片/视频/语音改成分段式横向切换，与刷新、复制路径合并成一条顶栏 */
+.media-topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  min-width: 0;
+  flex-wrap: wrap;
 }
 
-.page-head-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  color: #2080f0;
-  background: linear-gradient(135deg, #eaf4ff, #dbeafe);
-}
-
-.page-head-title {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.3;
-  color: #111827;
-}
-
-.page-head-sub {
-  margin: 3px 0 0;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: #8a8f99;
-  max-width: 620px;
-}
-
-.page-head-actions {
+.topbar-actions {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.live-pill {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: #f7f9fb;
+.media-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #f4f6f8;
   border: 1px solid #eceff3;
-  font-size: 12px;
-  color: #6b7280;
-  white-space: nowrap;
 }
 
-.live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-  background: #18a058;
-  box-shadow: 0 0 0 3px rgba(24, 160, 88, 0.14);
-}
-
-.live-dot.tone-warn {
-  background: #f0a020;
-  box-shadow: 0 0 0 3px rgba(240, 160, 32, 0.16);
-}
-
-/* ---------- 布局 ---------- */
-.media-grid {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-}
-
-.media-nav {
-  position: sticky;
-  top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.nav-item {
+.media-tab {
   -webkit-appearance: none;
   appearance: none;
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 10px;
+  gap: 7px;
+  padding: 7px 14px;
   border: none;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   font: inherit;
   font-size: 13.5px;
   color: #5b6573;
-  text-align: left;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.nav-item:hover {
-  background: #f4f6f8;
+.media-tab:hover {
   color: #111827;
 }
 
-.nav-item.active {
-  background: #eaf4ff;
+.media-tab.active {
+  background: #fff;
   color: #185fa5;
   font-weight: 600;
+  box-shadow: 0 1px 4px rgba(17, 24, 39, 0.08);
 }
 
-.nav-icon {
+.tab-icon {
   flex: none;
 }
 
-.nav-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.tab-label {
   white-space: nowrap;
 }
 
 /* 该分区有未保存修改 */
-.nav-dot {
+.tab-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex: none;
   background: #f0a020;
+}
+
+/* ---------- 内容 ---------- */
+.media-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .media-main {
@@ -1573,34 +1492,29 @@ onUnmounted(() => {
 
 /* ===== 移动端 ===== */
 @media (max-width: 900px) {
-  .media-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .media-tabs {
+    width: 100%;
   }
 
-  .media-nav {
-    position: static;
-    flex-direction: row;
+  .media-tab {
+    flex: 1;
+    justify-content: center;
+    padding: 7px 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  /* 窄屏放不下三个等宽分段时允许横向滚动 */
+  .media-tabs {
     overflow-x: auto;
-    padding-bottom: 4px;
-    border-bottom: 1px solid #eaecf0;
   }
 
-  .nav-item {
-    width: auto;
-    white-space: nowrap;
-  }
-
-  .nav-label {
-    overflow: visible;
+  .media-tab {
+    flex: none;
   }
 }
 
 @media (max-width: 768px) {
-  .page-head {
-    flex-direction: column;
-    gap: 8px;
-  }
-
   .test-image {
     max-width: 100%;
     max-height: 200px;

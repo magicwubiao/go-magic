@@ -358,6 +358,12 @@
             </n-card>
           </template>
 
+          <!-- 媒体（生图 / 生视频 / 语音）：组件内部有自己的子分区导航与保存条，
+               配置页的统一保存/还原按钮对该分区不生效（isSaveable 排除） -->
+          <template v-if="active === 'media'">
+            <media-settings ref="mediaSettingsRef" />
+          </template>
+
           <!-- 安全 -->
           <template v-if="active === 'security'">
             <n-card size="small" class="setting-card">
@@ -583,6 +589,7 @@ import { useConfigStore } from '@/stores/config'
 import { useAuthStore } from '@/stores/auth'
 import { request } from '@/api/client'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
+import MediaSettings from '@/components/MediaSettings.vue'
 import {
   AddOutline,
   BulbOutline,
@@ -592,6 +599,7 @@ import {
   FolderOutline,
   GlobeOutline,
   HardwareChipOutline,
+  ImagesOutline,
   OptionsOutline,
   RefreshOutline,
   SaveOutline,
@@ -614,6 +622,11 @@ const rawError = ref<string | null>(null)
 const authConfigured = ref(false)
 const reloading = ref(false)
 
+// 媒体分区组件（仅当 active === 'media' 时挂载）。它走独立的 /api/media/config，
+// 全局「重新加载」经这里调它的 reload 把媒体配置一起刷掉；不在该分区时为 null，
+// 媒体配置等进入分区时组件自己加载。
+const mediaSettingsRef = ref<{ reload: () => Promise<void> } | null>(null)
+
 // ---------------------------------------------------------------- 分区导航
 const active = ref('general')
 
@@ -623,6 +636,11 @@ const sectionList = computed(() => [
   { key: 'memory', label: t('config.memory'), desc: t('config.sectionDesc.memory'), icon: BulbOutline },
   { key: 'server', label: t('config.server'), desc: t('config.sectionDesc.server'), icon: ServerOutline },
   { key: 'browser', label: t('config.browser'), desc: t('config.sectionDesc.browser'), icon: GlobeOutline },
+  // 媒体能力（生图/生视频/语音）原来是独立页面 /media，已并入配置页分区：
+  // 它填的是外部厂商凭据与默认参数，性质和其它分区一样是"配一次长期不动"。
+  // 该分区走独立的 /api/media/config 接口，自带子分区导航与保存按钮，
+  // 不参与下方 SAVE_KEYS 的统一快照/保存机制。
+  { key: 'media', label: t('config.media'), desc: t('config.sectionDesc.media'), icon: ImagesOutline },
   { key: 'security', label: t('config.security'), desc: t('config.sectionDesc.security'), icon: ShieldCheckmarkOutline },
   { key: 'privacy', label: t('config.privacy'), desc: t('config.sectionDesc.privacy'), icon: EyeOffOutline },
   { key: 'raw', label: t('config.rawJson'), desc: t('config.sectionDesc.raw'), icon: CodeSlashOutline },
@@ -1132,6 +1150,9 @@ async function loadRaw() {
 
 // ---------------------------------------------------------------- 重新加载
 async function doReload(): Promise<void> {
+  // 先处理媒体分区：它有自己的未保存检测与确认弹窗，用户取消时媒体保持现状，
+  // 其余分区照常刷新。组件未挂载时 ref 为空，直接跳过。
+  await mediaSettingsRef.value?.reload()
   reloading.value = true
   try {
     await configStore.loadConfig()

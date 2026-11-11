@@ -29,7 +29,6 @@ const ChatView = () => import('./views/ChatView.vue')
 const ConfigView = () => import('./views/ConfigView.vue')
 const ModelsProvidersView = () => import('./views/ModelsProvidersView.vue')
 const ToolsView = () => import('./views/ToolsView.vue')
-const MediaView = () => import('./views/MediaView.vue')
 const SkillsView = () => import('./views/SkillsView.vue')
 const LogsView = () => import('./views/LogsView.vue')
 const SystemView = () => import('./views/SystemView.vue')
@@ -60,9 +59,8 @@ const router = createRouter({
     { path: '/config', component: ConfigView },
     { path: '/models-providers', component: ModelsProvidersView },
     { path: '/tools', component: ToolsView },
-    // 媒体能力（生图 / 生视频 / 语音）的设置页。入口在左下角"设置"下拉里
-    // （与自定义连接器同组），不占主导航：它填的是外部厂商凭据，配一次长期不动。
-    { path: '/media', component: MediaView },
+    // 媒体能力（生图 / 生视频 / 语音）已并入配置页的「媒体」分区，旧链接重定向
+    { path: '/media', redirect: '/config' },
     { path: '/skills', component: SkillsView },
     { path: '/cron', component: CronView },
     { path: '/gateway', component: GatewayView },

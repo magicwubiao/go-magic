@@ -126,7 +126,6 @@ import {
   SettingsOutline,
   CubeOutline,
   HammerOutline,
-  ImageOutline,
   StarOutline,
   DocumentTextOutline,
   HardwareChipOutline,
@@ -280,7 +279,7 @@ const menuOptions = computed(() => [
 // 左下角"设置"上拉菜单，按性质分两组：
 //   ① 运行观测（日志 / 用量 / 系统）：回答"程序现在在干什么、占了多少资源"，
 //      排查问题时连着看，所以放在一起且靠上；
-//   ② 配置类（审批 / 自定义连接器 / 媒体能力 / 配置）：都是"改行为、填凭据"的
+//   ② 配置类（审批 / 自定义连接器 / 配置）：都是"改行为、填凭据"的
 //      一次性动作，配完长期不动，沉到第二组。
 const headerOptions = computed(() => [
   { label: t('nav.logs'), key: '/logs', icon: renderIcon(DocumentTextOutline) },
@@ -291,9 +290,7 @@ const headerOptions = computed(() => [
   // 自定义连接器（MCP / CLI）从主导航移到这里：属于"接外部软件"的配置动作，
   // 低频且与配置/审批同类，不再占主菜单位置。
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
-  // 媒体能力与连接器同类：填的是外部厂商（生图/生视频/语音）的密钥与默认参数，
-  // 配一次长期不动，放在"接入配置"这一组里。
-  { label: t('nav.media'), key: '/media', icon: renderIcon(ImageOutline) },
+  // 媒体能力（生图/生视频/语音）已并入配置页的「媒体」分区，不再单独设入口。
   { label: t('nav.config'), key: 'config', icon: renderIcon(SettingsOutline) },
   { type: 'divider' as const },
   { label: t('common.logout'), key: 'logout', icon: renderIcon(LogOutOutline) },
