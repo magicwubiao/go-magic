@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -139,7 +140,18 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 
 	select {
 	case <-ctx.Done():
-		result.Error = ctx.Err()
+		// 外层超时兜底提示：工具级超时（execute_command/terminal）有自己的
+		// "换后台进程"引导（longRunningTimeoutHint），但 browser、MCP 远程
+		// 调用等慢工具没有。这里对 ctx 超时统一附加一条"别原样重试"的方向
+		// 性提示，避免模型拿到裸的 context deadline exceeded 后原样重试
+		// 烧满轮次。用 %w 包装保留 errors.Is 判定能力。
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.Error = fmt.Errorf("%w after %.0fs. Do not retry the same call unchanged: "+
+				"break the work into smaller steps, use a more targeted tool, "+
+				"or run long work in the background", ctx.Err(), timeout.Seconds())
+		} else {
+			result.Error = ctx.Err()
+		}
 		result.Duration = time.Since(start)
 		return result
 	case res := <-done:

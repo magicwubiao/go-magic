@@ -30,7 +30,35 @@ type ToolStats struct {
 	SuccessRate  float64       `json:"success_rate"`
 	AvgDuration  time.Duration `json:"avg_duration"`
 	LastUsed     time.Time     `json:"last_used"`
+	// Hidden 表示该工具当前因"近期持续失败"被排除在模型可见清单之外
+	// （见 hiddenForRecentFailures）。只影响 ListWithSchemas/ListAvailable，
+	// 不影响管理端展示与 Execute。
+	Hidden bool `json:"hidden"`
 }
+
+// toolOutcome 单次调用结果样本（带时间戳），用于"持续失败工具"的滑动窗口判定。
+type toolOutcome struct {
+	success bool
+	at      time.Time
+}
+
+// 失败工具隐藏的判定参数。
+//
+// 动机：持续失败的工具留在模型清单里只会诱使模型反复选中、反复失败，
+// 最后烧到 loop nudge / 重复失败收口。隐藏后模型自然改走别的工具。
+// 恢复不靠定时器：窗口内的失败样本随时间过期（failureHideRecency），
+// 或被后续成功挤出环形缓冲（failureHideWindow），两种机制都会让工具
+// 重新回到清单 —— 不存在"一旦隐藏永远藏下去"的失败模式。
+var (
+	// 滑动窗口内至少要有的样本数：太少不可信（一次网络抖动就会误伤）。
+	failureHideMinSamples = 6
+	// 窗口内成功率低于该值才隐藏（≤0.2 即 6 次里最多 1 次成功）。
+	failureHideMaxSuccessRate = 0.2
+	// 失败样本的时间有效性：更早的样本不计入窗口。
+	failureHideRecency = 10 * time.Minute
+	// 环形缓冲容量：成功样本会把它顶掉。
+	failureHideWindow = 12
+)
 
 // Registry 管理工具注册和执行
 type Registry struct {
@@ -49,6 +77,9 @@ type Registry struct {
 	// 统计
 	stats   map[string]*ToolStats
 	statsMu sync.RWMutex
+
+	// 近期调用结果环形缓冲（按工具名分桶），失败工具隐藏的数据源。
+	outcomes map[string][]toolOutcome
 
 	// strictCommandList 是 execute_command 的严格清单模式开关，由
 	// SetStrictCommandList 在 RegisterAll 之前设置（见 pkg/config.ToolsConfig）。
@@ -108,6 +139,7 @@ func NewRegistry() *Registry {
 		dynamicTools: make(map[string]*DynamicTool),
 		logger:       &defaultLogger{},
 		stats:        make(map[string]*ToolStats),
+		outcomes:     make(map[string][]toolOutcome),
 	}
 }
 
@@ -531,6 +563,11 @@ func (r *Registry) ListWithSchemas() []map[string]interface{} {
 		if !r.toolsetAllowed(t.Name()) {
 			continue
 		}
+		// 近期持续失败的工具不进模型清单（见 ToolStats.Hidden 注释）：
+		// 留着只会诱使模型反复选中、反复失败。后台任务与管理端不受影响。
+		if r.hiddenForRecentFailures(t.Name()) {
+			continue
+		}
 		schemas = append(schemas, toolSchema.ToOpenAISchema(t))
 	}
 	return schemas
@@ -561,6 +598,10 @@ func (r *Registry) ListAvailable() []Tool {
 			continue
 		}
 		if !r.toolsetAllowed(t.Name()) {
+			continue
+		}
+		// 与 ListWithSchemas 一致：近期持续失败的工具不进模型清单。
+		if r.hiddenForRecentFailures(t.Name()) {
 			continue
 		}
 		tools = append(tools, t)
@@ -641,6 +682,63 @@ func (r *Registry) recordStat(name string, result ToolExecutionResult) {
 		stat.AvgDuration = (stat.AvgDuration + result.Duration) / 2
 	}
 	stat.LastUsed = time.Now()
+
+	// 近期结果环形缓冲：失败工具隐藏的数据源（见 hiddenForRecentFailures）。
+	r.outcomes[name] = append(r.outcomes[name], toolOutcome{
+		success: result.Error == nil,
+		at:      time.Now(),
+	})
+	if len(r.outcomes[name]) > failureHideWindow {
+		r.outcomes[name] = r.outcomes[name][len(r.outcomes[name])-failureHideWindow:]
+	}
+
+	// 状态翻转只在这一处判定和记录，清单查询侧只读结论，避免每次
+	// List 都打日志刷屏。
+	wasHidden := stat.Hidden
+	nowHidden := r.hiddenForRecentFailuresLocked(name)
+	stat.Hidden = nowHidden
+	if nowHidden && !wasHidden {
+		failedInWindow := 0
+		cutoff := time.Now().Add(-failureHideRecency)
+		for _, o := range r.outcomes[name] {
+			if !o.at.Before(cutoff) && !o.success {
+				failedInWindow++
+			}
+		}
+		log.Printf("[Tool] hiding %q from model-facing lists: %d of the last %d recent calls failed "+
+			"(it will reappear automatically once recent failures age out or a call succeeds)", name, failedInWindow, failureHideMinSamples)
+	} else if !nowHidden && wasHidden {
+		log.Printf("[Tool] %q back in the model-facing lists: recent failure window cleared", name)
+	}
+}
+
+// hiddenForRecentFailures 判断工具是否应因"近期持续失败"从模型清单隐藏。
+// 判定完全基于滑动窗口，因此隐藏是自愈的：样本过期或出现成功即恢复。
+// 调用方必须已持有 r.statsMu。
+func (r *Registry) hiddenForRecentFailuresLocked(name string) bool {
+	outcomes := r.outcomes[name]
+	cutoff := time.Now().Add(-failureHideRecency)
+	success, total := 0, 0
+	for _, o := range outcomes {
+		if o.at.Before(cutoff) {
+			continue
+		}
+		total++
+		if o.success {
+			success++
+		}
+	}
+	if total < failureHideMinSamples {
+		return false
+	}
+	return float64(success)/float64(total) <= failureHideMaxSuccessRate
+}
+
+// hiddenForRecentFailures 是 locked 版本的加锁包装，供清单查询侧使用。
+func (r *Registry) hiddenForRecentFailures(name string) bool {
+	r.statsMu.RLock()
+	defer r.statsMu.RUnlock()
+	return r.hiddenForRecentFailuresLocked(name)
 }
 
 // GetStats returns all tool statistics
