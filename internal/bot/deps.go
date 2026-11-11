@@ -250,9 +250,11 @@ func writeDotEnv(path string, env map[string]string) error {
 // getToolsSchema converts registry tools into OpenAI function-calling schemas.
 func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 	tools := []map[string]interface{}{}
-	for _, tName := range registry.List() {
-		t, err := registry.Get(tName)
-		if err != nil || t.Name() == "" {
+	// 与 server 侧一致用 ListAvailable（可用性过滤）：避免把必然失败的
+	// 工具（如未配 key 的媒体工具）暴露给模型。bot 侧无 toolset 开关，
+	// 允许名单已在 buildBotDeps 里通过 Unregister 裁剪，不受影响。
+	for _, t := range registry.ListAvailable() {
+		if t.Name() == "" {
 			continue
 		}
 		desc := t.Description()

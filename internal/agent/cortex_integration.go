@@ -148,8 +148,11 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 
 	// Apply tool filter
 	originalTools := a.tools
+	toolFilterFellBack := false
 	if len(activePlan.ToolFilter) > 0 {
-		a.tools = a.filterTools(activePlan.ToolFilter)
+		var filtered []map[string]interface{}
+		filtered, toolFilterFellBack = a.filterToolsReported(activePlan.ToolFilter)
+		a.tools = filtered
 	}
 
 	// ========== CORTEX: Frozen Snapshot Memory + User Profile ==========
@@ -184,6 +187,19 @@ func (a *Agent) RunWithCortex(ctx context.Context, input string) (string, error)
 		Timestamp: time.Now(),
 	})
 	a.truncateHistory()
+
+	// 计划器的 tool_filter 是幻觉（没命中任何真实工具）时，除了兜底回全量，
+	// 还要告诉模型这件事——否则它以为自己工作在收窄后的工具面上，可能
+	// 继续引用不存在的工具名，或者因"找不到计划里的工具"而转向反复反问。
+	if toolFilterFellBack {
+		a.history = append(a.history, provider.Message{
+			Role:      "user",
+			Content:   toolFilterFallbackNote(activePlan.ToolFilter),
+			Timestamp: time.Now(),
+		})
+		log.Infof("[Agent] cortex tool_filter matched no tools (%v); full tool set restored and model notified",
+			activePlan.ToolFilter)
+	}
 
 	// P0-1: 新用户输入进入时召回动态记忆（turn 内稳定，出站时注入）
 	a.prepareDynamicMemory(input)
@@ -648,6 +664,15 @@ func toolSchemaName(tool map[string]interface{}) string {
 // 过滤器 ⇒ 模型失去全部工具" 是不可接受的失败模式（它会把任务退化成
 // 反复询问用户），宁可忽略过滤器也不能让 agent 变哑。
 func (a *Agent) filterTools(allowed []string) []map[string]interface{} {
+	filtered, _ := a.filterToolsReported(allowed)
+	return filtered
+}
+
+// filterToolsReported 在 filterTools 的语义上额外返回 "兜底是否触发"：
+// fellBack=true 表示模型给的过滤器没有命中任何真实工具（幻觉），
+// 已回退全量工具表。调用方应把这个事实反馈给模型，否则模型不知道自己的
+// 过滤器失效了，还会以为自己正工作在收窄后的工具面上。
+func (a *Agent) filterToolsReported(allowed []string) ([]map[string]interface{}, bool) {
 	allowedMap := make(map[string]bool)
 	for _, name := range allowed {
 		if name != "" {
@@ -655,7 +680,7 @@ func (a *Agent) filterTools(allowed []string) []map[string]interface{} {
 		}
 	}
 	if len(allowedMap) == 0 {
-		return a.tools
+		return a.tools, false
 	}
 
 	var filtered []map[string]interface{}
@@ -667,9 +692,18 @@ func (a *Agent) filterTools(allowed []string) []map[string]interface{} {
 
 	// 过滤器指向了不存在的工具名（模型幻觉）⇒ 视为无过滤器。
 	if len(filtered) == 0 {
-		return a.tools
+		return a.tools, true
 	}
-	return filtered
+	return filtered, false
+}
+
+// toolFilterFallbackNote 生成"过滤器失效"提示：明确告知模型全量工具已
+// 恢复可用，请直接使用真实工具名继续任务，不要再次给出同样的过滤器。
+func toolFilterFallbackNote(filter []string) string {
+	return "Your planned tool_filter matched no real tool names: " +
+		"[" + strings.Join(filter, ", ") + "]. " +
+		"The full tool set has been restored for this task. " +
+		"Continue with the actual tool names shown to you; do not repeat the same filter."
 }
 
 // Additional event kinds for Cortex integration

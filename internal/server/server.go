@@ -1469,11 +1469,10 @@ func (s *Server) registerApprovalSSEHandler(sessionID string, writeSSE func(stri
 
 func getToolsSchema(registry *tool.Registry) []map[string]interface{} {
 	tools := []map[string]interface{}{}
-	for _, tName := range registry.List() {
-		t, err := registry.Get(tName)
-		if err != nil {
-			continue
-		}
+	// 用 ListAvailable 而不是 List：它带两层过滤（AvailabilityChecker +
+	// tools.enabled/disabled 开关），否则未配 key 的 media 工具、被用户
+	// 关掉的工具仍会进模型清单，模型会选到必然失败的工具。
+	for _, t := range registry.ListAvailable() {
 		name := t.Name()
 		if name == "" {
 			continue

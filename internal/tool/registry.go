@@ -407,6 +407,13 @@ func (r *Registry) Register(t Tool) {
 	if prev, exists := r.tools[t.Name()]; exists {
 		log.Printf("[Tool] duplicate tool name %q: %T replaced by %T", t.Name(), prev, t)
 	}
+	// 描述质量是"模型选对工具"的第一道闸门：空/过短描述会让模型只能靠
+	// 工具名猜用途。这里只告警不拦截（测试桩与内部占位工具允许空描述），
+	// 让低质量描述至少有据可查，不再静默上线。
+	if d := t.Description(); len(strings.TrimSpace(d)) < 10 {
+		log.Printf("[Tool] tool %q has an empty or too-short description (%d chars): "+
+			"the model will struggle to pick it correctly", t.Name(), len(d))
+	}
 	r.tools[t.Name()] = t
 
 	// 工具自带超时预算（见 TimeoutProvider）：注册时落到 timeouts 表，
