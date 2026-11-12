@@ -855,6 +855,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // setSessionArchived 归档 / 取消归档一个会话。
+  //
+  // store 里的 sessions 列表只装未归档会话（getSessions 默认过滤），因此归档
+  // 成功后要把条目从列表里摘掉；取消归档的会话由调用方负责刷新列表/缓存补回。
+  // 与 deleteSession 不同：不清会话状态与 SSE 连接——归档不是删除，正在看的
+  // 会话被归档后聊天区照常保留，只是侧栏不再显示它。
+  async function setSessionArchived(id: string, archived: boolean): Promise<boolean> {
+    let ok = true
+    try {
+      await sessionsApi.setSessionArchived(id, archived)
+    } catch (e) {
+      ok = false
+      console.error('Failed to archive session:', e)
+    }
+    if (ok && archived) {
+      sessions.value = sessions.value.filter(s => s.id !== id)
+    }
+    return ok
+  }
+
 // 直接透传后端错误，调用方负责提示。目录一旦有了消息就固定，后端会拒改（409）。
   async function updateSessionWorkDir(id: string, workDir: string): Promise<void> {
     // 先用请求体里的值就地改一份，界面立刻有反应（目录是用户刚点的，不需要等网络）；
@@ -2909,6 +2929,7 @@ export const useChatStore = defineStore('chat', () => {
     selectSession,
     deleteSession,
     renameSession,
+    setSessionArchived,
     updateSessionWorkDir,
     isSessionRunning,
     sendMessage,

@@ -1521,6 +1521,7 @@ func convertDBSessionToAPI(s *session.Session) *Session {
 		WorkDir:        s.WorkDir,
 		WorkDirUserSet: s.WorkDirUserSet,
 		WorkDirChosen:  s.WorkDirChosen,
+		Archived:       s.Archived,
 		StartedAt:      s.CreatedAt.Unix(),
 		LastActive:     s.UpdatedAt.Unix(),
 		IsActive:       isActive,
@@ -1558,6 +1559,7 @@ func convertSessionSummaryToAPI(sm *session.SessionSummary) *Session {
 		WorkDir:        sm.WorkDir,
 		WorkDirUserSet: sm.WorkDirUserSet,
 		WorkDirChosen:  sm.WorkDirChosen,
+		Archived:       sm.Archived,
 		StartedAt:      sm.CreatedAt.Unix(),
 		LastActive:     sm.UpdatedAt.Unix(),
 		IsActive:       time.Since(sm.UpdatedAt) < 30*time.Minute,
@@ -1773,6 +1775,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 
 	// Sessions
 	mux.HandleFunc("/api/sessions", withCORS(requireAuth(s.handleSessions)))
+	mux.HandleFunc("/api/sessions/batch", withCORS(requireAuth(s.handleSessionsBatch)))
 	mux.HandleFunc("/api/sessions/dir-groups", withCORS(requireAuth(s.handleSessionsDirGroups)))
 	mux.HandleFunc("/api/sessions/search", withCORS(requireAuth(s.handleSessionSearch)))
 	mux.HandleFunc("/api/sessions/", withCORS(requireAuth(s.handleSessionByID)))

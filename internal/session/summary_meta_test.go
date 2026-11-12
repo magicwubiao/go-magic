@@ -85,7 +85,7 @@ func TestSessionSummaryColumnsStayInSync(t *testing.T) {
 		t.Fatalf("SaveSession: %v", err)
 	}
 
-	summaries, total, err := store.ListSessionSummaries(ctx, 20, 0)
+	summaries, total, err := store.ListSessionSummaries(ctx, 20, 0, 0)
 	if err != nil {
 		t.Fatalf("ListSessionSummaries: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestSessionSummaryColumnsStayInSync(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveSession (update): %v", err)
 	}
-	summaries, _, err = store.ListSessionSummaries(ctx, 20, 0)
+	summaries, _, err = store.ListSessionSummaries(ctx, 20, 0, 0)
 	if err != nil {
 		t.Fatalf("ListSessionSummaries (update): %v", err)
 	}
@@ -138,7 +138,7 @@ func TestListSessionSummariesPagination(t *testing.T) {
 		}
 	}
 
-	page1, total, err := store.ListSessionSummaries(ctx, 3, 0)
+	page1, total, err := store.ListSessionSummaries(ctx, 3, 0, 0)
 	if err != nil {
 		t.Fatalf("page1: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestListSessionSummariesPagination(t *testing.T) {
 		t.Fatalf("第 1 页期望 3 条 / total 7，got len=%d total=%d", len(page1), total)
 	}
 
-	page3, _, err := store.ListSessionSummaries(ctx, 3, 6)
+	page3, _, err := store.ListSessionSummaries(ctx, 3, 6, 0)
 	if err != nil {
 		t.Fatalf("page3: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestListSessionSummariesPagination(t *testing.T) {
 	}
 
 	// 越界页返回空，不报错（前端全量补齐时会多算页）
-	empty, _, err := store.ListSessionSummaries(ctx, 3, 999)
+	empty, _, err := store.ListSessionSummaries(ctx, 3, 999, 0)
 	if err != nil {
 		t.Fatalf("越界页不应报错: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestInitSchemaBackfillsLegacyDB(t *testing.T) {
 	}
 	defer store.Close()
 
-	summaries, total, err := store.ListSessionSummaries(context.Background(), 20, 0)
+	summaries, total, err := store.ListSessionSummaries(context.Background(), 20, 0, 0)
 	if err != nil {
 		t.Fatalf("ListSessionSummaries: %v", err)
 	}

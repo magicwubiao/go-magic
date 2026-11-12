@@ -150,8 +150,9 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, convertDBSessionToAPI(dbSession))
 	case "PUT":
 		var req struct {
-			Name    string  `json:"name"`
-			WorkDir *string `json:"work_dir"`
+			Name     string  `json:"name"`
+			WorkDir  *string `json:"work_dir"`
+			Archived *bool   `json:"archived"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -159,6 +160,13 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Name != "" {
 			if err := s.sessionStore.RenameSession(context.Background(), id, req.Name); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+		}
+		if req.Archived != nil {
+			// 归档/取消归档：软隐藏单个字段，不删除数据，可随时切换。
+			if err := s.sessionStore.SetSessionArchived(context.Background(), id, *req.Archived); err != nil {
 				http.Error(w, err.Error(), 400)
 				return
 			}
@@ -313,7 +321,15 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// 反序列化、再在内存里切片取 20 条 —— 取一页也要付"全部会话 × 全部消息"
 		// 的代价，且随会话数与消息体量线性放大。首屏侧栏还要按目录分组拉全量，
 		// 放大倍数更明显。
-		summaries, total, err := s.sessionStore.ListSessionSummaries(r.Context(), limit, offset)
+		//
+		// archived 过滤：?archived=1 只看已归档（chat 页"已归档"视图的数据源），
+		// 缺省只看未归档（默认侧栏）。总数字段 total 与过滤条件同源，
+		// 前端按它判断 hasMore，两者必须一致。
+		archivedFilter := 0
+		if r.URL.Query().Get("archived") == "1" {
+			archivedFilter = 1
+		}
+		summaries, total, err := s.sessionStore.ListSessionSummaries(r.Context(), limit, offset, archivedFilter)
 		if err != nil {
 			jsonResponse(w, map[string]interface{}{"sessions": []Session{}, "total": 0, "limit": limit})
 			return
@@ -505,6 +521,95 @@ func (s *Server) handleSessionsDirGroups(w http.ResponseWriter, r *http.Request)
 		"groups":         groups,
 		"total_sessions": total,
 	})
+}
+
+// handleSessionsBatch POST /api/sessions/batch —— 会话批量操作。
+//
+//	body: { "action": "archive" | "unarchive" | "delete", "ids": [...], "delete_files": bool }
+//
+// 与前端循环调单条接口相比，这里的好处不只是省往返：
+//   - archive/unarchive 走单条 SQL（SetSessionsArchived），天然原子；
+//   - delete 复用与单个 DELETE 完全相同的清理逻辑（工作目录/附件/上传文件），
+//     但逐条独立执行、单条失败不影响其余条目，失败的 id 与原因逐条回给前端。
+func (s *Server) handleSessionsBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.sessionStore == nil {
+		http.Error(w, "session store not available", 500)
+		return
+	}
+
+	var req struct {
+		Action      string   `json:"action"`
+		IDs         []string `json:"ids"`
+		DeleteFiles bool     `json:"delete_files"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids required", 400)
+		return
+	}
+
+	type batchFailure struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+
+	switch req.Action {
+	case "archive", "unarchive":
+		affected, err := s.sessionStore.SetSessionsArchived(r.Context(), req.IDs, req.Action == "archive")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"ok":       true,
+			"affected": affected,
+		})
+
+	case "delete":
+		affected := 0
+		var failed []batchFailure
+		for _, id := range req.IDs {
+			dbSession, err := s.sessionStore.LoadSession(context.Background(), id)
+			if err != nil {
+				// 与单条 DELETE 的语义对齐：会话不存在视为已删除成功，
+				// 重复提交 / 并发删除不该让整批操作报错。
+				affected++
+				continue
+			}
+			if err := s.sessionStore.DeleteSession(context.Background(), id); err != nil {
+				failed = append(failed, batchFailure{ID: id, Error: err.Error()})
+				continue
+			}
+			affected++
+			s.acquireAgentsMu()
+			delete(s.agents, id)
+			s.releaseAgentsMu()
+
+			if req.DeleteFiles {
+				if dbSession.WorkDir != "" && !dbSession.WorkDirUserSet {
+					s.cleanupSessionWorkDir(dbSession.WorkDir)
+				} else if dbSession.WorkDir != "" {
+					os.RemoveAll(filepath.Join(dbSession.WorkDir, workdirAttachmentsDir))
+				}
+				s.cleanupSessionUploads(id)
+			}
+		}
+		jsonResponse(w, map[string]interface{}{
+			"ok":       true,
+			"affected": affected,
+			"failed":   failed,
+		})
+
+	default:
+		http.Error(w, "unknown action: "+req.Action, 400)
+	}
 }
 
 // chatPayload 是提交一条聊天消息的公共请求体（/stream 与 /messages 共用）。

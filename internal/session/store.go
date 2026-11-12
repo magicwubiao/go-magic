@@ -38,6 +38,9 @@ type Session struct {
 	WorkDirUserSet  bool            `json:"work_dir_user_set"`
 	WorkDirChosen   bool            `json:"work_dir_chosen"`
 	PlanMode        bool            `json:"plan_mode"`
+	// Archived 为 true 表示会话被用户归档：不出现在默认会话列表（GET /sessions）
+	// 里，只在"已归档"视图（?archived=1）展示。归档不删除数据，随时可取消。
+	Archived        bool            `json:"archived"`
 	Messages        []types.Message `json:"messages"`
 	InputTokens     int             `json:"input_tokens"`
 	OutputTokens    int             `json:"output_tokens"`
@@ -103,6 +106,7 @@ type SessionSummary struct {
 	WorkDir         string
 	WorkDirUserSet  bool
 	WorkDirChosen   bool
+	Archived        bool
 	Title           string
 	Preview         string
 	MessageCount    int
@@ -115,15 +119,15 @@ type SessionSummary struct {
 }
 
 // sessionSummaryColumns 是 SessionSummary 的列清单，必须与 scanSessionSummaries 的扫描顺序一致。
-const sessionSummaryColumns = `id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, title, preview, msg_count, tool_call_count, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at`
+const sessionSummaryColumns = `id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, archived, title, preview, msg_count, tool_call_count, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at`
 
 func scanSessionSummaries(rows *sql.Rows) ([]*SessionSummary, error) {
 	var out []*SessionSummary
 	for rows.Next() {
 		var sm SessionSummary
-		var workDirUserSet, workDirChosen int
+		var workDirUserSet, workDirChosen, archived int
 		if err := rows.Scan(
-			&sm.ID, &sm.Name, &sm.Profile, &sm.Platform, &sm.Model, &sm.WorkDir, &workDirUserSet, &workDirChosen,
+			&sm.ID, &sm.Name, &sm.Profile, &sm.Platform, &sm.Model, &sm.WorkDir, &workDirUserSet, &workDirChosen, &archived,
 			&sm.Title, &sm.Preview, &sm.MessageCount, &sm.ToolCallCount,
 			&sm.InputTokens, &sm.OutputTokens, &sm.CacheReadTokens, &sm.CreatedAt, &sm.UpdatedAt,
 		); err != nil {
@@ -131,25 +135,31 @@ func scanSessionSummaries(rows *sql.Rows) ([]*SessionSummary, error) {
 		}
 		sm.WorkDirUserSet = workDirUserSet != 0
 		sm.WorkDirChosen = workDirChosen != 0
+		sm.Archived = archived != 0
 		out = append(out, &sm)
 	}
 	return out, rows.Err()
 }
 
-// ListSessionSummaries 返回一页会话摘要，以及会话总数。
+// ListSessionSummaries 返回一页会话摘要，以及（同过滤条件下）的会话总数。
 //
 // 与 ListSessions 的关键差别：不读 messages 大字段，且 LIMIT/OFFSET 下推到 SQL。
 // 因此单次请求的开销与会话库总量、单会话消息长度都无关（索引 idx_sessions_platform_updated
 // 覆盖排序），彻底消除"取 20 条却付出全表代价"的问题。
-func (s *Store) ListSessionSummaries(ctx context.Context, limit, offset int) ([]*SessionSummary, int, error) {
+//
+// archived 过滤：0 = 只看未归档（默认侧栏）、1 = 只看已归档、-1 = 全部。
+// COUNT 与 SELECT 必须用同一个条件，否则前端按 total 判断 hasMore 会错位。
+func (s *Store) ListSessionSummaries(ctx context.Context, limit, offset, archived int) ([]*SessionSummary, int, error) {
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions`).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE (? < 0 OR archived = ?)`,
+		archived, archived).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionSummaryColumns+` FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
-		limit, offset)
+		`SELECT `+sessionSummaryColumns+` FROM sessions WHERE (? < 0 OR archived = ?) ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+		archived, archived, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -179,11 +189,12 @@ func (s *Store) CountSessions(ctx context.Context) (int, int, error) {
 
 // ListSessionSummariesByUserWorkDir 是 ListSessionsByUserWorkDir 的轻量版本：
 // 同样的筛选条件（用户在新建时选定过工作目录的 web 会话），但不读消息正文。
+// 已归档的会话不进目录分组面板（它是默认侧栏的扩展视图，归档即从默认视图消失）。
 func (s *Store) ListSessionSummariesByUserWorkDir(ctx context.Context) ([]*SessionSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+sessionSummaryColumns+`
 		FROM sessions
-		WHERE (platform = '' OR platform = 'web') AND workdir != '' AND workdir_chosen = 1
+		WHERE (platform = '' OR platform = 'web') AND workdir != '' AND workdir_chosen = 1 AND archived = 0
 		ORDER BY updated_at DESC
 	`)
 	if err != nil {
@@ -290,6 +301,9 @@ func initSchema(db *sql.DB) error {
 		return err
 	}
 	if err := addSessionMetaColumnsIfNotExists(db); err != nil {
+		return err
+	}
+	if err := addArchivedColumnIfNotExists(db); err != nil {
 		return err
 	}
 	// 存量行没有冗余摘要，回填一次（仅处理 meta_version 落后的行，之后的启动是零成本）。
@@ -490,6 +504,23 @@ func addPlanModeColumnIfNotExists(db *sql.DB) error {
 	return nil
 }
 
+// addArchivedColumnIfNotExists 补齐会话归档标记列。
+// 归档是软隐藏：不删数据、不清工作目录，随时可在"已归档"视图里取消。
+func addArchivedColumnIfNotExists(db *sql.DB) error {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'archived')`
+	if err := db.QueryRow(query).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		_, err := db.Exec(`ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	messages, err := json.Marshal(session.Messages)
 	if err != nil {
@@ -502,11 +533,11 @@ func (s *Store) SaveSession(ctx context.Context, session *Session) error {
 	meta := DeriveSessionMeta(session.Messages)
 
 	query := `
-	INSERT OR REPLACE INTO sessions (id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, messages, title, preview, msg_count, tool_call_count, meta_version, input_tokens, output_tokens, cache_read_tokens, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	INSERT OR REPLACE INTO sessions (id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, archived, messages, title, preview, msg_count, tool_call_count, meta_version, input_tokens, output_tokens, cache_read_tokens, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`
 	_, err = s.db.ExecContext(ctx, query,
-		session.ID, session.Name, session.Profile, session.Platform, session.Model, session.WorkDir, session.WorkDirUserSet, session.WorkDirChosen, session.PlanMode,
+		session.ID, session.Name, session.Profile, session.Platform, session.Model, session.WorkDir, session.WorkDirUserSet, session.WorkDirChosen, session.PlanMode, session.Archived,
 		string(messages), meta.Title, meta.Preview, meta.MessageCount, meta.ToolCallCount, metaVersion,
 		session.InputTokens, session.OutputTokens, session.CacheReadTokens)
 	return err
@@ -569,20 +600,21 @@ func (s *Store) saveSessionDataInternal(ctx context.Context, id, platform string
 }
 
 func (s *Store) LoadSession(ctx context.Context, id string) (*Session, error) {
-	query := `SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
+	query := `SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, archived, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE id = ?`
 	row := s.db.QueryRowContext(ctx, query, id)
 
 	var session Session
 	var messagesStr string
 	var workDirUserSet, workDirChosen int
-	var planMode int
-	err := row.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &workDirChosen, &planMode, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
+	var planMode, archived int
+	err := row.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &workDirChosen, &planMode, &archived, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	session.WorkDirUserSet = workDirUserSet != 0
 	session.WorkDirChosen = workDirChosen != 0
 	session.PlanMode = planMode != 0
+	session.Archived = archived != 0
 
 	if messagesStr != "" {
 		if err := json.Unmarshal([]byte(messagesStr), &session.Messages); err != nil {
@@ -600,10 +632,10 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 	var err error
 
 	if profile == "" {
-		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, archived, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
 		rows, err = s.db.QueryContext(ctx, query)
 	} else {
-		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
+		query = `SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, archived, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at FROM sessions WHERE profile = ? ORDER BY updated_at DESC`
 		rows, err = s.db.QueryContext(ctx, query, profile)
 	}
 	if err != nil {
@@ -621,7 +653,7 @@ func (s *Store) ListSessions(ctx context.Context, profile string) ([]*Session, e
 // web UI) are deliberately excluded.
 func (s *Store) ListSessionsByUserWorkDir(ctx context.Context) ([]*Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at
+		SELECT id, name, profile, platform, model, workdir, workdir_user_set, workdir_chosen, plan_mode, archived, messages, input_tokens, output_tokens, cache_read_tokens, created_at, updated_at
 		FROM sessions
 		WHERE (platform = '' OR platform = 'web') AND workdir != '' AND workdir_chosen = 1
 		ORDER BY updated_at DESC
@@ -640,14 +672,15 @@ func scanSessionListRows(rows *sql.Rows) ([]*Session, error) {
 		var session Session
 		var messagesStr sql.NullString
 		var workDirUserSet, workDirChosen int
-		var planMode int
-		err := rows.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &workDirChosen, &planMode, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
+		var planMode, archived int
+		err := rows.Scan(&session.ID, &session.Name, &session.Profile, &session.Platform, &session.Model, &session.WorkDir, &workDirUserSet, &workDirChosen, &planMode, &archived, &messagesStr, &session.InputTokens, &session.OutputTokens, &session.CacheReadTokens, &session.CreatedAt, &session.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
 		session.WorkDirUserSet = workDirUserSet != 0
 		session.WorkDirChosen = workDirChosen != 0
 		session.PlanMode = planMode != 0
+		session.Archived = archived != 0
 		if messagesStr.Valid && messagesStr.String != "" {
 			json.Unmarshal([]byte(messagesStr.String), &session.Messages)
 		}
@@ -736,6 +769,59 @@ func (s *Store) UpdateWorkDir(ctx context.Context, id, workDir string, userSet b
 // UpdatePlanMode 已随计划模式（plan mode）清理删除 —— 2026-09-29。
 // plan_mode 列、Session.PlanMode 字段与增删改查里的读写一律保留（免迁移），
 // 只是不再有代码修改它。历史见 .workbuddy/reviews/2026-09-29-plan-mode-review.md。
+
+// SetSessionArchived 归档 / 取消归档一个会话（软隐藏，不删除任何数据）。
+//
+// 刻意只 UPDATE 这一个字段而不走 SaveSession 整行覆写：SaveSession 需要
+// LoadSession 先把消息大字段读出来再写回去，为改一个布尔值付这份 IO 不划算，
+// 也平添一次"读-改-写"竞态窗口。updated_at 不动：归档不改变会话的最近活动
+// 时间，取消归档后列表排序不应跳变。
+func (s *Store) SetSessionArchived(ctx context.Context, id string, archived bool) error {
+	archivedInt := 0
+	if archived {
+		archivedInt = 1
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET archived = ? WHERE id = ?`, archivedInt, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("session not found: %s", id)
+	}
+
+	return nil
+}
+
+// SetSessionsArchived 批量归档 / 取消归档。返回实际更新的条数。
+// 单条 SQL 完成整批更新：比循环调用 SetSessionArchived 少 N-1 次提交，
+// 且天然原子——要么全部生效，要么全部不动。
+func (s *Store) SetSessionsArchived(ctx context.Context, ids []string, archived bool) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	archivedInt := 0
+	if archived {
+		archivedInt = 1
+	}
+	placeholders := strings.Repeat("?, ", len(ids)-1) + "?"
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, archivedInt)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET archived = ? WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	query := `DELETE FROM sessions WHERE id = ?`

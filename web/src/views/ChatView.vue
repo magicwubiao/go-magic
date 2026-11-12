@@ -45,12 +45,64 @@
             <n-icon :component="SearchOutline" :size="14" />
           </template>
         </n-input>
+        <!-- 更多操作（归档视图 / 批量管理收进下拉，避免头部拥挤） -->
+        <n-dropdown
+          trigger="click"
+          placement="bottom-end"
+          :options="sidebarToolOptions"
+          @select="onSidebarToolSelect"
+        >
+          <n-button
+            v-show="!isMobile"
+            quaternary
+            size="small"
+            class="sidebar-tool-btn"
+            :class="{ 'tool-btn-active': showArchived || batchMode }"
+            :title="t('chat.moreActions')"
+          >
+            <template #icon>
+              <n-icon><EllipsisHorizontalOutline /></n-icon>
+            </template>
+          </n-button>
+        </n-dropdown>
         <!-- 新建聊天（移动端隐藏：顶栏工具条上已有 + 按钮，避免重复入口） -->
         <n-button v-show="!isMobile" type="primary" class="new-chat-btn" @click="createSession" size="small">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
           </template>
         </n-button>
+      </div>
+      <!-- 归档视图 / 批量管理条：位于表头与列表之间，互斥显示（归档视图是浏览态，
+           批量条是操作态；两者可以组合，所以归档标识常驻、批量条出现时追加在下） -->
+      <div
+        v-show="(!isMobile || mobileSessionExpanded) && (showArchived || batchMode)"
+        class="sidebar-subbar"
+      >
+        <div v-if="showArchived" class="archived-banner">
+          <n-icon :component="ArchiveOutline" :size="13" />
+          <span class="archived-banner-label">{{ t('chat.archivedView') }}</span>
+          <span class="archived-banner-count">{{ archivedSessions.length }}</span>
+          <n-button size="tiny" quaternary @click="exitArchivedView">
+            {{ t('chat.backToSessions') }}
+          </n-button>
+        </div>
+        <div v-if="batchMode" class="batch-bar">
+          <!-- 第一行：计数 + 取消（靠右）；第二行：批量动作按钮。固定两行避免
+               flex-wrap 随侧栏宽度随机折行造成参差感 -->
+          <div class="batch-bar-row">
+            <span class="batch-bar-count">{{ t('chat.selectedCount', { count: selectedSessionIds.size }) }}</span>
+            <n-button size="tiny" quaternary @click="toggleBatchMode">{{ t('common.cancel') }}</n-button>
+          </div>
+          <div class="batch-bar-row">
+            <n-button size="tiny" quaternary @click="selectAllVisibleSessions">{{ t('chat.selectAll') }}</n-button>
+            <n-button size="tiny" quaternary type="primary" :disabled="!selectedSessionIds.size" @click="batchSetArchived(!showArchived)">
+              {{ showArchived ? t('chat.batchUnarchive') : t('chat.batchArchive') }}
+            </n-button>
+            <n-button size="tiny" quaternary type="error" :disabled="!selectedSessionIds.size" @click="batchDeleteSessions">
+              {{ t('chat.batchDelete') }}
+            </n-button>
+          </div>
+        </div>
       </div>
       <div class="session-list" ref="sessionListRef" v-show="!isMobile || mobileSessionExpanded">
         <!-- 会话骨架：数据（尤其是全量补齐）到位前占位，避免"空 → 20 条 → 分组"的多次跳变 -->
@@ -112,10 +164,24 @@
           <div
             v-else
             class="session-item"
-            :class="{ active: chatStore.activeSessionId === row.session.id, 'in-group': showGroupHeaders }"
-            @click="handleSessionClick(row.session.id)"
+            :class="{
+              active: chatStore.activeSessionId === row.session.id,
+              'in-group': showGroupHeaders,
+              selectable: batchMode,
+              selected: batchMode && selectedSessionIds.has(row.session.id),
+            }"
+            @click="batchMode ? toggleSelectSession(row.session.id) : handleSessionClick(row.session.id)"
             @mouseenter="loadSessionGoals(row.session.id)"
           >
+            <!-- 批量管理：行首多选框。@click.stop 防止勾选动作冒泡到行点击
+                 （行点击在批量模式下也是"切换选中"，双触发会互相抵消）。 -->
+            <n-checkbox
+              v-if="batchMode"
+              class="session-select-checkbox"
+              :checked="selectedSessionIds.has(row.session.id)"
+              @click.stop
+              @update:checked="() => toggleSelectSession(row.session.id)"
+            />
             <div class="session-content">
               <div class="session-title">
                 <div style="display: flex; align-items: center; gap: 4px;">
@@ -170,7 +236,8 @@
                 {{ row.session.message_count || 0 }} {{ t('chat.messages') }}
               </div>
             </div>
-            <div class="session-actions">
+            <!-- 批量模式下隐藏三点菜单：行点击已改为"切换选中"，菜单会误触 -->
+            <div class="session-actions" v-if="!batchMode">
               <n-dropdown
                 trigger="click"
                 placement="bottom-end"
@@ -196,7 +263,7 @@
           {{ t('chat.searchNoResults') }}
         </n-text>
         <n-text v-if="!isSearching && !sidebarRows.length && !chatStore.sessionsLoading && !searchLoading && !sessionListSkeletonVisible" depth="3" style="padding: 16px; display: block; text-align: center;">
-          {{ t('chat.noSessions') }}
+          {{ showArchived ? t('chat.archivedEmpty') : t('chat.noSessions') }}
         </n-text>
       </div>
       <!-- 加载更多时的指示器：绝对定位覆盖在列表底部，**不进入滚动流**。
@@ -1309,7 +1376,7 @@
 import { ref, computed, h, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog, NIcon } from 'naive-ui'
-import { NAlert, NButton, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NSwitch, NTag, NText, NTooltip, NUpload } from 'naive-ui'
+import { NAlert, NButton, NCheckbox, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NSwitch, NTag, NText, NTooltip, NUpload } from 'naive-ui'
 import { marked } from 'marked'
 import { stripZeroWidth } from '@/utils/text'
 import {
@@ -1354,7 +1421,7 @@ import FilePreviewPanel from '@/components/FilePreviewPanel.vue'
 import { usePreviewStore } from '@/stores/preview'
 import type { TimelineStep } from '@/components/TaskTimeline.vue'
 import { toolCallSummary, toolShortName } from '@/utils/toolCallView'
-import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline, PieChartOutline, RemoveOutline, CloseOutline } from '@vicons/ionicons5'
+import { SendOutline, StopCircleOutline, FlashOutline, DocumentOutline, ImageOutline, FlagOutline, GridOutline, FolderOpenOutline, FolderOutline, AddOutline, SearchOutline, OpenOutline, PersonOutline, ChevronDownOutline, ChevronForwardOutline, ArrowBackOutline, ArrowDownOutline, EllipsisHorizontalOutline, PencilOutline, TrashOutline, ChatbubbleOutline, ShieldCheckmarkOutline, ExtensionPuzzleOutline, LinkOutline, UnlinkOutline, SettingsOutline, InformationCircleOutline, TerminalOutline, PieChartOutline, RemoveOutline, CloseOutline, ArchiveOutline, CheckboxOutline } from '@vicons/ionicons5'
 import type { DropdownOption, UploadCustomRequestOptions } from 'naive-ui'
 import * as sessionsApi from '@/api/sessions'
 import * as approvalApi from '@/api/approval'
@@ -2557,7 +2624,162 @@ function isWebSession(s: sessionsApi.Session): boolean {
 }
 
 // 侧栏数据源：缓存就绪后用缓存（含分组），否则退回 store 分页列表。
-const sidebarSessionPool = computed(() => allWebSessions.value ?? chatStore.sessions)
+// 已归档视图用独立的归档列表（getSessions ?archived=1 拉全量）作为数据源，
+// 搜索 / 分组 / 行渲染全部复用同一套逻辑。
+const sidebarSessionPool = computed(() => {
+  if (showArchived.value) return archivedSessions.value ?? []
+  return allWebSessions.value ?? chatStore.sessions
+})
+
+// ===== 已归档视图 =====
+// 归档是"软隐藏"：默认列表（getSessions 不带 archived 参数）只回未归档会话，
+// 归档的会话在这里单独列出，可取消归档或删除。
+const showArchived = ref(false)
+const archivedSessions = ref<sessionsApi.Session[]>([])
+const archivedLoading = ref(false)
+
+async function loadArchivedSessions(force = false): Promise<void> {
+  if (archivedLoading.value) return
+  if (!force && archivedSessions.value.length > 0) return
+  archivedLoading.value = true
+  try {
+    // 归档是低频操作，总量通常很小；但仍按页循环拉全量，防止超过一页时静默截断
+    const PAGE = 100
+    const list: sessionsApi.Session[] = []
+    let offset = 0
+    for (;;) {
+      const page = await sessionsApi.getSessions(PAGE, offset, true)
+      list.push(...page.sessions.filter(isWebSession))
+      if (page.sessions.length < PAGE) break
+      offset += PAGE
+    }
+    archivedSessions.value = list
+  } catch (e) {
+    console.error('Failed to load archived sessions:', e)
+    archivedSessions.value = []
+  } finally {
+    archivedLoading.value = false
+  }
+}
+
+function toggleArchivedView(): void {
+  showArchived.value = !showArchived.value
+  if (showArchived.value) {
+    loadArchivedSessions()
+  }
+}
+
+function exitArchivedView(): void {
+  showArchived.value = false
+}
+
+// ===== 批量管理 =====
+// 多选 → 批量归档 / 批量删除。与分组头的批量删除不同，这里允许跨分组选择，
+// 因此走服务端批量接口（一次往返）而不是前端循环。
+const batchMode = ref(false)
+const selectedSessionIds = ref(new Set<string>())
+
+function toggleBatchMode(): void {
+  batchMode.value = !batchMode.value
+  if (!batchMode.value) selectedSessionIds.value = new Set()
+}
+
+// 头部"更多操作"下拉：把归档视图 / 批量管理收进菜单，避免侧栏头部拥挤。
+// 激活态靠触发按钮的绿色高亮表达，菜单项保持纯文字，避免占位符引起对齐问题。
+const sidebarToolOptions = computed(() => [
+  {
+    label: t('chat.archivedView'),
+    key: 'archived',
+    icon: () => h(NIcon, null, { default: () => h(ArchiveOutline) }),
+  },
+  {
+    label: t('chat.batchMode'),
+    key: 'batch',
+    icon: () => h(NIcon, null, { default: () => h(CheckboxOutline) }),
+  },
+])
+
+function onSidebarToolSelect(key: string): void {
+  if (key === 'archived') toggleArchivedView()
+  else if (key === 'batch') toggleBatchMode()
+}
+
+function toggleSelectSession(id: string): void {
+  const next = new Set(selectedSessionIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedSessionIds.value = next
+}
+
+function selectAllVisibleSessions(): void {
+  // "全选"只选当前可见的（搜索/归档视图下的过滤结果），符合直觉且不误伤
+  const next = new Set(selectedSessionIds.value)
+  for (const s of visibleSessions.value) next.add(s.id)
+  selectedSessionIds.value = next
+}
+
+// 批量归档 / 取消归档。归档后从默认视图消失；取消归档后要强制重拉默认缓存，
+// 让侧栏立刻出现这些会话（缓存里的条目本来就是未归档列表，必须补回来）。
+async function batchSetArchived(archived: boolean): Promise<void> {
+  const ids = [...selectedSessionIds.value]
+  if (!ids.length) return
+  try {
+    const res = await sessionsApi.batchSessions(archived ? 'archive' : 'unarchive', ids)
+    if (res.failed && res.failed.length > 0) {
+      message.error(t('chat.batchOpFailed'))
+    } else {
+      message.success(archived ? t('chat.archiveDone', { count: res.affected }) : t('chat.unarchiveDone', { count: res.affected }))
+    }
+  } catch (e) {
+    console.error('Batch archive failed:', e)
+    message.error(t('chat.batchOpFailed'))
+    return
+  }
+  selectedSessionIds.value = new Set()
+  if (archived) {
+    // 已归档的会话从默认侧栏缓存中摘掉（列表在飞的分页请求自会按 id 去重）
+    if (allWebSessions.value) {
+      allWebSessions.value = allWebSessions.value.filter(s => !ids.includes(s.id))
+    }
+    await chatStore.loadSessions()
+  } else {
+    // 取消归档：这些会话要回到默认侧栏，强制重拉全量缓存
+    await loadFullSessions(true)
+  }
+  if (showArchived.value) await loadArchivedSessions(true)
+}
+
+// 批量删除：破坏性操作，先确认再执行。delete_files 统一传 true 是安全的：
+// 服务端对用户显式设置过工作目录的会话只清附件副本、绝不删目录本身（与
+// 单条 DELETE 的判定逻辑一致），只有系统自动分配的临时目录才随会话清掉。
+async function batchDeleteSessions(): Promise<void> {
+  const ids = [...selectedSessionIds.value]
+  if (!ids.length) return
+  const ok = await confirmDialog({
+    title: t('chat.batchDelete'),
+    content: t('chat.batchDeleteConfirm', { count: ids.length }),
+    positiveText: t('chat.deleteSession'),
+    negativeText: t('common.cancel'),
+  })
+  if (!ok) return
+  try {
+    const res = await sessionsApi.batchSessions('delete', ids, true)
+    if (res.failed && res.failed.length > 0) {
+      message.error(t('chat.deleteFailed'))
+    } else {
+      message.success(t('chat.deleteSessionDone'))
+    }
+  } catch (e) {
+    console.error('Batch delete failed:', e)
+    message.error(t('chat.deleteFailed'))
+    return
+  }
+  selectedSessionIds.value = new Set()
+  for (const id of ids) removeCachedSession(id)
+  await chatStore.loadSessions()
+  if (showArchived.value) await loadArchivedSessions(true)
+  await loadDirGroups()
+}
 
 // 搜索命中的会话（扁平结果，不分目录——搜索时按相关性给结果更有用）
 const visibleSessions = computed(() => {
@@ -2845,6 +3067,8 @@ const awaitingFullSessions = computed(() =>
 const sessionListSkeletonVisible = computed(() => {
   // 搜索态有自己的"检索中 / 无结果"提示，不叠加会话骨架
   if (isSearching.value) return false
+  // 已归档视图：数据源是独立的归档列表，首拉时铺骨架
+  if (showArchived.value) return archivedLoading.value && archivedSessions.value.length === 0
   // 已经有行可渲染时，绝不拿骨架去盖：从别的页面切回会话页时，store 里本就留着
   // 上一轮的分页数据（全局 pinia），此时再铺一次骨架就是"每次进入都重新加载"
   // 这一观感的直接来源。
@@ -4475,7 +4699,7 @@ async function saveRename() {
   }
 }
 
-// 会话项下拉菜单选项（重命名 / 删除）
+// 会话项下拉菜单选项（归档/取消归档 / 重命名 / 删除）
 function sessionMenuOptions(session: sessionsApi.Session) {
   const opts: any[] = []
   if (session.work_dir) {
@@ -4492,6 +4716,12 @@ function sessionMenuOptions(session: sessionsApi.Session) {
       icon: () => h(NIcon, null, { default: () => h(PencilOutline) }),
     },
     {
+      // 归档是软隐藏：归档 / 取消归档按当前状态二选一显示
+      label: session.archived ? t('chat.unarchive') : t('chat.archive'),
+      key: 'archive',
+      icon: () => h(NIcon, null, { default: () => h(ArchiveOutline) }),
+    },
+    {
       label: t('chat.deleteSession'),
       key: 'delete',
       icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
@@ -4505,6 +4735,8 @@ async function onSessionMenuSelect(key: string, session: sessionsApi.Session) {
     openWorkDirInExplorer(session.work_dir)
   } else if (key === 'rename') {
     openRenameModal(session.id)
+  } else if (key === 'archive') {
+    await archiveSession(session.id, !session.archived)
   } else if (key === 'delete') {
     // 删除前二次确认（confirmDialog 只有点「确认」才返回 true）
     const ok = await confirmDialog({
@@ -4517,6 +4749,27 @@ async function onSessionMenuSelect(key: string, session: sessionsApi.Session) {
       await deleteSession(session.id)
     }
   }
+}
+
+// 归档 / 取消归档单个会话（菜单入口）。
+// 归档后从默认侧栏消失；取消归档后强制重拉全量缓存补回侧栏。
+// 已归档视图打开时同步刷新归档列表。
+async function archiveSession(id: string, archived: boolean) {
+  const ok = await chatStore.setSessionArchived(id, archived)
+  if (!ok) {
+    message.error(t('chat.batchOpFailed'))
+    return
+  }
+  if (archived) {
+    removeCachedSession(id)
+    message.success(t('chat.archiveSessionDone'))
+    await chatStore.loadSessions()
+  } else {
+    message.success(t('chat.unarchiveSessionDone'))
+    await chatStore.loadSessions()
+    await loadFullSessions(true)
+  }
+  if (showArchived.value) await loadArchivedSessions(true)
 }
 
 async function selectSession(id: string) {
@@ -4597,6 +4850,8 @@ function jumpToBottom() {
 let loadMoreThrottleTimer: ReturnType<typeof setTimeout> | null = null
 function handleSessionScroll(e: Event) {
   if (isSearching.value) return // 搜索模式候选集已全量，无需滚动加载更多
+  // 已归档视图一次性拉全量（归档量小），没有滚动分页
+  if (showArchived.value) return
   if (loadMoreThrottleTimer) return
   // loadSessions 在飞时也不能分页：它会把 offset 归零，两边的 offset 会打架
   if (chatStore.sessionsLoading || chatStore.sessionsLoadingMore) return
@@ -4785,6 +5040,78 @@ onActivated(() => {
 
 .sidebar-search-input .n-input {
   --n-height: 30px;
+}
+
+/* 归档 / 批量管理工具按钮：激活态用主题绿标记当前视图 */
+.sidebar-tool-btn {
+  flex-shrink: 0;
+}
+
+.sidebar-tool-btn.tool-btn-active {
+  color: #2e7d32;
+}
+
+/* 表头下的副条：归档视图标识 + 批量管理操作条（两者可同时出现，纵向堆叠） */
+.sidebar-subbar {
+  flex-shrink: 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.archived-banner,
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.archived-banner {
+  color: #2e7d32;
+  background: #f1f8f1;
+}
+
+.archived-banner-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archived-banner-count {
+  font-size: 11px;
+  color: #888;
+}
+
+.batch-bar {
+  background: #f7f7f7;
+  /* 固定两行布局：上行"计数 + 取消"，下行"全选 / 归档 / 删除"。
+     不用 flex-wrap 自动折行——折行位置随侧栏宽度漂移，观感参差 */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.batch-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.batch-bar-count {
+  flex: 1;
+  min-width: 0;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 批量管理：会话行首多选框（与行内容垂直居中对齐） */
+.session-select-checkbox {
+  flex-shrink: 0;
+  margin-right: 2px;
 }
 
 .session-list {
@@ -5008,6 +5335,8 @@ onActivated(() => {
 
 .session-item:hover { background: #f0f0f0; }
 .session-item.active { background: #e8f5e9; }
+/* 批量管理：选中的行用蓝色高亮（与 active 的绿色区分开，一眼看出"这是选中不是当前会话"） */
+.session-item.selectable.selected { background: #e3f0fd; }
 
 .session-content {
   flex: 1;

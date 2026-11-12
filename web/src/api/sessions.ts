@@ -31,6 +31,9 @@ export interface Session {
   input_tokens: number
   output_tokens: number
   preview: string
+  // 已归档标记。归档 = 软隐藏：默认会话列表（GET /sessions）只回未归档的，
+  // ?archived=1 才返回已归档的；数据不删除，随时可取消归档。
+  archived?: boolean
 }
 
 // 文件操作记录：一次工具调用对单个文件的动作。action 与后端 FileOp.Action 对齐，
@@ -70,8 +73,13 @@ export interface Message {
   turn_elapsed_ms?: number
 }
 
-export async function getSessions(limit: number = 20, offset: number = 0): Promise<{ sessions: Session[]; total: number }> {
-  const res = await request<{ sessions: Session[]; total: number }>(`/sessions?limit=${limit}&offset=${offset}`)
+// getSessions 拉一页会话摘要。
+//
+// archived 缺省/false = 只看未归档（默认侧栏）；true = 只看已归档
+// （chat 页"已归档"视图的数据源）。total 与过滤条件同源，按它判断 hasMore。
+export async function getSessions(limit: number = 20, offset: number = 0, archived: boolean = false): Promise<{ sessions: Session[]; total: number }> {
+  const archivedQs = archived ? '&archived=1' : ''
+  const res = await request<{ sessions: Session[]; total: number }>(`/sessions?limit=${limit}&offset=${offset}${archivedQs}`)
   return { sessions: res.sessions || [], total: res.total || 0 }
 }
 
@@ -168,6 +176,37 @@ export async function updateSessionWorkDir(id: string, workDir: string): Promise
     method: 'PUT',
     body: JSON.stringify({ work_dir: workDir }),
   })
+}
+
+// setSessionArchived 归档 / 取消归档单个会话（软隐藏，不删除数据）。
+export async function setSessionArchived(id: string, archived: boolean): Promise<SessionPatch> {
+  return request(`/sessions/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ archived }),
+  })
+}
+
+// 会话批量操作（POST /api/sessions/batch）。
+//   action = 'archive' | 'unarchive'：单条 SQL 整批归档/取消归档；
+//   action = 'delete'：逐条删除（复用单个 DELETE 的全部清理逻辑），
+//   单条失败不影响其余，failed 里是逐条失败明细。
+// delete_files 只在 delete 时有意义；对用户显式设置过工作目录的会话，
+// 服务端本就只会清附件副本、不动目录本身，统一传 true 是安全的。
+export interface BatchSessionsResult {
+  affected: number
+  failed?: Array<{ id: string; error: string }>
+}
+
+export async function batchSessions(
+  action: 'archive' | 'unarchive' | 'delete',
+  ids: string[],
+  deleteFiles: boolean = false,
+): Promise<BatchSessionsResult> {
+  const res = await request<{ affected?: number; failed?: Array<{ id: string; error: string }> }>('/sessions/batch', {
+    method: 'POST',
+    body: JSON.stringify({ action, ids, delete_files: deleteFiles }),
+  })
+  return { affected: res.affected || 0, failed: res.failed || [] }
 }
 
 export interface DirEntry {
