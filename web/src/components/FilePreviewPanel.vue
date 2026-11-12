@@ -1800,23 +1800,39 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* 小屏适配：文件名放宽占满整行，按钮组折行；内容高度加大。
-   桌面端 toolbar 已改 nowrap，这里恢复 wrap 才能让"文件名一行 + 按钮一行"生效 */
+/* 小屏适配：刻意的两行头部 —— 第一行「文件名(省略) + 大小」，第二行按钮右对齐。
+   桌面端 toolbar 是 nowrap，这里恢复 wrap 并让按钮组 flex-basis:100% 独占第二行。
+   按钮在触屏上要够大好点：高度提到 30px（naive-ui 的高度走 CSS 变量，
+   直接写 height 即可覆盖，tiny 的 22px 对指尖太小）。 */
 @media (max-width: 768px) {
   .preview-toolbar {
-    padding: 4px 4px;
+    padding: 4px 6px;
     margin-bottom: 6px;
     flex-wrap: wrap;
+    row-gap: 2px;
   }
 
+  /* 与大小徽标同一行：不再强制占满整行，放不下时标题自己省略 */
   .preview-title {
-    max-width: 100%;
-    flex-basis: 100%;
+    flex: 1 1 auto;
   }
 
   .preview-actions {
+    flex-basis: 100%;
     width: 100%;
     margin-left: 0;
+    justify-content: flex-end;
+    gap: 2px;
+  }
+
+  .preview-actions .n-button {
+    height: 30px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  .zoom-menu-trigger {
+    padding: 0 6px;
   }
 
   .file-preview-panel--dialog .preview-content-container {
