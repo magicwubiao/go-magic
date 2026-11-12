@@ -29,15 +29,15 @@ type Store struct {
 }
 
 type Session struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Profile         string          `json:"profile"`
-	Platform        string          `json:"platform"`
-	Model           string          `json:"model"`
-	WorkDir         string          `json:"work_dir"`
-	WorkDirUserSet  bool            `json:"work_dir_user_set"`
-	WorkDirChosen   bool            `json:"work_dir_chosen"`
-	PlanMode        bool            `json:"plan_mode"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Profile        string `json:"profile"`
+	Platform       string `json:"platform"`
+	Model          string `json:"model"`
+	WorkDir        string `json:"work_dir"`
+	WorkDirUserSet bool   `json:"work_dir_user_set"`
+	WorkDirChosen  bool   `json:"work_dir_chosen"`
+	PlanMode       bool   `json:"plan_mode"`
 	// Archived 为 true 表示会话被用户归档：不出现在默认会话列表（GET /sessions）
 	// 里，只在"已归档"视图（?archived=1）展示。归档不删除数据，随时可取消。
 	Archived        bool            `json:"archived"`
