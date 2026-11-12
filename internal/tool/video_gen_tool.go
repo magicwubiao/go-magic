@@ -112,20 +112,20 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"model": map[string]interface{}{
 						"type":        "string",
-						"description": "Provider model override, e.g. wan2.2-t2v-plus (dashscope), doubao-seedance-1-0-pro-250528 (volcengine), kling-3.0 (kling), gen4.5 (runway), MiniMax-H3 (minimax). Default comes from config.",
+						"description": "Provider model override, e.g. wan2.7-t2v (dashscope), doubao-seedance-2-5-260628 (volcengine), kling-3.0 (kling), gen4.5 (runway), MiniMax-H3 (minimax). Default comes from config.",
 					},
 					"duration": map[string]interface{}{
 						"type":        "number",
-						"description": "Video length in seconds (3-15). Runway snaps to 5 or 10. Default comes from config (video_gen.default_duration).",
+						"description": "Video length in seconds. Per-provider range: dashscope 2-15, volcengine 4-30, kling 3-15, runway 5 or 10, minimax 5-10. Out-of-range values are clamped and the actual value is reported back. Default comes from config (video_gen.default_duration).",
 					},
 					"ratio": map[string]interface{}{
 						"type":        "string",
-						"description": "Aspect ratio. dashscope supports 16:9, 9:16 and 1:1 (720p only); volcengine also supports 4:3, 3:4 and 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Omit to use the configured default ratio (Settings > Media). Unsupported values fall back to 16:9 and the actual value is reported back.",
+						"description": "Aspect ratio. dashscope supports 16:9, 9:16, 1:1, 4:3 and 3:4 on Wan 2.7 (16:9/9:16/1:1 on earlier models); volcengine also supports 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Omit to use the configured default ratio (Settings > Media). Unsupported values fall back to 16:9 and the actual value is reported back.",
 						"enum":        []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 					},
 					"resolution": map[string]interface{}{
 						"type":        "string",
-						"description": "Resolution tier: 480p, 720p or 1080p. Omit to use the configured default resolution (Settings > Media). Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
+						"description": "Resolution tier: 480p, 720p or 1080p. dashscope (Wan 2.6/2.7) only supports 720p and 1080p. Omit to use the configured default resolution (Settings > Media). Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
 						"enum":        []string{"480p", "720p", "1080p"},
 					},
 					"negative_prompt": map[string]interface{}{
@@ -180,12 +180,6 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 	if d, ok := params["duration"].(float64); ok && d > 0 {
 		duration = int(d)
 	}
-	if duration < 3 {
-		duration = 3
-	}
-	if duration > 15 {
-		duration = 15
-	}
 
 	ratio := t.config.DefaultRatio
 	if r, ok := params["ratio"].(string); ok && r != "" {
@@ -227,6 +221,12 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 			model = ""
 		}
 	}
+
+	// 时长区间按 provider 的 catalog 走，不再是全局 3-15：Seedance 2.5 单次能到
+	// 30 秒、Wan 只到 15 秒、Runway 只有 5/10 两档。写死全局值会让"支持新模型"
+	// 变成"新模型的能力在工具层被砍掉一半"，而模型那边看到的能力面也是错的。
+	minDur, maxDur := videoDurationRange(provider)
+	duration = clampDuration(duration, minDur, maxDur)
 
 	// 先查后端：provider 拼错 / 插件已卸载要立刻报"不支持"，而不是误导性的"未配置"。
 	// 首帧图的处理（公网 URL 直用 / 本地文件转 data URI / 不支持就报错）属于
@@ -336,6 +336,25 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 
 // ---- 阿里云百炼（DashScope / wan 系列）----
 
+// videoDurationRange 返回某 provider 支持的时长区间（秒）。
+//
+// 数据源是 catalog 的 MinDuration / MaxDuration —— 那是"这家厂商实际接受什么"
+// 的唯一真源。查不到（插件后端、名字写错）时回落到 3-15：这个区间几乎所有
+// 厂商都能接受，比直接报"不支持"更有用。
+func videoDurationRange(provider VideoProvider) (int, int) {
+	if info, ok := ProviderInfo(MediaKindVideo, string(provider)); ok {
+		minDur, maxDur := info.MinDuration, info.MaxDuration
+		if minDur <= 0 {
+			minDur = 3
+		}
+		if maxDur <= 0 {
+			maxDur = 15
+		}
+		return minDur, maxDur
+	}
+	return 3, 15
+}
+
 // runDashScope 提交百炼视频生成任务并轮询到出片。
 // 文生视频走 video-generation 端点，带首帧图时走 image2video 端点。
 func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negativePrompt, imageURL, model string, duration int, ratio, resolution string) (videoURL, taskID string, err error) {
@@ -345,18 +364,29 @@ func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negative
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	// 有首帧图时切 i2v 端点；若用户没显式指定 i2v 模型，把默认 t2v 模型名替换过去
+	// 有首帧图时切 i2v 端点；若用户没显式指定 i2v 模型，把 t2v 型号换成 i2v 型号。
 	endpoint := "/services/aigc/video-generation/video-synthesis"
-	if imageURL != "" && strings.Contains(model, "-t2v-") {
-		model = strings.Replace(model, "-t2v-", "-i2v-", 1)
-	}
 	if imageURL != "" {
+		model = dashScopeImageModel(model)
 		endpoint = "/services/aigc/image2video/video-synthesis"
 	}
 
-	size, serr := dashScopeSize(ratio, resolution)
-	if serr != nil {
-		return "", "", serr
+	parameters := map[string]interface{}{}
+	// wan2.7 换了规格表达方式：resolution 档位 + ratio，不再接受像素 size；
+	// 2.6 及更早反过来，只认 size。混发会被 422 打回，所以按型号分流。
+	if isWan27Model(model) {
+		parameters["resolution"] = strings.ToUpper(resolution) // 720P / 1080P
+		parameters["ratio"] = ratio
+	} else {
+		size, serr := dashScopeSize(ratio, resolution)
+		if serr != nil {
+			return "", "", serr
+		}
+		parameters["size"] = size
+	}
+	// wan2.2 / wanx2.1 是固定 5 秒，传 duration 会被拒（"duration is not supported"）。
+	if !isFixedDurationWan(model) {
+		parameters["duration"] = duration
 	}
 
 	input := map[string]interface{}{"prompt": prompt}
@@ -370,7 +400,7 @@ func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negative
 	reqBody := map[string]interface{}{
 		"model":      model,
 		"input":      input,
-		"parameters": map[string]interface{}{"size": size},
+		"parameters": parameters,
 	}
 
 	taskID, err = t.postDashScopeTask(ctx, baseURL+endpoint, reqBody)
@@ -380,6 +410,31 @@ func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negative
 
 	videoURL, err = t.pollDashScopeTask(ctx, baseURL, taskID)
 	return videoURL, taskID, err
+}
+
+// dashScopeImageModel 把文生视频型号换成对应的图生视频型号。
+//
+// 百炼有两种命名：wan2.2-t2v-plus（-t2v- 夹在中间）和 wan2.7-t2v（t2v 在结尾）。
+// 只匹配 "-t2v-" 会漏掉后者，于是图生视频请求带着文生视频模型发出去 —— 表现是
+// 一次莫名其妙的 400，而不是"模型不支持首帧图"这种能自查的错误。
+func dashScopeImageModel(model string) string {
+	if i := strings.Index(model, "t2v"); i >= 0 {
+		return model[:i] + "i2v" + model[i+3:]
+	}
+	return model
+}
+
+// isWan27Model 报告是否为 Wan 2.7 系列（新协议：resolution + ratio）。
+func isWan27Model(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "wan2.7")
+}
+
+// isFixedDurationWan 报告是否为时长固定 5 秒的老款模型（不接受 duration 参数）。
+func isFixedDurationWan(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(m, "wan2.2") ||
+		strings.HasPrefix(m, "wan2.1") ||
+		strings.HasPrefix(m, "wanx2.1")
 }
 
 // dashScopeSize 把 ratio+resolution 映射成百炼要求的 "宽*高" 字符串。

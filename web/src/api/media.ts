@@ -37,6 +37,12 @@ export interface MediaProviderOption {
   min_duration?: number
   max_duration?: number
   default_voice?: string
+  /**
+   * 该厂商没有单一默认音色，默认值由 language 决定（Azure / Google）。
+   * 这类厂商的 default_voice 只是"当前 language 下留空会用哪个"，中文档
+   * 不能预填进输入框——一预填就把音色钉死在保存那一刻的语言上了。
+   */
+  voice_follows_language?: boolean
   notes?: string
 }
 

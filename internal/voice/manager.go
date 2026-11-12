@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -60,9 +61,10 @@ type ProviderCredentials struct {
 // DefaultVoiceConfig returns a default voice configuration
 func DefaultVoiceConfig() *VoiceConfig {
 	return &VoiceConfig{
-		Provider:     "openai",
-		Model:        "tts-1",
-		Voice:        "alloy",
+		Provider: "openai",
+		// 默认模型 / 音色统一取自 defaults.go（唯一真源，catalog 引用同一张表）。
+		Model:        DefaultModelFor("openai"),
+		Voice:        DefaultVoiceFor("openai"),
 		Language:     "en",
 		Speed:        1.0,
 		Pitch:        0,
@@ -114,11 +116,15 @@ func (m *Manager) registerDefaultProviders() {
 		m.config = DefaultVoiceConfig()
 	}
 
+	// 每家只吃"属于自己"的模型和音色：配置里的 model/voice 是给当前选中的
+	// provider 用的，原样发给别家等于拿 A 的模型打 B 的接口（必然 404）。
+	// 以前五家共用 m.config.Model，切换厂商后不重填模型就会带着上一家的模型发请求。
+
 	// OpenAI TTS/ASR
 	openaiConfig := &ProviderConfig{
 		APIKey:   m.getProviderAPIKey("openai"),
-		Model:    m.config.Model,
-		Voice:    m.config.Voice,
+		Model:    m.modelFor("openai"),
+		Voice:    m.voiceFor("openai"),
 		Language: m.config.Language,
 		Speed:    m.config.Speed,
 		Pitch:    m.config.Pitch,
@@ -128,8 +134,8 @@ func (m *Manager) registerDefaultProviders() {
 	// ElevenLabs TTS
 	elevenlabsConfig := &ProviderConfig{
 		APIKey:   m.getProviderAPIKey("elevenlabs"),
-		Model:    m.config.Model,
-		Voice:    m.config.Voice,
+		Model:    m.modelFor("elevenlabs"),
+		Voice:    m.voiceFor("elevenlabs"),
 		Language: m.config.Language,
 		Speed:    m.config.Speed,
 	}
@@ -139,8 +145,8 @@ func (m *Manager) registerDefaultProviders() {
 	azureConfig := &ProviderConfig{
 		APIKey:   m.getProviderAPIKey("azure"),
 		Region:   m.getProviderRegion("azure"),
-		Model:    m.config.Model,
-		Voice:    m.config.Voice,
+		Model:    m.modelFor("azure"),
+		Voice:    m.voiceFor("azure"),
 		Language: m.config.Language,
 		Speed:    m.config.Speed,
 		Pitch:    m.config.Pitch,
@@ -150,18 +156,18 @@ func (m *Manager) registerDefaultProviders() {
 	// Google TTS/ASR
 	googleConfig := &ProviderConfig{
 		APIKey:   m.getProviderAPIKey("google"),
-		Model:    m.config.Model,
-		Voice:    m.config.Voice,
+		Model:    m.modelFor("google"),
+		Voice:    m.voiceFor("google"),
 		Language: m.config.Language,
 		Speed:    m.config.Speed,
 		Pitch:    m.config.Pitch,
 	}
 	m.providers["google"] = NewGoogleTTSProvider(googleConfig)
 
-	// Whisper ASR (local or API)
+	// Whisper ASR（本地 CLI）
 	whisperConfig := &ProviderConfig{
 		APIKey:   m.getProviderAPIKey("whisper"),
-		Model:    m.config.Model,
+		Model:    m.modelFor("whisper"),
 		Language: m.config.Language,
 	}
 	m.providers["whisper"] = NewWhisperProvider(whisperConfig)
@@ -185,6 +191,30 @@ func (m *Manager) getProviderRegion(provider string) string {
 	}
 	// Fall back to global region
 	return m.config.Region
+}
+
+// modelFor 返回该 provider 实际该用的模型。
+//
+// 配置里的 voice.model 只对"当前选中的 provider"成立：用户把 provider 切到
+// ElevenLabs、模型栏还留着 gpt-4o-mini-tts 时，最合理的行为是用 ElevenLabs
+// 自己的默认值，而不是把 OpenAI 的模型名发过去。没配就回落到 defaults.go。
+func (m *Manager) modelFor(provider string) string {
+	if strings.EqualFold(strings.TrimSpace(m.config.Provider), provider) {
+		if v := strings.TrimSpace(m.config.Model); v != "" {
+			return v
+		}
+	}
+	return DefaultModelFor(provider)
+}
+
+// voiceFor 同 modelFor，管音色（音色 ID 各家也不通用）。
+func (m *Manager) voiceFor(provider string) string {
+	if strings.EqualFold(strings.TrimSpace(m.config.Provider), provider) {
+		if v := strings.TrimSpace(m.config.Voice); v != "" {
+			return v
+		}
+	}
+	return DefaultVoiceFor(provider)
 }
 
 // GetProviders returns list of available providers
@@ -477,80 +507,6 @@ func (m *Manager) DownloadAudio(ctx context.Context, url string) ([]byte, error)
 // ConvertAudioFormat converts audio to different format
 func (m *Manager) ConvertAudioFormat(audio []byte, format string) ([]byte, error) {
 	return ConvertAudioFormat(audio, format)
-}
-
-// VoicePreset represents a voice preset
-type VoicePreset struct {
-	Name         string  `json:"name"`
-	Provider     string  `json:"provider"`
-	Model        string  `json:"model"`
-	VoiceID      string  `json:"voice_id"`
-	Speed        float64 `json:"speed"`
-	Pitch        float64 `json:"pitch"`
-	Instructions string  `json:"instructions"`
-	Language     string  `json:"language"`
-}
-
-// GetPresets returns built-in voice presets
-func (m *Manager) GetPresets() []VoicePreset {
-	return []VoicePreset{
-		{
-			Name:     "Default",
-			Provider: "openai",
-			Model:    "tts-1",
-			VoiceID:  "alloy",
-			Speed:    1.0,
-			Language: "en",
-		},
-		{
-			Name:     "Professional",
-			Provider: "elevenlabs",
-			Model:    "eleven_monolingual_v1",
-			VoiceID:  "21m00Tcm4TlvDq8ikWAM",
-			Speed:    1.0,
-			Language: "en",
-		},
-		{
-			Name:     "Friendly",
-			Provider: "elevenlabs",
-			Model:    "eleven_multilingual_v2",
-			VoiceID:  "AZnzlk1XvdvUeBnXmlld",
-			Speed:    1.1,
-			Language: "en",
-		},
-		{
-			Name:     "Chinese Female",
-			Provider: "azure",
-			Model:    "",
-			VoiceID:  "zh-CN-XiaoxiaoNeural",
-			Speed:    1.0,
-			Language: "zh-CN",
-		},
-		{
-			Name:     "Chinese Male",
-			Provider: "azure",
-			Model:    "",
-			VoiceID:  "zh-CN-YunxiNeural",
-			Speed:    1.0,
-			Language: "zh-CN",
-		},
-		{
-			Name:     "Japanese",
-			Provider: "azure",
-			Model:    "",
-			VoiceID:  "ja-JP-NanamiNeural",
-			Speed:    1.0,
-			Language: "ja-JP",
-		},
-		{
-			Name:     "Google Natural",
-			Provider: "google",
-			Model:    "",
-			VoiceID:  "Wavenet-C",
-			Speed:    1.0,
-			Language: "en-US",
-		},
-	}
 }
 
 // GetAvailableVoices returns available voices for a provider and language

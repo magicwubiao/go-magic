@@ -2463,7 +2463,7 @@ export default {
     voice: {
       title: 'Speech (TTS / ASR)',
       model: 'Model',
-      modelPlaceholder: 'e.g. tts-1 / eleven_multilingual_v2',
+      modelPlaceholder: 'e.g. gpt-4o-mini-tts / eleven_v3',
       voice: 'Voice',
       voicePlaceholder: 'e.g. alloy / nova, or a provider voice ID',
       language: 'Language',

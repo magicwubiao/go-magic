@@ -365,3 +365,49 @@ func TestApplyVoicePatchGroupID(t *testing.T) {
 		t.Fatalf("group = %q, want untouched grp_2", got)
 	}
 }
+
+// speechProviderEntry 从快照里取出某个语音 provider 的条目。
+func speechProviderEntry(t *testing.T, snap map[string]interface{}, name string) map[string]interface{} {
+	t.Helper()
+	list, _ := snap["providers"].([]map[string]interface{})
+	for _, p := range list {
+		if p["name"] == name {
+			return p
+		}
+	}
+	t.Fatalf("provider %q not found in snapshot", name)
+	return nil
+}
+
+// Azure / Google 的默认音色必须由 language 算出来：用户把 language 从 zh-CN 改成
+// en-US，设置页占位里的音色就要跟着变成英文音色。写死 zh-CN-XiaoxiaoNeural 的
+// 版本会让英文语言配上一个读中文的音色（口音极重）。
+func TestVoiceSnapshotDerivesLanguageDependentVoice(t *testing.T) {
+	s := newMediaTestServer(t)
+	s.cfg.Voice = &voice.VoiceConfig{Provider: "azure", Language: "zh-CN", Speed: 1}
+
+	snap := s.voiceSnapshot(s.cfg.Voice)
+	azure := speechProviderEntry(t, snap, "azure")
+	if got := azure["default_voice"]; got != "zh-CN-XiaoxiaoNeural" {
+		t.Errorf("azure default_voice = %v, want zh-CN-XiaoxiaoNeural", got)
+	}
+	if azure["voice_follows_language"] != true {
+		t.Error("azure must be flagged as voice_follows_language so the UI does not prefill it")
+	}
+	if got := speechProviderEntry(t, snap, "google")["default_voice"]; got != "zh-CN-Standard-C" {
+		t.Errorf("google default_voice = %v, want zh-CN-Standard-C", got)
+	}
+	// 音色与语言无关的厂商不能被这个逻辑改写。
+	if got := speechProviderEntry(t, snap, "elevenlabs")["default_voice"]; got != voice.DefaultVoiceFor("elevenlabs") {
+		t.Errorf("elevenlabs default_voice = %v, want %q", got, voice.DefaultVoiceFor("elevenlabs"))
+	}
+
+	s.cfg.Voice.Language = "en-US"
+	snap = s.voiceSnapshot(s.cfg.Voice)
+	if got := speechProviderEntry(t, snap, "azure")["default_voice"]; got != "en-US-JennyNeural" {
+		t.Errorf("azure default_voice = %v, want en-US-JennyNeural after language change", got)
+	}
+	if got := speechProviderEntry(t, snap, "google")["default_voice"]; got != "en-US-Standard-C" {
+		t.Errorf("google default_voice = %v, want en-US-Standard-C after language change", got)
+	}
+}

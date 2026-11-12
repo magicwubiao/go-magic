@@ -1562,30 +1562,35 @@ Switching providers only swaps the backend; tool names and parameters stay the s
 
 | Capability | provider | Notes | Local first-frame image |
 | --- | --- | --- | --- |
-| image | `dall-e` | OpenAI; the only backend with editing / variations | — |
+| image | `dall-e` | OpenAI GPT Image 2 (DALL·E is retired; the id is kept); the only backend with editing / variations | — |
 | image | `stable-diffusion` | Stability sd3 endpoint; the model is fixed by the endpoint | — |
 | image | `midjourney` | Third-party relay; submit only, returns a pending placeholder | — |
-| image | `together` | FLUX / SDXL, model selectable | — |
-| image | `minimax` | Hailuo image-01, chosen by aspect ratio | — |
-| video | `dashscope` | Alibaba wan, 480p-1080p | No — needs `image_url` |
-| video | `volcengine` | Ark Seedance, widest ratio set (incl. 21:9) | Yes |
-| video | `kling` | Kling 3.0; **the model is part of the URL path** | No — needs `image_url` |
+| image | `together` | FLUX.2, model selectable | — |
+| image | `minimax` | Hailuo image-02, chosen by aspect ratio | — |
+| video | `dashscope` | Alibaba wan2.7 / 2.6, 720p-1080p (no 480p from 2.7 on) | Yes — data URI, ≤10MB |
+| video | `volcengine` | Ark Seedance 2.5, up to 30s, widest ratio set (incl. 21:9) | Yes |
+| video | `kling` | Kling 3.0; **the model is part of the URL path** | Yes — raw base64 |
+| video | `runway` | Gen-4.5; duration snaps to 5 or 10s | Yes — data URI, ≤5MB |
+| video | `minimax` | Hailuo H3; returns the video URL directly | Yes — data URI, ≤30MB |
 | video | `runway` | Gen-4.5; only 5 or 10 second clips | Yes (data URI, <=5MB) |
 | video | `minimax` | Hailuo H3; success returns the final URL directly | No — needs `image_url` |
 | speech | `cosyvoice` | Alibaba CosyVoice; shares the Bailian key with wan | — |
-| speech | `openai` / `elevenlabs` / `azure` / `google` / `whisper` | Existing `voice.Manager` path | — |
+| speech | `openai` / `elevenlabs` / `azure` / `google` | Existing `voice.Manager` path; defaults live in `internal/voice/defaults.go` | — |
+| speech | `whisper` | **Local** whisper CLI (`--model tiny\|base\|small\|medium\|large-v3`); the command must be on PATH. Use `openai` for the hosted API | — |
 
 Aliases resolve too: `dalle`, `sd`, `wan`, `seedance`, `hailuo`, `runwayml`, `qwen-tts` all work as `provider` values.
 
 **Parameters are never silently dropped.** Providers disagree on what they accept, so the tool maps first and reports back what actually took effect:
 
-- Duration: Runway only renders 5 or 10 seconds, so 8 snaps to 10; others clamp to 3-15.
+- Duration: Runway only renders 5 or 10 seconds, so 8 snaps to 10; others clamp to their own catalog range (Seedance 4-30, Wan 2-15, Kling 3-15).
 - Aspect ratio: an unsupported ratio falls back to that provider's default (Kling and MiniMax reject 4:3).
 - Resolution: MiniMax uses 768P / 2K and Kling has no 480p. The `duration` / `ratio` / `resolution` fields in the tool result are the **effective** values, not your input.
 
 **Errors tell you what to do next.** 401/403 names the provider that rejected the key, links its console and warns that a brand-new key can fail until the service is activated; 429 asks you to wait a minute and notes that limits are per account; 5xx says it is the provider's side, so don't touch the config.
 
 **The settings page fills itself in.** Switching provider brings along the recommended model, official endpoint and default voice (only when the field is empty or still holds the previous provider's default — hand-written values are never overwritten); models are searchable dropdowns, ratio/resolution options are trimmed to what that provider accepts, and every card carries a "Get a key" link plus a hint about the key format.
+
+**Azure / Google voices are the exception.** Their voice IDs carry the language (`en-US-JennyNeural` reading Chinese sounds heavily accented), so the default voice follows `language` and the page deliberately leaves the field empty: blank means "follow the language", and the placeholder shows what you would actually get for the current one (`zh-CN` → `zh-CN-XiaoxiaoNeural`, `en-US` → `en-US-JennyNeural`). A concrete voice pins it and stops following the language.
 
 ### 15.5 Reverse MCP: use magic as a tool
 

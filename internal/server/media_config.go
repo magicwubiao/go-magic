@@ -215,6 +215,10 @@ func providerEntry(kind tool.MediaKind, name string, runtime map[string]interfac
 	runtime["min_duration"] = info.MinDuration
 	runtime["max_duration"] = info.MaxDuration
 	runtime["default_voice"] = info.DefaultVoice
+	// 只在这家确实"随语言变"时才下发：前端的音色预填要据此退化成纯占位提示。
+	if info.VoiceFollowsLanguage {
+		runtime["voice_follows_language"] = true
+	}
 	runtime["notes"] = info.Notes
 	return runtime
 }
@@ -336,12 +340,19 @@ func (s *Server) voiceSnapshot(c *voice.VoiceConfig) map[string]interface{} {
 		if ok {
 			available = true
 		}
-		providers = append(providers, providerEntry(tool.MediaKindSpeech, name, map[string]interface{}{
+		entry := providerEntry(tool.MediaKindSpeech, name, map[string]interface{}{
 			"available":    ok,
 			"builtin":      true,
 			"supports_tts": name != "whisper",
 			"supports_asr": name != "elevenlabs",
-		}))
+		})
+		// azure / google 没有单一默认音色：按保存的 language 算出"留空实际会用
+		// 哪个"给前端当提示。catalog 里不能写死一个值——用户 language 填 en 却
+		// 在占位里看到中文音色，就是这种"固定值"写法造成的。
+		if v := voice.DefaultVoiceForLanguage(name, language); v != "" {
+			entry["default_voice"] = v
+		}
+		providers = append(providers, entry)
 	}
 	// 插件贡献的语音后端：内核不知道它有哪些声音，但要出现在列表里，
 	// 否则用户在设置页看不到自己装的能力。
@@ -729,6 +740,11 @@ func isBuiltinVideoProvider(name string) bool {
 // voiceProviderConfigured 判断某个内置 voice provider 是否配好了凭据。
 // 与 voice.Manager.getProviderAPIKey 同一条优先链：provider 专属凭据 > 顶层 key。
 func voiceProviderConfigured(c *voice.VoiceConfig, name string) bool {
+	// whisper 是本地 CLI，没有 key 可填：判据是本机有没有这个命令。
+	// 只按 key 判会永远显示"未配置"，用户以为坏了自己却能用命令行跑通。
+	if name == "whisper" {
+		return voice.LocalWhisperAvailable()
+	}
 	if c == nil {
 		return false
 	}
@@ -738,8 +754,6 @@ func voiceProviderConfigured(c *voice.VoiceConfig, name string) bool {
 	if strings.TrimSpace(c.APIKey) != "" {
 		return true
 	}
-	// whisper 支持本地运行，但内核无法判断本机是否装了 whisper.cpp，这里
-	// 不谎报"可用"——真的本地部署走插件后端更准确。
 	return false
 }
 

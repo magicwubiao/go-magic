@@ -520,8 +520,11 @@ func TestMinimaxImageMapsSizeToAspectRatio(t *testing.T) {
 	if body["n"] != float64(2) {
 		t.Errorf("n = %v, want 2", body["n"])
 	}
-	if body["model"] != "image-01" {
-		t.Errorf("model = %v, want image-01 (catalog default)", body["model"])
+	// 这里断言的是"没配置 model 时用 catalog 的推荐值"，不是某个具体型号 ——
+	// 写死型号会让每次更新模型清单都误报一次。
+	info, _ := ProviderInfo(MediaKindImage, "minimax")
+	if body["model"] != info.DefaultModel {
+		t.Errorf("model = %v, want %v (catalog default)", body["model"], info.DefaultModel)
 	}
 	if len(res.Images) != 1 || res.Images[0].URL == "" {
 		t.Errorf("images = %+v", res.Images)

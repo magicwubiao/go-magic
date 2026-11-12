@@ -88,15 +88,15 @@ func NewImageGenerationTool(config *ImageGenConfig) *ImageGenerationTool {
 					},
 					"size": map[string]interface{}{
 						"type":        "string",
-						"description": "Image size (aspect ratio: 1:1, 16:9, 9:16). Omit to use the configured default size (Settings > Media).",
-						// enum 收敛到默认模型 dall-e-3 实际接受的三个值。SD / Together
+						"description": "Image size (aspect ratio: 1:1, 3:2, 2:3). Omit to use the configured default size (Settings > Media).",
+						// enum 收敛到默认模型 GPT Image 实际接受的三个值。SD / Together
 						// 等后端支持任意像素，但走 config 的 default_size（不过 enum），
 						// 这里列别的值只会诱导模型传一个默认 provider 直接拒的尺寸。
-						"enum": []string{"1024x1024", "1792x1024", "1024x1792"},
+						"enum": []string{"1024x1024", "1536x1024", "1024x1536"},
 					},
 					"count": map[string]interface{}{
 						"type":        "number",
-						"description": "Number of images to generate (1-4). Note: dall-e-3 only supports 1.",
+						"description": "Number of images to generate (1-4).",
 						"minimum":     1,
 						"maximum":     4,
 					},
@@ -294,34 +294,36 @@ type ImageInfo struct {
 	Mime string
 }
 
-// generateWithDALLE 使用 DALL-E 生成图片
+// generateWithDALLE 使用 OpenAI GPT Image 生成图片。
+//
+// 函数名和 provider 标识保留 "dall-e" 是历史原因（config.json 里存的就是这个
+// 值，改名会让存量配置失效），但请求契约是 GPT Image 的 —— DALL·E 2/3 已于
+// 2026-05-12 停用，再用 dall-e-3 只会拿回 404。两者有三处不兼容，改动前先看：
+//   - size 只认 1024x1024 / 1536x1024 / 1024x1536（见 gptImageSize）
+//   - quality 是 low/medium/high，没有 hd
+//   - 没有 style / seed 参数，传了会被拒
 func (t *ImageGenerationTool) generateWithDALLE(ctx context.Context, prompt, negativePrompt, style, size string, count int, seed *int) (*ImageGenerationResult, error) {
 	baseURL := t.config.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	// 构建请求体。模型可由配置覆盖：dall-e-2 与 dall-e-3 支持的尺寸、参数不同，
-	// 用户想省钱换 dall-e-2 时不该改代码。
 	model := infoOrDefaultModel(MediaKindImage, string(ProviderDALLE), t.config.Model)
 	reqBody := map[string]interface{}{
 		"model":  model,
 		"prompt": t.enhancePromptWithStyle(prompt, style),
 		"n":      count,
-		"size":   size,
+		"size":   gptImageSize(size),
 	}
 
-	// DALL-E 3 支持 quality 和 style 参数
+	// 风格已经由 enhancePromptWithStyle 写进 prompt，这里只把"要写实/摄影"
+	// 翻译成高保真档位。GPT Image 没有 style 参数，旧代码传 style=vivid 会 400。
 	if style == "realistic" || style == "photo" {
-		reqBody["quality"] = "hd"
-	}
-	if style == "vivid" || style == "natural" {
-		reqBody["style"] = style
+		reqBody["quality"] = "high"
 	}
 
-	if seed != nil {
-		reqBody["seed"] = *seed
-	}
+	// seed 不再传递：随机种子是 DALL·E 3 的遗留参数，GPT Image 不支持。
+	_ = seed
 
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
@@ -681,6 +683,35 @@ func (t *ImageGenerationTool) enhancePromptWithStyle(prompt, style string) strin
 	return prompt
 }
 
+// gptImageSize 把工具层/配置里的尺寸压到 GPT Image 实际接受的三档。
+//
+// DALL·E 时代的 1792x1024 / 1024x1792 都不再合法：GPT Image 只认
+// 1024x1024、1536x1024、1024x1536。这里做"就近吸附"而不是报错——尺寸表达的
+// 是画幅意图，要 16:9 就给 1536x1024 依然满足意图，而一次 400 只会让人以为
+// 工具坏了。这与 media_catalog.go 里 dashscope 的时长吸附是同一种取舍。
+func gptImageSize(size string) string {
+	s := strings.ToLower(strings.TrimSpace(size))
+	switch s {
+	case "1536x1024", "1792x1024", "16:9", "3:2":
+		return "1536x1024"
+	case "1024x1536", "1024x1792", "9:16", "2:3":
+		return "1024x1536"
+	case "", "1024x1024", "1:1":
+		return "1024x1024"
+	}
+	// 其它像素串按宽高关系判断；解析不出来就走正方形（GPT Image 的默认档）。
+	var w, h int
+	if n, _ := fmt.Sscanf(s, "%dx%d", &w, &h); n == 2 && w > 0 && h > 0 {
+		switch {
+		case w > h:
+			return "1536x1024"
+		case h > w:
+			return "1024x1536"
+		}
+	}
+	return "1024x1024"
+}
+
 // parseSize 解析尺寸字符串
 func parseSize(size string) (width, height int) {
 	switch size {
@@ -698,9 +729,15 @@ func parseSize(size string) (width, height int) {
 		return 1792, 1024
 	case "1024x1792":
 		return 1024, 1792
-	default:
-		return 1024, 1024
 	}
+	// 白名单之外再尝试按 "宽x高" 解析：GPT Image 的 1536x1024 / 1024x1536 不在
+	// 上面那组历史档位里，但 SD / Together 这类接受任意像素的后端要用它 ——
+	// 一律压回 1024x1024 会让"设置页能选"变成"选了不生效"。
+	var w, h int
+	if n, _ := fmt.Sscanf(strings.ToLower(strings.TrimSpace(size)), "%dx%d", &w, &h); n == 2 && w > 0 && h > 0 {
+		return w, h
+	}
+	return 1024, 1024
 }
 
 // downloadAndSaveImages 下载并保存图片
@@ -844,8 +881,11 @@ func NewImageEditTool(config *ImageGenConfig) *ImageEditTool {
 					},
 					"size": map[string]interface{}{
 						"type":        "string",
-						"description": "Output image size. Omit to use the backend default.",
-						"enum":        []string{"256x256", "512x512", "1024x1024"},
+						"description": "Output image size (1:1, 3:2, 2:3). Omit to use the backend default.",
+						// 与 image_gen 用同一组值：编辑链路最终也发给 GPT Image，而它
+						// 只认这三档。旧枚举里的 256x256 / 512x512 会被静默放大到
+						// 1024x1024，留着只会让调用方以为尺寸生效了。
+						"enum": []string{"1024x1024", "1536x1024", "1024x1536"},
 					},
 					"count": map[string]interface{}{
 						"type":        "number",
@@ -1010,15 +1050,28 @@ func editImageWithDALLE(ctx context.Context, cfg *ImageGenConfig, imageData []by
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	// 根据编辑类型选择端点
+	// GPT Image 只有 /images/edits 一个编辑端点：
+	//   - /images/variations 是 DALL·E 2 的专属能力，GPT Image 没有，调用必 404
+	//   - 变体因此改写成"同图 + 一句指令"的编辑请求，语义最接近且仍然出图
 	endpoint := "/images/edits"
-	if editType == "variation" {
-		endpoint = "/images/variations"
+	if editType == "variation" && strings.TrimSpace(prompt) == "" {
+		prompt = "Generate a variation of this image."
 	}
 
 	// 构建 multipart 请求
 	var body bytes.Buffer
 	writer := NewMultipartWriter(&body)
+
+	// 每次编辑都必须带 model。不传时 OpenAI 会回落到已停用的 dall-e-2，
+	// 请求直接失败——这是换掉 DALL·E 之后最容易漏的一处。
+	configuredModel := ""
+	if cfg != nil {
+		configuredModel = cfg.Model
+	}
+	model := infoOrDefaultModel(MediaKindImage, string(ProviderDALLE), configuredModel)
+	if err := writer.WriteField("model", model); err != nil {
+		return nil, fmt.Errorf("failed to add model: %w", err)
+	}
 
 	// 添加图片
 	if err := writer.WriteFile("image", "image.png", imageData); err != nil {
@@ -1036,18 +1089,16 @@ func editImageWithDALLE(ctx context.Context, cfg *ImageGenConfig, imageData []by
 		}
 	}
 
-	// 添加提示词（如果是编辑）
-	if editType != "variation" {
-		if err := writer.WriteField("prompt", prompt); err != nil {
-			return nil, fmt.Errorf("failed to add prompt: %w", err)
-		}
+	// 添加提示词（变体也带，见上面把空 prompt 改写成一句话）
+	if err := writer.WriteField("prompt", prompt); err != nil {
+		return nil, fmt.Errorf("failed to add prompt: %w", err)
 	}
 
 	// 添加其他参数
 	if err := writer.WriteField("n", fmt.Sprintf("%d", count)); err != nil {
 		return nil, err
 	}
-	if err := writer.WriteField("size", size); err != nil {
+	if err := writer.WriteField("size", gptImageSize(size)); err != nil {
 		return nil, err
 	}
 

@@ -2468,7 +2468,7 @@ export default {
     voice: {
       title: '语音（TTS / ASR）',
       model: '模型',
-      modelPlaceholder: '如 tts-1 / eleven_multilingual_v2',
+      modelPlaceholder: '如 gpt-4o-mini-tts / eleven_v3',
       voice: '声音',
       voicePlaceholder: '如 alloy / nova，或服务商的声音 ID',
       language: '语言',

@@ -10,7 +10,7 @@
   },
   "voice": {
     "provider": "openai",
-    "model": "tts-1",
+    "model": "gpt-4o-mini-tts",
     "voice": "alloy",
     "language": "en",
     "speed": 1.0,
@@ -31,9 +31,6 @@
       },
       "elevenlabs": {
         "api_key": "your-elevenlabs-api-key-here"
-      },
-      "whisper": {
-        "api_key": "your-openai-api-key-here"
       }
     }
   },

@@ -1074,7 +1074,11 @@ function onProviderChange(section: Section, next: string) {
   if (shouldPrefill(voiceForm.model, prev?.default_model)) {
     voiceForm.model = info.default_model || ''
   }
-  if (shouldPrefill(voiceForm.voice, prev?.default_voice)) {
+  // azure / google 的推荐音色是"按 language 算出来的"（en-US → Jenny、
+  // zh-CN → Xiaoxiao）：预填进输入框就把音色钉死在这一刻的语言上了，用户
+  // 之后改 language，音色还是上一门语言的（Azure 拿英文音色读中文会带口音）。
+  // 这类厂商只给占位提示，输入框留空=跟随 language。
+  if (!info.voice_follows_language && shouldPrefill(voiceForm.voice, prev?.default_voice)) {
     voiceForm.voice = info.default_voice || ''
   }
 }
@@ -1095,12 +1099,13 @@ function capLabel(cap: string): string {
   return te(key) ? t(key) : cap
 }
 
+// 与默认后端（GPT Image）接受的档位一致。SD / Together 这类接受任意像素的
+// 后端同样能用这三档；旧列表里的 256x256 / 512x512 在 GPT Image 上会被吸附回
+// 1024x1024，留着只会让用户以为设置生效了。
 const imageSizeOptions = [
-  { label: '256x256', value: '256x256' },
-  { label: '512x512', value: '512x512' },
   { label: '1024x1024', value: '1024x1024' },
-  { label: '1024x1792', value: '1024x1792' },
-  { label: '1792x1024', value: '1792x1024' },
+  { label: '1536x1024', value: '1536x1024' },
+  { label: '1024x1536', value: '1024x1536' },
 ]
 
 // 画幅/分辨率按当前厂商裁剪：选一个必然被拒的值，比选不到更糟。
@@ -1116,7 +1121,7 @@ const resolutionOptions = computed(() => {
 })
 const videoDurationMax = computed(() => videoMeta.value?.max_duration || 15)
 // 把该厂商实际支持的时长区间写在输入框下面。不同厂商差得很远
-// （Runway 只有 5/10，其余 3~15），不写出来用户只能靠试。
+// （Runway 只有 5/10，Seedance 能到 30，其余多在 2~15），不写出来用户只能靠试。
 const videoDurationHint = computed(() => {
   const meta = videoMeta.value
   if (!meta?.min_duration || !meta?.max_duration) return ''

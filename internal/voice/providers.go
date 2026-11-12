@@ -60,12 +60,12 @@ func (p *OpenAIProvider) TTS(ctx context.Context, text string) ([]byte, error) {
 
 	model := p.config.Model
 	if model == "" {
-		model = "tts-1"
+		model = DefaultModelFor("openai")
 	}
 
 	voice := p.config.Voice
 	if voice == "" {
-		voice = "alloy"
+		voice = DefaultVoiceFor("openai")
 	}
 
 	speed := p.config.Speed
@@ -112,6 +112,8 @@ func (p *OpenAIProvider) ASR(ctx context.Context, audio []byte) (string, error) 
 		return "", fmt.Errorf("OpenAI API key not configured")
 	}
 
+	// 托管版 Whisper 的模型名固定是 whisper-1，与本地 whisper 的尺寸档
+	// （base/small/...，见 defaults.go）不是一回事，不要合并成同一个常量。
 	model := p.config.Model
 	if model == "" {
 		model = "whisper-1"
@@ -248,12 +250,12 @@ func (p *ElevenLabsProvider) TTS(ctx context.Context, text string) ([]byte, erro
 
 	voiceID := p.config.Voice
 	if voiceID == "" {
-		voiceID = "21m00Tcm4TlvDq8ikWAM" // Default voice (Rachel)
+		voiceID = DefaultVoiceFor("elevenlabs")
 	}
 
 	model := p.config.Model
 	if model == "" {
-		model = "eleven_multilingual_v2"
+		model = DefaultModelFor("elevenlabs")
 	}
 
 	speed := p.config.Speed
@@ -370,23 +372,8 @@ func (p *AzureProvider) TTS(ctx context.Context, text string) ([]byte, error) {
 
 	voiceName := p.config.Voice
 	if voiceName == "" {
-		// Default voices by language
-		voiceMap := map[string]string{
-			"en-US": "en-US-JennyNeural",
-			"en-GB": "en-GB-SoniaNeural",
-			"zh-CN": "zh-CN-XiaoxiaoNeural",
-			"zh-HK": "zh-HK-HiuMaanNeural",
-			"ja-JP": "ja-JP-NanamiNeural",
-			"ko-KR": "ko-KR-SunHiNeural",
-			"de-DE": "de-DE-KatjaNeural",
-			"fr-FR": "fr-FR-DeniseNeural",
-			"es-ES": "es-ES-ElviraNeural",
-		}
-		if v, ok := voiceMap[language]; ok {
-			voiceName = v
-		} else {
-			voiceName = "en-US-JennyNeural"
-		}
+		// 按语言取默认音色（表在 defaults.go，设置页占位用的是同一张）。
+		voiceName = DefaultVoiceForLanguage("azure", language)
 	}
 
 	speed := p.config.Speed
@@ -561,7 +548,7 @@ func (p *GoogleTTSProvider) TTS(ctx context.Context, text string) ([]byte, error
 
 	voiceName := p.config.Voice
 	if voiceName == "" {
-		voiceName = fmt.Sprintf("%s-Standard-C", language)
+		voiceName = DefaultVoiceForLanguage("google", language)
 	}
 
 	speed := p.config.Speed
@@ -763,8 +750,16 @@ func NewWhisperProvider(config *ProviderConfig) *WhisperProvider {
 
 func (p *WhisperProvider) Name() string { return "whisper" }
 
+// IsAvailable 报告本机是否装了 whisper CLI。
 func (p *WhisperProvider) IsAvailable() bool {
-	// Check if whisper command is available
+	return LocalWhisperAvailable()
+}
+
+// LocalWhisperAvailable 报告本机是否有 whisper 命令。
+//
+// 设置页判断"whisper 这家配好了没有"也用这一条：它没有 API key 可填，
+// 光看 key 会永远显示"未配置"。
+func LocalWhisperAvailable() bool {
 	_, err := exec.LookPath("whisper")
 	return err == nil
 }
@@ -793,7 +788,7 @@ func (p *WhisperProvider) ASR(ctx context.Context, audio []byte) (string, error)
 
 	model := p.config.Model
 	if model == "" {
-		model = "base"
+		model = DefaultModelFor("whisper")
 	}
 
 	// Run whisper command

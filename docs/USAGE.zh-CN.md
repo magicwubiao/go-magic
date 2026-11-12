@@ -1538,30 +1538,33 @@ POST   /api/plugins/{name}/mcp/{server}/connect
 
 | 能力 | provider | 说明 | 本地首帧图 |
 | --- | --- | --- | --- |
-| 生图 | `dall-e` | OpenAI，唯一支持编辑/变体 | — |
+| 生图 | `dall-e` | OpenAI GPT Image 2（DALL·E 已停用，标识保留），唯一支持编辑/变体 | — |
 | 生图 | `stable-diffusion` | Stability sd3 端点，模型由端点固定 | — |
 | 生图 | `midjourney` | 第三方中转，只提交不轮询（返回 pending 占位） | — |
-| 生图 | `together` | FLUX / SDXL，模型可换 | — |
-| 生图 | `minimax` | 海螺 image-01，按画幅出图 | — |
-| 生视频 | `dashscope` | 通义万相 wan，480p~1080p | 不支持，需 `image_url` |
-| 生视频 | `volcengine` | 方舟 Seedance，画幅最全（含 21:9） | 支持 |
-| 生视频 | `kling` | 可灵 3.0，**模型名在请求路径里** | 不支持，需 `image_url` |
+| 生图 | `together` | FLUX.2，模型可换 | — |
+| 生图 | `minimax` | 海螺 image-02，按画幅出图 | — |
+| 生视频 | `dashscope` | 通义万相 wan2.7 / 2.6，720p~1080p（2.7 起不出 480p） | 支持（data URI ≤10MB） |
+| 生视频 | `volcengine` | 方舟 Seedance 2.5，最长 30 秒，画幅最全（含 21:9） | 支持 |
+| 生视频 | `kling` | 可灵 3.0，**模型名在请求路径里** | 支持（裸 base64） |
 | 生视频 | `runway` | Gen-4.5，时长只有 5/10 秒 | 支持（data URI，≤5MB） |
-| 生视频 | `minimax` | 海螺 H3，成功直接返回成片地址 | 不支持，需 `image_url` |
+| 生视频 | `minimax` | 海螺 H3，成功直接返回成片地址 | 支持（data URI ≤30MB） |
 | 语音 | `cosyvoice` | 阿里云 CosyVoice，与通义万相共用百炼 Key | — |
-| 语音 | `openai` / `elevenlabs` / `azure` / `google` / `whisper` | 走 `voice.Manager` 原有链路 | — |
+| 语音 | `openai` / `elevenlabs` / `azure` / `google` | 走 `voice.Manager` 原有链路，默认模型/音色定义在 `internal/voice/defaults.go` | — |
+| 语音 | `whisper` | **本地** whisper CLI（`--model tiny\|base\|small\|medium\|large-v3`），需要命令在 PATH 上；托管版走 `openai` | — |
 
 别名也认：`dalle`、`sd`、`wan`、`seedance`、`hailuo`、`runwayml`、`qwen-tts` 都能直接写进 `provider`。
 
 **参数不会被静默忽略。** 各厂商支持的档位不同，工具先映射再回显实际值：
 
-- 时长：Runway 只认 5/10 秒，传 8 吸附到 10；其余按 3~15 钳制。
+- 时长：Runway 只认 5/10 秒，传 8 吸附到 10；其余按各家区间钳制（Seedance 4~30、Wan 2~15、Kling 3~15）。
 - 画幅：该厂商不支持的画幅回落到它的默认值（如 Kling / MiniMax 不支持 4:3）。
 - 分辨率：MiniMax 用 768P / 2K，Kling 没有 480p。工具结果里的 `duration` / `ratio` / `resolution` 是**实际生效值**，而不是你的输入值。
 
 **报错带下一步。** 401/403 会说明是哪家拒绝的、去哪儿检查密钥（附控制台地址，并提示新密钥可能在服务未开通前失败）；429 提示等一分钟重试并说明限额按账号计算；5xx 提示是厂商侧故障，不要改配置。
 
 **设置页会自动填。** 切换服务商时，推荐模型、官方接口地址、默认声音会跟着换（只在字段为空或仍是上一家的默认值时才覆盖，手写的内容不会被偷偷改掉）；模型是可选可搜索的下拉，画幅/分辨率下拉按当前厂商裁剪；每张卡片都带"去控制台获取密钥"入口和密钥形态提示。
+
+**例外是 Azure / Google 的声音。** 这两家的音色 ID 自带语言（`en-US-JennyNeural` 读中文会带浓重口音），所以默认声音由 `language` 决定，设置页**不会**把它预填进输入框——留空就是跟随语言，输入框占位里显示的是当前语言下实际会用的那个（`zh-CN` → `zh-CN-XiaoxiaoNeural`，`en-US` → `en-US-JennyNeural`）。填了具体音色就固定用它，不再随语言变。
 
 
 ### 15.5 反向 MCP：把 magic 当工具用

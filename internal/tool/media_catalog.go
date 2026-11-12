@@ -1,6 +1,10 @@
 package tool
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/magicwubiao/go-magic/internal/voice"
+)
 
 // media_catalog.go — 内置媒体厂商的**静态元信息**（单一真源）。
 //
@@ -9,6 +13,12 @@ import "strings"
 //  2. 后端用什么默认模型 / 默认 base_url（DefaultModel / DefaultBaseURL）；
 //  3. 服务端校验该放开哪些画幅、分辨率、时长（Ratios / Resolutions / Min-MaxDuration）；
 //  4. 报错时告诉用户"下一步该做什么"（ConsoleURL + KeyHint）。
+//
+// 一个例外：语音的 openai / elevenlabs / whisper 三家，DefaultModel 与 DefaultVoice
+// **不在这里定义**，而是引用 internal/voice 的默认值表。因为这三家的请求是 voice 包
+// 发的，而依赖方向只能是 tool → voice；把值写在 catalog 就必然要再抄一份到 voice，
+// 抄漏一次就变成"设置页写着 A、请求发的是 B"（真发生过）。azure / google 例外：
+// 它们的请求体里没有 model 字段，catalog 里那两个模型名只是下拉占位，不参与请求。
 //
 // 为什么不做成 i18n：Label 一律用厂商品牌名（Kling / Runway / MiniMax / CosyVoice），
 // 品牌名在中文和英文界面下都成立，翻译反而制造两套对不上的名字。说明性文字留在
@@ -56,6 +66,11 @@ type BuiltinProviderInfo struct {
 	MinDuration  int      `json:"min_duration,omitempty"`
 	MaxDuration  int      `json:"max_duration,omitempty"`
 	DefaultVoice string   `json:"default_voice,omitempty"`
+	// VoiceFollowsLanguage 表示这家没有单一默认音色，默认值由 language 决定
+	// （Azure 的音色 ID 自带语言、Google 的默认音色是"语言+档位"）。
+	// 这种厂商 DefaultVoice 必须留空：写死一个值就是在说谎，也是前端"预填音色"
+	// 会把默认值钉死在上一门语言上的原因。
+	VoiceFollowsLanguage bool `json:"voice_follows_language,omitempty"`
 	// Notes 是一句使用约束（英文，进工具描述与文档，不进 UI 正文）。
 	Notes string `json:"notes,omitempty"`
 }
@@ -93,15 +108,18 @@ func (i BuiltinProviderInfo) Model(configured string) string {
 var builtinProviderCatalog = []BuiltinProviderInfo{
 	// ---- 图片 ----
 	{
-		Kind: MediaKindImage, Name: string(ProviderDALLE), Label: "OpenAI DALL·E",
-		DefaultModel: "dall-e-3", Models: []string{"dall-e-3", "dall-e-2"},
+		// provider 标识仍然是 "dall-e"：config.json 里存的、用户手上配置写的都是这个
+		// 值，改名等于让所有存量配置失效。DALL·E 本体已于 2026-05-12 停用，实际调用
+		// 的是 GPT Image 系列 —— 所以 Label 与模型清单必须跟着换，标识留着。
+		Kind: MediaKindImage, Name: string(ProviderDALLE), Label: "OpenAI GPT Image",
+		DefaultModel: "gpt-image-2", Models: []string{"gpt-image-2", "gpt-image-2.5"},
 		DefaultBaseURL: "https://api.openai.com/v1",
 		ConsoleURL:     "https://platform.openai.com/api-keys",
-		DocsURL:        "https://platform.openai.com/docs/guides/images",
+		DocsURL:        "https://platform.openai.com/docs/guides/image-generation",
 		KeyHint:        "sk-... （OpenAI API key）",
 		Capabilities:   []string{CapTextToImage, CapImageEdit},
 		Ratios:         []string{"1:1", "16:9", "9:16"},
-		Notes:          "Only DALL·E supports image editing (inpaint / variation).",
+		Notes:          "GPT Image only accepts 1024x1024, 1536x1024 and 1024x1536; other sizes are snapped to the nearest. DALL-E 2/3 were retired on 2026-05-12.",
 	},
 	{
 		Kind: MediaKindImage, Name: string(ProviderStableDiffusion), Label: "Stability AI",
@@ -125,46 +143,61 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	},
 	{
 		Kind: MediaKindImage, Name: string(ProviderTogether), Label: "Together AI",
-		DefaultModel:   "black-forest-labs/FLUX.1-schnell",
-		Models:         []string{"black-forest-labs/FLUX.1-schnell", "black-forest-labs/FLUX.1-dev", "stabilityai/stable-diffusion-xl-base-1.0"},
+		DefaultModel: "black-forest-labs/FLUX.2-pro",
+		Models: []string{
+			"black-forest-labs/FLUX.2-pro",
+			"black-forest-labs/FLUX.2-flex",
+			"black-forest-labs/FLUX.2-max",
+			"black-forest-labs/FLUX.2-dev",
+		},
 		DefaultBaseURL: "https://api.together.xyz/v1",
 		ConsoleURL:     "https://api.together.ai/settings/api-keys",
 		DocsURL:        "https://docs.together.ai/docs/images-overview",
 		KeyHint:        "Together API key",
 		Capabilities:   []string{CapTextToImage},
 		Ratios:         []string{"1:1", "16:9", "9:16"},
+		Notes:          "FLUX.2 replaces the FLUX.1 line; width/height are passed as pixels, so any ratio works.",
 	},
 	{
 		Kind: MediaKindImage, Name: "minimax", Label: "MiniMax 海螺",
-		DefaultModel: "image-01", Models: []string{"image-01", "image-01-live"},
+		DefaultModel: "image-02", Models: []string{"image-02", "image-01", "image-01-live"},
 		DefaultBaseURL: "https://api.minimax.io",
 		ConsoleURL:     "https://platform.minimax.io/user-center/basic-information/interface-key",
 		DocsURL:        "https://platform.minimax.io/docs/api-reference/image-generation-t2i",
 		KeyHint:        "MiniMax API key（中国大陆账号把接口地址改成 https://api.minimaxi.com）",
 		Capabilities:   []string{CapTextToImage},
 		Ratios:         []string{"1:1", "16:9", "9:16", "4:3", "3:4"},
-		Notes:          "Chinese prompts are handled well; aspect ratio is chosen by ratio, not pixels.",
+		Notes:          "image-02 is the current generation; image-01-live is the style-preset variant of the previous one.",
 	},
 
 	// ---- 视频 ----
 	{
 		Kind: MediaKindVideo, Name: string(ProviderDashScope), Label: "阿里云百炼 · 通义万相",
-		DefaultModel:   "wan2.2-t2v-plus",
-		Models:         []string{"wan2.2-t2v-plus", "wan2.2-i2v-plus", "wanx2.1-t2v-turbo"},
+		// wan2.7 是当前生产主力：resolution + ratio 控制规格（新协议）。
+		// wan3.0（2026-08 公测）走的是 workspace 域名下的全模态端点，请求体是
+		// input.media 数组，与这条 video-synthesis 链路不兼容，等单独做后端再接。
+		DefaultModel:   "wan2.7-t2v",
+		Models:         []string{"wan2.7-t2v", "wan2.7-i2v", "wan2.6-t2v", "wan2.6-i2v"},
 		DefaultBaseURL: "https://dashscope.aliyuncs.com/api/v1",
 		ConsoleURL:     "https://bailian.console.aliyun.com/",
 		DocsURL:        "https://help.aliyun.com/zh/model-studio/text-to-video-api-reference",
 		KeyHint:        "sk-... （百炼 API-KEY，与 CosyVoice 通用）",
 		Capabilities:   []string{CapTextToVideo, CapImageToVideo},
-		Ratios:         []string{"16:9", "9:16", "1:1"},
-		Resolutions:    []string{"480p", "720p", "1080p"},
-		MinDuration:    3, MaxDuration: 15,
-		Notes: "First-frame images accept a public URL or a base64 data URI (JPG/PNG/BMP/WEBP, max 10MB).",
+		Ratios:         []string{"16:9", "9:16", "1:1", "4:3", "3:4"},
+		Resolutions:    []string{"720p", "1080p"},
+		MinDuration:    2, MaxDuration: 15,
+		Notes: "Wan 2.7 takes resolution + ratio; Wan 2.6 and earlier take size. Neither supports 480p or audio-off overrides. First-frame images accept a public URL or a base64 data URI (JPG/PNG/BMP/WEBP, max 10MB).",
 	},
 	{
 		Kind: MediaKindVideo, Name: string(ProviderVolcengine), Label: "火山方舟 · Seedance",
-		DefaultModel:   "doubao-seedance-1-0-pro-250528",
-		Models:         []string{"doubao-seedance-1-0-pro-250528", "doubao-seedance-1-0-lite-t2v-250428", "doubao-seedance-1-0-lite-i2v-250428"},
+		// Seedance 2.5 支持单次 30 秒、全模态参考；2.0 系列按 pro / fast / mini 分档。
+		DefaultModel: "doubao-seedance-2-5-260628",
+		Models: []string{
+			"doubao-seedance-2-5-260628",
+			"doubao-seedance-2-0-260128",
+			"doubao-seedance-2-0-fast-260128",
+			"doubao-seedance-2-0-mini-260615",
+		},
 		DefaultBaseURL: "https://ark.cn-beijing.volces.com/api/v3",
 		ConsoleURL:     "https://console.volcengine.com/ark",
 		DocsURL:        "https://www.volcengine.com/docs/82379/1520757",
@@ -172,8 +205,9 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Capabilities:   []string{CapTextToVideo, CapImageToVideo},
 		Ratios:         []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 		Resolutions:    []string{"480p", "720p", "1080p"},
-		MinDuration:    3, MaxDuration: 15,
-		Notes: "Accepts local first-frame images via base64 data URI.",
+		// 2.5 下限 4 秒（1.0 是 3 秒），上限从 15 秒放宽到 30 秒。
+		MinDuration: 4, MaxDuration: 30,
+		Notes: "Accepts local first-frame images via base64 data URI. Seedance 2.5 supports up to 30s per generation.",
 	},
 	{
 		Kind: MediaKindVideo, Name: "kling", Label: "可灵 Kling",
@@ -221,47 +255,71 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	// ---- 语音 ----
 	{
 		Kind: MediaKindSpeech, Name: "openai", Label: "OpenAI TTS / Whisper",
-		DefaultModel: "tts-1", Models: []string{"tts-1", "tts-1-hd", "whisper-1"},
+		// 默认值与 voice 包共用一张表（见文件头注释）。gpt-4o-mini-tts 支持
+		// instructions 控制语气；tts-1 系列仍在但已是上一代；whisper-1 只有识别能力，
+		// 走的是 provider openai 的 ASR 通道。
+		DefaultModel: voice.DefaultModelFor("openai"),
+		Models: []string{
+			voice.DefaultModelFor("openai"),
+			"tts-1-hd", "tts-1", "whisper-1",
+		},
 		DefaultBaseURL: "https://api.openai.com/v1",
 		ConsoleURL:     "https://platform.openai.com/api-keys",
 		KeyHint:        "sk-... （OpenAI API key）",
 		Capabilities:   []string{CapTextToSpeech, CapSpeechToText},
-		DefaultVoice:   "alloy",
+		DefaultVoice:   voice.DefaultVoiceFor("openai"),
+		Notes:          "gpt-4o-mini-tts accepts a plain-language instructions field; tts-1/tts-1-hd do not.",
 	},
 	{
 		Kind: MediaKindSpeech, Name: "elevenlabs", Label: "ElevenLabs",
-		DefaultModel: "eleven_multilingual_v2", Models: []string{"eleven_multilingual_v2", "eleven_turbo_v2_5"},
+		// 默认值与 voice 包共用一张表。eleven_v3 表现力更强，但要求输入较长，
+		// 一句话的短文本容易被拒，所以列进 Models 可选、不做默认。
+		DefaultModel: voice.DefaultModelFor("elevenlabs"),
+		Models: []string{
+			voice.DefaultModelFor("elevenlabs"),
+			"eleven_v3", "eleven_flash_v2_5",
+		},
 		DefaultBaseURL: "https://api.elevenlabs.io/v1",
 		ConsoleURL:     "https://elevenlabs.io/app/settings/api-keys",
 		KeyHint:        "xi-api-key",
 		Capabilities:   []string{CapTextToSpeech},
-		DefaultVoice:   "21m00Tcm4TlvDq8ikWAM",
+		DefaultVoice:   voice.DefaultVoiceFor("elevenlabs"),
+		Notes:          "eleven_v3 is the most expressive but expects longer input; eleven_flash_v2_5 is the low-latency tier for realtime use.",
 	},
 	{
 		Kind: MediaKindSpeech, Name: "azure", Label: "Azure Speech",
+		// model 在这个厂商身上不参与请求（Azure 用 SSML 里的 voice 名），
+		// 这里只为设置页下拉有个占位，改它不会影响任何请求。
 		DefaultModel: "neural-tts", DefaultBaseURL: "",
 		ConsoleURL:   "https://portal.azure.com/",
 		KeyHint:      "Speech 资源的 key + 区域（region 必填，如 eastasia）",
 		Capabilities: []string{CapTextToSpeech, CapSpeechToText},
-		DefaultVoice: "zh-CN-XiaoxiaoNeural",
-		Notes:        "Region is required; without it every request returns 401.",
+		// 默认音色跟着 language 走（zh-CN → Xiaoxiao、en-US → Jenny…），
+		// 写死一个值只会误导：language 填 en 却在占位里看到中文音色。
+		VoiceFollowsLanguage: true,
+		Notes:                "Region is required; without it every request returns 401. The default voice follows voice.language.",
 	},
 	{
 		Kind: MediaKindSpeech, Name: "google", Label: "Google Cloud TTS / STT",
+		// 同 azure：Google 用 voice.languageCode + name，没有 model 参数，
+		// 这里的值只是下拉占位；默认音色是"语言 + -Standard-C"，也随 language 变。
 		DefaultModel: "neural2", DefaultBaseURL: "",
-		ConsoleURL:   "https://console.cloud.google.com/apis/credentials",
-		KeyHint:      "服务账号 JSON 的路径或内容（不是普通 API key）",
-		Capabilities: []string{CapTextToSpeech, CapSpeechToText},
-		Notes:        "Requires a service-account credential, not a plain API key.",
+		ConsoleURL:           "https://console.cloud.google.com/apis/credentials",
+		KeyHint:              "服务账号 JSON 的路径或内容（不是普通 API key）",
+		Capabilities:         []string{CapTextToSpeech, CapSpeechToText},
+		VoiceFollowsLanguage: true,
+		Notes:                "Requires a service-account credential, not a plain API key. The default voice follows voice.language.",
 	},
 	{
-		Kind: MediaKindSpeech, Name: "whisper", Label: "OpenAI Whisper (ASR)",
-		DefaultModel: "whisper-1", Models: []string{"whisper-1"},
-		DefaultBaseURL: "https://api.openai.com/v1",
-		ConsoleURL:     "https://platform.openai.com/api-keys",
-		KeyHint:        "sk-... （与 OpenAI TTS 共用一个 key）",
-		Capabilities:   []string{CapSpeechToText},
-		Notes:          "Speech-to-text only; use provider openai for synthesis.",
+		Kind: MediaKindSpeech, Name: "whisper", Label: "Whisper（本地 CLI）",
+		// 这条是**本地** whisper：voice 包的 whisper provider 跑的是本机 whisper 命令
+		// （见 asr_tool 的 provider 说明）。托管版 Whisper 走 provider openai（模型
+		// whisper-1），两者不要混：以前这里写的是 "OpenAI Whisper"，还配了 key 输入框，
+		// 用户填完 key 以为在用 API，实际却去本机 exec 一个不存在的二进制。
+		DefaultModel: voice.DefaultModelFor("whisper"),
+		Models:       []string{"tiny", "base", "small", "medium", "large-v3"},
+		Capabilities: []string{CapSpeechToText},
+		Notes:        "Runs the local whisper CLI; install it and make sure it is on PATH. Use provider openai for the hosted Whisper API.",
 	},
 	{
 		Kind: MediaKindSpeech, Name: "cosyvoice", Label: "阿里云 CosyVoice",
