@@ -462,7 +462,7 @@ func extensionFromMime(mime string) string {
 // ---- 语音（TTS / ASR）----
 //
 // 语音与图片 / 视频的结构差异：内置语音能力早就有一套 voice.Manager +
-// VoiceProvider（openai / azure / google / elevenlabs / whisper），它自己管
+// VoiceProvider（openai / azure / google / elevenlabs），它自己管
 // 配置合并、预设、格式转换。这里**不替换它**，只加一个并列的扩展点：
 // 工具先查注册表（插件贡献的后端），查不到再回落到 voice.Manager。
 //

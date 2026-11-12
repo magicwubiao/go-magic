@@ -411,3 +411,37 @@ func TestVoiceSnapshotDerivesLanguageDependentVoice(t *testing.T) {
 		t.Errorf("google default_voice = %v, want en-US-Standard-C after language change", got)
 	}
 }
+
+// 语音卡片里不该再有本地 whisper：它没有可填的凭据（永远显示"未配置"），
+// 可用与否取决于本机 PATH，托管版 Whisper 走 provider openai 已经覆盖。
+func TestVoiceSnapshotOmitsLocalWhisper(t *testing.T) {
+	s := newMediaTestServer(t)
+	s.cfg.Voice = &voice.VoiceConfig{Provider: "openai", Speed: 1}
+
+	snap := s.voiceSnapshot(s.cfg.Voice)
+	list, _ := snap["providers"].([]map[string]interface{})
+	if len(list) == 0 {
+		t.Fatal("snapshot has no speech providers")
+	}
+	for _, p := range list {
+		if p["name"] == "whisper" {
+			t.Fatalf("snapshot still lists whisper: %v", list)
+		}
+	}
+	for _, name := range builtinVoiceProviders {
+		if name == "whisper" {
+			t.Errorf("builtinVoiceProviders still contains whisper: %v", builtinVoiceProviders)
+		}
+	}
+
+	// 旧配置里留着 provider=whisper 时，面板要显示实际生效的那家，并把属于
+	// 那家的 model/voice 清掉——否则下拉停在一个不存在的选项上，保存时又被写回。
+	s.cfg.Voice = &voice.VoiceConfig{Provider: "whisper", Model: "base", Speed: 1}
+	snap = s.voiceSnapshot(s.cfg.Voice)
+	if got := snap["provider"]; got != "openai" {
+		t.Errorf("active provider = %v, want openai after the stale value is dropped", got)
+	}
+	if got := snap["model"]; got != "" {
+		t.Errorf("model = %v, want empty so the new provider shows its own placeholder", got)
+	}
+}

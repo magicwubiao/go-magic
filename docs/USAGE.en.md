@@ -1573,8 +1573,7 @@ Switching providers only swaps the backend; tool names and parameters stay the s
 | video | `runway` | Gen-4.5; duration snaps to 5 or 10s | Yes — data URI, ≤5MB |
 | video | `minimax` | Hailuo H3 family (4-15s); returns the video URL directly | Yes — data URI, ≤30MB |
 | speech | `cosyvoice` | Alibaba CosyVoice; shares the Bailian key with wan | — |
-| speech | `openai` / `elevenlabs` / `azure` / `google` | Existing `voice.Manager` path; defaults live in `internal/voice/defaults.go` | — |
-| speech | `whisper` | **Local** whisper CLI (`--model tiny\|base\|small\|medium\|large-v3`); the command must be on PATH. Use `openai` for the hosted API | — |
+| speech | `openai` / `elevenlabs` / `azure` / `google` | Existing `voice.Manager` path; defaults live in `internal/voice/defaults.go`. Transcription uses `whisper-1` under `openai` | — |
 
 Aliases resolve too: `dalle`, `sd`, `wan`, `seedance`, `hailuo`, `runwayml`, `qwen-tts` all work as `provider` values.
 

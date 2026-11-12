@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,7 @@ type VoiceProvider interface {
 
 // VoiceConfig holds voice configuration
 type VoiceConfig struct {
-	Provider     string                         `json:"provider"`     // openai, elevenlabs, azure, google, whisper
+	Provider     string                         `json:"provider"`     // openai, elevenlabs, azure, google
 	Model        string                         `json:"model"`        // TTS/ASR model
 	Voice        string                         `json:"voice"`        // Voice ID
 	Language     string                         `json:"language"`     // Language code (en, zh, etc.)
@@ -103,11 +104,29 @@ func NewManager(config *VoiceConfig) *Manager {
 	m.registerDefaultProviders()
 
 	// Set active provider
-	if config != nil && config.Provider != "" {
-		m.activeProvider = m.providers[config.Provider]
+	if m.config != nil {
+		m.config.Provider = m.resolveProviderName(m.config.Provider)
+		m.activeProvider = m.providers[m.config.Provider]
 	}
 
 	return m
+}
+
+// resolveProviderName 把配置里的 provider 名归一到一个真正注册过的名字。
+//
+// 必要性：配置是可能"比代码旧"的。内置的本地 whisper CLI 已经从清单里移除，
+// 但用户 config.json 里还留着 "provider": "whisper"。若不归一，activeProvider
+// 会是 nil，之后每次朗读都报 provider not available，而用户从这句话里看不出
+// 该改哪一项。这里静默回落到默认厂商并留一行日志。
+func (m *Manager) resolveProviderName(name string) string {
+	if _, ok := m.providers[name]; ok {
+		return name
+	}
+	fallback := DefaultVoiceConfig().Provider
+	if name != "" {
+		log.Printf("voice: provider %q is no longer available, falling back to %q", name, fallback)
+	}
+	return fallback
 }
 
 // registerDefaultProviders registers built-in providers
@@ -163,14 +182,6 @@ func (m *Manager) registerDefaultProviders() {
 		Pitch:    m.config.Pitch,
 	}
 	m.providers["google"] = NewGoogleTTSProvider(googleConfig)
-
-	// Whisper ASR（本地 CLI）
-	whisperConfig := &ProviderConfig{
-		APIKey:   m.getProviderAPIKey("whisper"),
-		Model:    m.modelFor("whisper"),
-		Language: m.config.Language,
-	}
-	m.providers["whisper"] = NewWhisperProvider(whisperConfig)
 }
 
 // getProviderAPIKey gets API key for a provider
@@ -528,10 +539,9 @@ func (m *Manager) UpdateConfig(config *VoiceConfig) error {
 	m.registerDefaultProviders()
 
 	// Update active provider
-	if config.Provider != "" {
-		if provider, ok := m.providers[config.Provider]; ok {
-			m.activeProvider = provider
-		}
+	if m.config != nil {
+		m.config.Provider = m.resolveProviderName(m.config.Provider)
+		m.activeProvider = m.providers[m.config.Provider]
 	}
 
 	return nil

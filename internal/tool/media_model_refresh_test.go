@@ -194,7 +194,7 @@ func TestDashScopeImageToVideoSwapsModel(t *testing.T) {
 // 抄成字符串的那一刻就埋下了"设置页写 A、请求发 B"的分叉——真发生过一次
 // （catalog gpt-4o-mini-tts，voice 回落 tts-1）。
 func TestSpeechDefaultsComeFromVoicePackage(t *testing.T) {
-	for _, name := range []string{"openai", "elevenlabs", "whisper"} {
+	for _, name := range []string{"openai", "elevenlabs"} {
 		info, ok := ProviderInfo(MediaKindSpeech, name)
 		if !ok {
 			t.Fatalf("catalog is missing speech provider %q", name)
@@ -222,19 +222,12 @@ func TestSpeechDefaultsComeFromVoicePackage(t *testing.T) {
 	}
 }
 
-// whisper 是本地 CLI：不能出现在需要 API key 的形态里（有 base_url 或 key 提示），
-// 否则用户填了 key 却仍在等一个本机二进制。
-func TestLocalWhisperIsNotAdvertisedAsHostedAPI(t *testing.T) {
-	info, ok := ProviderInfo(MediaKindSpeech, "whisper")
-	if !ok {
-		t.Fatal("catalog is missing speech provider whisper")
-	}
-	if info.DefaultBaseURL != "" || info.KeyHint != "" || info.ConsoleURL != "" {
-		t.Errorf("whisper looks like a hosted API: base_url=%q key_hint=%q console_url=%q",
-			info.DefaultBaseURL, info.KeyHint, info.ConsoleURL)
-	}
-	if info.Supports(CapTextToSpeech) {
-		t.Error("whisper must not advertise TTS")
+// 本地 whisper CLI 已从内置清单移除：它没有可填的凭据（设置页永远显示"未配置"），
+// 可用与否取决于本机是否装了命令，托管版 Whisper 走 provider openai 即可完全覆盖。
+// 这条断言防止有人"顺手加回来"——加回来会重新出现在语音卡片列表里当噪音。
+func TestLocalWhisperCLIIsNotAdvertised(t *testing.T) {
+	if _, ok := ProviderInfo(MediaKindSpeech, "whisper"); ok {
+		t.Error("catalog still advertises the local whisper CLI; use provider openai for hosted Whisper")
 	}
 }
 

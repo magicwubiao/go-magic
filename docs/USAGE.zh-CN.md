@@ -1549,8 +1549,7 @@ POST   /api/plugins/{name}/mcp/{server}/connect
 | 生视频 | `runway` | Gen-4.5，时长只有 5/10 秒 | 支持（data URI，≤5MB） |
 | 生视频 | `minimax` | 海螺 H3 系列（4~15 秒），成功直接返回成片地址 | 支持（data URI ≤30MB） |
 | 语音 | `cosyvoice` | 阿里云 CosyVoice，与通义万相共用百炼 Key | — |
-| 语音 | `openai` / `elevenlabs` / `azure` / `google` | 走 `voice.Manager` 原有链路，默认模型/音色定义在 `internal/voice/defaults.go` | — |
-| 语音 | `whisper` | **本地** whisper CLI（`--model tiny\|base\|small\|medium\|large-v3`），需要命令在 PATH 上；托管版走 `openai` | — |
+| 语音 | `openai` / `elevenlabs` / `azure` / `google` | 走 `voice.Manager` 原有链路，默认模型/音色定义在 `internal/voice/defaults.go`；识别用 `openai` 的 `whisper-1` | — |
 
 别名也认：`dalle`、`sd`、`wan`、`seedance`、`hailuo`、`runwayml`、`qwen-tts` 都能直接写进 `provider`。
 

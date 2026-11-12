@@ -4,7 +4,7 @@ import "testing"
 
 // defaults_test.go — 默认模型 / 音色的来源与跨厂商隔离。
 
-// 五家内置 provider 共用过一个 m.config.Model：用户在设置页把 provider 切到
+// 内置 provider 共用过一个 m.config.Model：用户在设置页把 provider 切到
 // ElevenLabs、模型栏还留着 gpt-4o-mini-tts 时，请求就会带着 OpenAI 的模型名
 // 发给 ElevenLabs（必 404）。配置里的 model/voice 只属于"当前选中的那一家"。
 func TestProviderConfigsDoNotShareModelAcrossProviders(t *testing.T) {
@@ -43,9 +43,6 @@ func TestEmptyConfigFallsBackToPerProviderDefaults(t *testing.T) {
 	}
 	if got := m.voiceFor("openai"); got != DefaultVoiceFor("openai") {
 		t.Errorf("voiceFor(openai) = %q, want %q", got, DefaultVoiceFor("openai"))
-	}
-	if got := m.modelFor("whisper"); got == "" {
-		t.Error("modelFor(whisper) is empty; local whisper needs a size tier")
 	}
 }
 
@@ -91,5 +88,23 @@ func TestAzureProviderUsesLanguageDefault(t *testing.T) {
 	}
 	if got := DefaultVoiceForLanguage("azure", p.config.Language); got != "zh-CN-XiaoxiaoNeural" {
 		t.Errorf("azure zh-CN default = %q, want zh-CN-XiaoxiaoNeural", got)
+	}
+}
+
+// 配置可能比代码旧：内置的本地 whisper CLI 已移除，但 config.json 里还留着
+// "provider": "whisper"。此时不能让 activeProvider 变成 nil（每次朗读都报
+// provider not available，用户完全看不出该改哪一项），要回落到默认厂商，
+// 并把 config.Provider 一并归一，否则设置页还会把 whisper 回存回来。
+func TestRemovedProviderFallsBackToDefault(t *testing.T) {
+	m := NewManager(&VoiceConfig{Provider: "whisper"})
+
+	if got := m.GetConfig().Provider; got != DefaultVoiceConfig().Provider {
+		t.Errorf("config.Provider = %q, want %q after normalization", got, DefaultVoiceConfig().Provider)
+	}
+	if _, err := m.GetProvider(m.GetConfig().Provider); err != nil {
+		t.Errorf("active provider is not registered: %v", err)
+	}
+	if providers := m.GetProviders(); len(providers) != 4 {
+		t.Errorf("builtin providers = %v, want the four remaining ones", providers)
 	}
 }

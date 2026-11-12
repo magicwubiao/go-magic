@@ -13,10 +13,10 @@ import "strings"
 //     写 gpt-4o-mini-tts、这里的回落还是 tts-1，界面写着 A、请求发的是 B，
 //     这类不一致从界面上看不出来，只能靠调用失败去撞。
 //
-// catalog 里这 5 家的 DefaultModel / DefaultVoice 直接引用下面的函数，不再各写一份。
-// azure / google 不在表里：它们的请求体里根本没有 model 字段（Azure 靠 SSML 的
-// voice 名，Google 靠 voice.languageCode + name），catalog 里那两个模型名只是
-// 设置页下拉的占位，不参与请求，也就没有"两套值"的问题。
+// catalog 里 openai / elevenlabs 两家的 DefaultModel / DefaultVoice 直接引用下面的
+// 函数，不再各写一份。azure / google 不在表里：它们的请求体里根本没有 model 字段
+// （Azure 靠 SSML 的 voice 名，Google 靠 voice.languageCode + name），catalog 里那两个
+// 模型名只是设置页下拉的占位，不参与请求，也就没有"两套值"的问题。
 
 // BuiltinSpeechDefault 一家厂商的默认模型与默认音色。空字符串表示"该厂商不需要"。
 type BuiltinSpeechDefault struct {
@@ -34,9 +34,6 @@ var builtinSpeechDefaults = map[string]BuiltinSpeechDefault{
 	// eleven_multilingual_v2 做默认而不是 eleven_v3：v3 表现力更强，但要求输入较长，
 	// 一句话的短文本容易被拒。
 	"elevenlabs": {Model: "eleven_multilingual_v2", Voice: "21m00Tcm4TlvDq8ikWAM"},
-	// whisper 是**本地** CLI（跑 whisper.cpp 尺寸档），不是 OpenAI 的 whisper-1；
-	// 托管版 Whisper 走 provider openai，模型 whisper-1。
-	"whisper": {Model: "base"},
 }
 
 // DefaultModelFor 返回该内置厂商的默认模型；未知厂商或该厂商不需要模型时返回 ""。

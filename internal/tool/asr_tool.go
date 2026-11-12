@@ -46,12 +46,12 @@ func NewASRTool() *ASRTool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "ASR provider to use: openai, azure, google, whisper, minimax. Omit to use the configured default provider (Settings > Media).",
-						"enum":        []string{"openai", "azure", "google", "whisper", "minimax"},
+						"description": "ASR provider to use: openai, azure, google, minimax. Omit to use the configured default provider (Settings > Media).",
+						"enum":        []string{"openai", "azure", "google", "minimax"},
 					},
 					"model": map[string]interface{}{
 						"type":        "string",
-						"description": "ASR model to use (provider-specific, e.g., 'whisper-1' for OpenAI; 'base', 'small', 'medium', 'large' for local Whisper)",
+						"description": "ASR model to use (provider-specific, e.g. 'whisper-1' for OpenAI, which also covers the hosted Whisper API)",
 					},
 					"format": map[string]interface{}{
 						"type":        "string",
@@ -197,6 +197,13 @@ func (t *ASRTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		manager = voice.NewManager(voiceConfig)
 	}
 
+	// provider 可能是旧配置里残留的名字（内置的本地 whisper CLI 已移除）：manager
+	// 构造时已把 config.Provider 归一到可用的一家，这里跟它对齐，否则会拿一个
+	// 不存在的名字去 ASRWithProvider，报 "unknown provider: whisper"。
+	if _, perr := manager.GetProvider(provider); perr != nil {
+		provider = manager.GetConfig().Provider
+	}
+
 	// 执行 ASR
 	var result *voice.VoiceResult
 	if provider != "" && provider != manager.GetConfig().Provider {
@@ -325,7 +332,6 @@ func getProviderDescription(name string) string {
 		"azure":      "Azure Speech Services - Microsoft's cloud-based speech services with extensive language support",
 		"google":     "Google Cloud Text-to-Speech/Speech-to-Text - Google's neural speech services",
 		"elevenlabs": "ElevenLabs - High-quality neural text-to-speech with voice cloning",
-		"whisper":    "OpenAI Whisper (Local) - Local speech recognition using OpenAI's Whisper model",
 	}
 	if desc, ok := descriptions[name]; ok {
 		return desc
@@ -337,8 +343,6 @@ func supportsTTS(name string) bool {
 	switch name {
 	case "openai", "azure", "google", "elevenlabs":
 		return true
-	case "whisper":
-		return false
 	default:
 		return false
 	}
@@ -346,7 +350,7 @@ func supportsTTS(name string) bool {
 
 func supportsASR(name string) bool {
 	switch name {
-	case "openai", "azure", "google", "whisper":
+	case "openai", "azure", "google":
 		return true
 	case "elevenlabs":
 		return false

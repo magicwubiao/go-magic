@@ -43,7 +43,7 @@ var mediaEnvKeys = map[string][]string{
 
 // builtinVoiceProviders 是 voice.Manager 内置的 provider（不含插件贡献的）。
 // 与 internal/voice 的 registerDefaultProviders 保持一致。
-var builtinVoiceProviders = []string{"openai", "elevenlabs", "azure", "google", "whisper"}
+var builtinVoiceProviders = []string{"openai", "elevenlabs", "azure", "google"}
 
 type mediaConfigPatch struct {
 	ImageGen *imageGenPatch `json:"image_gen"`
@@ -335,6 +335,13 @@ func (s *Server) voiceSnapshot(c *voice.VoiceConfig) map[string]interface{} {
 
 	providers := make([]map[string]interface{}, 0, len(builtinVoiceProviders))
 	available := false
+	// 配置可能比代码旧：内置的本地 whisper CLI 已移除，但文件里还留着
+	// "provider": "whisper"。面板要显示**实际会用的那一家**（manager 已回落到
+	// 默认厂商），否则下拉停在一个不存在的选项上，用户一保存又把它写回去。
+	// 模型/音色一并清空：它们属于被移除的那家，留着只会让新厂商的占位失效。
+	if !oneOf(provider, builtinVoiceProviders...) && !oneOf(provider, tool.RegisteredSpeechProviders()...) {
+		provider, model, voiceName = "openai", "", ""
+	}
 	for _, name := range builtinVoiceProviders {
 		ok := voiceProviderConfigured(c, name)
 		if ok {
@@ -343,7 +350,7 @@ func (s *Server) voiceSnapshot(c *voice.VoiceConfig) map[string]interface{} {
 		entry := providerEntry(tool.MediaKindSpeech, name, map[string]interface{}{
 			"available":    ok,
 			"builtin":      true,
-			"supports_tts": name != "whisper",
+			"supports_tts": true,
 			"supports_asr": name != "elevenlabs",
 		})
 		// azure / google 没有单一默认音色：按保存的 language 算出"留空实际会用
@@ -740,11 +747,6 @@ func isBuiltinVideoProvider(name string) bool {
 // voiceProviderConfigured 判断某个内置 voice provider 是否配好了凭据。
 // 与 voice.Manager.getProviderAPIKey 同一条优先链：provider 专属凭据 > 顶层 key。
 func voiceProviderConfigured(c *voice.VoiceConfig, name string) bool {
-	// whisper 是本地 CLI，没有 key 可填：判据是本机有没有这个命令。
-	// 只按 key 判会永远显示"未配置"，用户以为坏了自己却能用命令行跑通。
-	if name == "whisper" {
-		return voice.LocalWhisperAvailable()
-	}
 	if c == nil {
 		return false
 	}

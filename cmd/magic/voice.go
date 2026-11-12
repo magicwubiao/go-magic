@@ -60,7 +60,7 @@ func init() {
 	rootCmd.Flags().StringVar(&attachVideo, "video", "", "Attach a video file")
 	rootCmd.Flags().StringVar(&attachFile, "file", "", "Attach a generic file")
 
-	rootCmd.Flags().StringVar(&voiceProvider, "provider", "", "Voice provider (openai, elevenlabs, azure, coqui)")
+	rootCmd.Flags().StringVar(&voiceProvider, "provider", "", "Voice provider (openai, elevenlabs, azure, google)")
 	rootCmd.Flags().StringVar(&voiceLanguage, "lang", "en", "Voice language code")
 	rootCmd.Flags().StringVar(&voiceVoiceID, "voice", "", "Voice ID for TTS")
 	// 默认留空 = 用 provider 的推荐模型（voice.DefaultModelFor）。写死 "tts-1"

@@ -233,6 +233,13 @@ func (t *TTSTool) Execute(ctx context.Context, params map[string]interface{}) (i
 		manager = voice.NewManager(voiceConfig)
 	}
 
+	// provider 可能是旧配置里残留的名字（内置的本地 whisper CLI 已移除），也可能是
+	// 调用方写错了。manager 在构造时已把 config.Provider 归一到真正注册过的一家，
+	// 这里跟它对齐，否则会拿一个不存在的名字去 TTSWithProvider，报 "unknown provider"。
+	if _, perr := manager.GetProvider(provider); perr != nil {
+		provider = manager.GetConfig().Provider
+	}
+
 	// 执行 TTS
 	var result *voice.VoiceResult
 	if provider != "" && provider != manager.GetConfig().Provider {

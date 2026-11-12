@@ -14,8 +14,8 @@ import (
 //  3. 服务端校验该放开哪些画幅、分辨率、时长（Ratios / Resolutions / Min-MaxDuration）；
 //  4. 报错时告诉用户"下一步该做什么"（ConsoleURL + KeyHint）。
 //
-// 一个例外：语音的 openai / elevenlabs / whisper 三家，DefaultModel 与 DefaultVoice
-// **不在这里定义**，而是引用 internal/voice 的默认值表。因为这三家的请求是 voice 包
+// 一个例外：语音的 openai / elevenlabs 两家，DefaultModel 与 DefaultVoice
+// **不在这里定义**，而是引用 internal/voice 的默认值表。因为这两家的请求是 voice 包
 // 发的，而依赖方向只能是 tool → voice；把值写在 catalog 就必然要再抄一份到 voice，
 // 抄漏一次就变成"设置页写着 A、请求发的是 B"（真发生过）。azure / google 例外：
 // 它们的请求体里没有 model 字段，catalog 里那两个模型名只是下拉占位，不参与请求。
@@ -326,17 +326,6 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Capabilities:         []string{CapTextToSpeech, CapSpeechToText},
 		VoiceFollowsLanguage: true,
 		Notes:                "Requires a service-account credential, not a plain API key. The default voice follows voice.language.",
-	},
-	{
-		Kind: MediaKindSpeech, Name: "whisper", Label: "Whisper（本地 CLI）",
-		// 这条是**本地** whisper：voice 包的 whisper provider 跑的是本机 whisper 命令
-		// （见 asr_tool 的 provider 说明）。托管版 Whisper 走 provider openai（模型
-		// whisper-1），两者不要混：以前这里写的是 "OpenAI Whisper"，还配了 key 输入框，
-		// 用户填完 key 以为在用 API，实际却去本机 exec 一个不存在的二进制。
-		DefaultModel: voice.DefaultModelFor("whisper"),
-		Models:       []string{"tiny", "base", "small", "medium", "large-v3"},
-		Capabilities: []string{CapSpeechToText},
-		Notes:        "Runs the local whisper CLI; install it and make sure it is on PATH. Use provider openai for the hosted Whisper API.",
 	},
 	{
 		Kind: MediaKindSpeech, Name: "cosyvoice", Label: "阿里云 CosyVoice",
