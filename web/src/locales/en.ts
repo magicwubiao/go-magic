@@ -471,6 +471,7 @@ export default {
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
     zoomReset: 'Actual size',
+    zoomMenu: 'Zoom options',
     zoomHint: 'Click to toggle 1x / 2x, Ctrl + wheel to zoom, double-click to reset',
     wrapLines: 'Wrap lines',
     unwrapLines: 'No wrap',

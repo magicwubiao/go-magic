@@ -62,28 +62,36 @@
         @mousedown="onChromeMouseDown"
       >
         <span class="preview-title" :title="name">{{ name }}</span>
-        <n-tag v-if="typeof size === 'number'" size="small" type="info">{{ formatSize(size) }}</n-tag>
+        <n-tag
+          v-if="typeof size === 'number'"
+          size="small"
+          type="info"
+          class="preview-size-tag"
+        >{{ formatSize(size) }}</n-tag>
 
         <div class="preview-actions">
           <!-- 预览是只读的：这里刻意不提供任何写入口。
                改文件请用编辑器 / agent，预览一旦能写回，误触就会把文件内容冲掉。 -->
 
-          <!-- 视图控制：按当前类型出现，不堆一排永远禁用的按钮 -->
+          <!-- 视图控制：按当前类型出现，不堆一排永远禁用的按钮。
+               图片的缩放控件（−/＋/重置 + 百分比，约 100px）折叠成一个「100% ▾」
+               下拉，点击展开具体操作——面板变窄时把宽度让给右侧通用按钮 -->
           <template v-if="kind === 'image' && !imageError">
-            <n-button size="small" quaternary :title="t('chat.zoomOut')" @click="zoomBy(1 / 1.25)">
-              <template #icon><n-icon :component="RemoveOutline" /></template>
-            </n-button>
-            <n-button size="small" quaternary :title="t('chat.zoomIn')" @click="zoomBy(1.25)">
-              <template #icon><n-icon :component="AddOutline" /></template>
-            </n-button>
-            <n-button size="small" quaternary :title="t('chat.zoomReset')" @click="resetImageZoom">
-              <template #icon><n-icon :component="RefreshOutline" /></template>
-            </n-button>
-            <span class="zoom-label">{{ zoomLabel }}</span>
+            <n-dropdown
+              trigger="click"
+              placement="bottom-start"
+              :options="zoomMenuOptions"
+              @select="onZoomMenuSelect"
+            >
+              <n-button size="tiny" quaternary class="zoom-menu-trigger" :title="t('chat.zoomMenu')">
+                <span class="zoom-label">{{ zoomLabel }}</span>
+                <n-icon :component="ChevronDownOutline" :size="10" class="zoom-caret" />
+              </n-button>
+            </n-dropdown>
           </template>
           <n-button
             v-if="(kind === 'text' || htmlSource) && content"
-            size="small"
+            size="tiny"
             quaternary
             :title="wrapLines ? t('chat.unwrapLines') : t('chat.wrapLines')"
             @click="wrapLines = !wrapLines"
@@ -92,7 +100,7 @@
           </n-button>
           <n-button
             v-if="isMarkdown && content"
-            size="small"
+            size="tiny"
             quaternary
             :title="markdownRendered ? t('chat.markdownSource') : t('chat.markdownPreview')"
             @click="markdownRendered = !markdownRendered"
@@ -106,7 +114,7 @@
                上传文件，多文件站点在这里只会渲染出一部分。 -->
           <n-button
             v-if="isHtmlDoc"
-            size="small"
+            size="tiny"
             quaternary
             :loading="sourceLoading"
             :title="htmlSource ? t('chat.htmlPreview') : t('chat.htmlSource')"
@@ -118,7 +126,7 @@
           </n-button>
           <n-button
             v-if="openableUrl"
-            size="small"
+            size="tiny"
             quaternary
             :title="t('chat.openInNewTab')"
             @click="openInNewTab"
@@ -132,7 +140,7 @@
                数据变了）时，预览不会自己更新——iframe / 图片 / 正文都是加载一次
                就停住。这是重新拉取的唯一入口。 -->
           <n-button
-            size="small"
+            size="tiny"
             quaternary
             :loading="refreshing"
             :title="t('common.refresh')"
@@ -141,7 +149,7 @@
             <template #icon><n-icon :component="ReloadOutline" /></template>
           </n-button>
           <n-button
-            size="small"
+            size="tiny"
             quaternary
             :disabled="!content"
             :title="t('chat.copyContent')"
@@ -150,7 +158,7 @@
             <template #icon><n-icon :component="CopyOutline" /></template>
           </n-button>
           <n-button
-            size="small"
+            size="tiny"
             quaternary
             :disabled="!downloadUrl"
             :title="t('chat.download')"
@@ -159,7 +167,7 @@
             <template #icon><n-icon :component="DownloadOutline" /></template>
           </n-button>
           <n-button
-            size="small"
+            size="tiny"
             quaternary
             :title="fullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')"
             @click="toggleFullscreen"
@@ -171,7 +179,7 @@
           <!-- 浮窗/面板额外动作（最小化等）由调用方注入，放在关闭按钮之前 -->
           <slot name="actions" />
           <!-- 卡片标题栏已隐藏，关闭按钮收进工具栏最右侧 -->
-          <n-button size="small" quaternary :title="t('common.close')" @click="closeFromToolbar">
+          <n-button size="tiny" quaternary :title="t('common.close')" @click="closeFromToolbar">
             <template #icon><n-icon :component="CloseOutline" /></template>
           </n-button>
         </div>
@@ -322,12 +330,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
-import { NButton, NIcon, NSpin, NTag, NText } from 'naive-ui'
+import { NButton, NDropdown, NIcon, NSpin, NTag, NText } from 'naive-ui'
 import {
   AddOutline,
+  ChevronDownOutline,
   CloseOutline,
   CodeSlashOutline,
   ContractOutline,
@@ -984,6 +993,31 @@ function resetImageZoom() {
   imageZoom.value = 1
 }
 
+// 缩放下拉（左侧功能按钮折叠后的展开项）：放大 / 缩小 / 重置
+const zoomMenuOptions = computed(() => [
+  {
+    label: t('chat.zoomIn'),
+    key: 'in',
+    icon: () => h(NIcon, null, { default: () => h(AddOutline) }),
+  },
+  {
+    label: t('chat.zoomOut'),
+    key: 'out',
+    icon: () => h(NIcon, null, { default: () => h(RemoveOutline) }),
+  },
+  {
+    label: t('chat.zoomReset'),
+    key: 'reset',
+    icon: () => h(NIcon, null, { default: () => h(RefreshOutline) }),
+  },
+])
+
+function onZoomMenuSelect(key: string): void {
+  if (key === 'in') zoomBy(1.25)
+  else if (key === 'out') zoomBy(1 / 1.25)
+  else if (key === 'reset') resetImageZoom()
+}
+
 // 点击图片在「适应窗口」与 2 倍之间切换
 function toggleImageZoom() {
   imageZoom.value = imageZoom.value === 1 ? 2 : 1
@@ -1310,13 +1344,15 @@ onUnmounted(() => {
   margin-top: 12px;
 }
 
-/* 紧凑头部：文件名 + 大小徽标 + 图标按钮组一行放下 */
+/* 紧凑头部：文件名 + 大小徽标 + 图标按钮组一行放下。
+   桌面端不折行（nowrap）：图片预览按钮最多（缩放三件套 + 百分比 + 5 个通用钮），
+   曾经 wrap 后整排按钮掉到第二行，头部变成两层。宽度不够时由文件名让位收缩。 */
 .preview-toolbar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 6px 8px;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 4px 6px;
   margin-bottom: 8px;
   border-bottom: 1px solid #e8e8e8;
 }
@@ -1336,9 +1372,9 @@ onUnmounted(() => {
 }
 
 .preview-title {
-  flex: 0 1 auto;
+  /* 占满按钮组之外的剩余宽度，超长省略号截断（min-width:0 是 flex 子项能收缩的前提） */
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 40%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1346,18 +1382,24 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+/* 大小徽标不参与收缩：宽度不足时全部压力交给文件名（省略号截断） */
+.preview-size-tag {
+  flex-shrink: 0;
+}
+
 .preview-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
+  flex-wrap: nowrap;
+  gap: 0;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .toolbar-divider {
   width: 1px;
-  height: 16px;
-  margin: 0 4px;
+  height: 14px;
+  margin: 0 2px;
   background: #e0e0e0;
 }
 
@@ -1614,11 +1656,20 @@ onUnmounted(() => {
 .zoom-label {
   display: inline-flex;
   align-items: center;
-  min-width: 44px;
+  min-width: 34px;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11px;
   color: #666;
   font-variant-numeric: tabular-nums;
+}
+
+/* 缩放下拉触发器：百分比 + 小箭头，折叠后只占原来四个控件的一小半宽度 */
+.zoom-menu-trigger {
+  padding: 0 4px;
+}
+
+.zoom-caret {
+  color: #999;
 }
 
 .preview-content {
@@ -1749,11 +1800,13 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* 小屏适配：文件名放宽占满整行，按钮组折行；内容高度加大 */
+/* 小屏适配：文件名放宽占满整行，按钮组折行；内容高度加大。
+   桌面端 toolbar 已改 nowrap，这里恢复 wrap 才能让"文件名一行 + 按钮一行"生效 */
 @media (max-width: 768px) {
   .preview-toolbar {
     padding: 4px 4px;
     margin-bottom: 6px;
+    flex-wrap: wrap;
   }
 
   .preview-title {

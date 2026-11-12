@@ -475,6 +475,7 @@ export default {
     zoomIn: '放大',
     zoomOut: '缩小',
     zoomReset: '原始大小',
+    zoomMenu: '缩放选项',
     zoomHint: '点击切换 1x / 2x，Ctrl + 滚轮缩放，双击复位',
     wrapLines: '自动折行',
     unwrapLines: '取消折行',
