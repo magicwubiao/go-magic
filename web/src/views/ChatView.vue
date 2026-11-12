@@ -2665,7 +2665,10 @@ async function loadArchivedSessions(force = false): Promise<void> {
 function toggleArchivedView(): void {
   showArchived.value = !showArchived.value
   if (showArchived.value) {
-    loadArchivedSessions()
+    // 每次进入都强制重拉：归档操作大多发生在默认视图，此时归档视图没打开，
+    // archivedSessions 缓存不会刷新；若不强制，非空缓存会直接早退，
+    // 刚归档的会话要到重启程序才会出现。
+    loadArchivedSessions(true)
   }
 }
 
