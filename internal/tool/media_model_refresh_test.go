@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,9 +46,11 @@ func TestGPTImageSizeSnapsToSupportedTiers(t *testing.T) {
 func TestVideoDurationRangeFollowsCatalog(t *testing.T) {
 	cases := map[VideoProvider][2]int{
 		ProviderVolcengine: {4, 30},
-		ProviderDashScope:  {2, 15},
+		ProviderDashScope:  {2, 30},
 		"kling":            {3, 15},
 		"runway":           {5, 10},
+		// H3 是 4-15。曾经照抄上一代 Hailuo 的 5-10，把 4 秒和 11-15 秒砍掉。
+		"minimax": {4, 15},
 	}
 	for p, want := range cases {
 		gotMin, gotMax := videoDurationRange(p)
@@ -70,6 +73,9 @@ func TestDashScopeImageModelSwapsT2VForI2V(t *testing.T) {
 		"wan2.6-t2v":      "wan2.6-i2v",
 		"wan2.2-t2v-plus": "wan2.2-i2v-plus",
 		"wan2.6-i2v":      "wan2.6-i2v", // 已经是 i2v，不能被改坏
+		// 日期快照不跟着换：i2v 的快照日期和 t2v 不同，照搬会拼出不存在的 ID。
+		"wan2.7-t2v-2026-06-12": "wan2.7-i2v",
+		"wan2.7-i2v-2026-04-25": "wan2.7-i2v-2026-04-25",
 	}
 	for in, want := range cases {
 		if got := dashScopeImageModel(in); got != want {
@@ -247,6 +253,203 @@ func TestLanguageDependentVoiceHasNoFixedDefault(t *testing.T) {
 		if info.DefaultVoice != "" {
 			t.Errorf("%s has a fixed default_voice %q; the snapshot derives it from language instead",
 				name, info.DefaultVoice)
+		}
+	}
+}
+
+// 图形模型 ID 必须是能调用的全名：gpt-image-2.5 只是"2.5 代"的简称，
+// 真实 ID 是 -flare / -sunburst。少写后缀 = 设置页能选、一调用 404。
+func TestOpenAIImageModelsAreCallableIDs(t *testing.T) {
+	info, ok := ProviderInfo(MediaKindImage, "dall-e")
+	if !ok {
+		t.Fatal("catalog is missing image provider dall-e")
+	}
+	for _, m := range info.Models {
+		if m == "gpt-image-2.5" {
+			t.Errorf("模型清单里出现了不可调用的简称 %q（应为 gpt-image-2.5-flare / -sunburst）", m)
+		}
+	}
+	if strings.HasSuffix(info.DefaultModel, "gpt-image-2.5") {
+		t.Errorf("default_model = %q 不是可调用的模型 ID", info.DefaultModel)
+	}
+}
+
+// Wan 2.7 图生视频：共用 video-generation 端点，首帧走 input.media，且不能带 ratio。
+func TestDashScopeWan27ImageToVideoUsesMediaArray(t *testing.T) {
+	srv, bodyPtr := captureDashScope(t)
+
+	tool := &VideoGenerationTool{config: &VideoGenConfig{
+		APIKey: "sk", BaseURL: srv.URL, Timeout: 5 * time.Second,
+	}}
+	if _, _, err := tool.runDashScope(context.Background(), "x", "",
+		"https://example.com/f.png", "wan2.7-t2v", 6, "16:9", "720p"); err != nil {
+		t.Fatalf("runDashScope: %v", err)
+	}
+
+	input, _ := (*bodyPtr)["input"].(map[string]any)
+	media, _ := input["media"].([]any)
+	if len(media) != 1 {
+		t.Fatalf("input.media = %v, want one first_frame entry", input["media"])
+	}
+	item, _ := media[0].(map[string]any)
+	if item["type"] != "first_frame" || item["url"] != "https://example.com/f.png" {
+		t.Errorf("media[0] = %v, want first_frame + url", item)
+	}
+	if _, ok := input["img_url"]; ok {
+		t.Errorf("wan2.7 must not send input.img_url, got %v", input["img_url"])
+	}
+	params, _ := (*bodyPtr)["parameters"].(map[string]any)
+	if _, ok := params["ratio"]; ok {
+		t.Errorf("wan2.7 image-to-video takes no ratio, got %v", params["ratio"])
+	}
+}
+
+// Wan 2.6 图生视频还是 img_url + resolution，但它和文生视频共用端点
+// （旧的 image2video 端点只属于 wan2.2 及更早）。
+func TestDashScopeWan26ImageToVideoUsesImgURL(t *testing.T) {
+	srv, bodyPtr := captureDashScope(t)
+
+	tool := &VideoGenerationTool{config: &VideoGenConfig{
+		APIKey: "sk", BaseURL: srv.URL, Timeout: 5 * time.Second,
+	}}
+	if _, _, err := tool.runDashScope(context.Background(), "x", "",
+		"https://example.com/f.png", "wan2.6-t2v", 8, "16:9", "720p"); err != nil {
+		t.Fatalf("runDashScope: %v", err)
+	}
+
+	input, _ := (*bodyPtr)["input"].(map[string]any)
+	if input["img_url"] != "https://example.com/f.png" {
+		t.Errorf("input.img_url = %v, want the first frame", input["img_url"])
+	}
+	if _, ok := input["media"]; ok {
+		t.Errorf("wan2.6 must not send input.media, got %v", input["media"])
+	}
+	params, _ := (*bodyPtr)["parameters"].(map[string]any)
+	if params["resolution"] != "720P" {
+		t.Errorf("resolution = %v, want 720P", params["resolution"])
+	}
+}
+
+// 480p 是配置里的历史值，wan2.7 没有这一档：必须向上取 720P 而不是原样发。
+func TestDashScopeWan27Snaps480pUp(t *testing.T) {
+	srv, bodyPtr := captureDashScope(t)
+
+	tool := &VideoGenerationTool{config: &VideoGenConfig{
+		APIKey: "sk", BaseURL: srv.URL, Timeout: 5 * time.Second,
+	}}
+	if _, _, err := tool.runDashScope(context.Background(), "x", "",
+		"", "wan2.7-t2v", 5, "16:9", "480p"); err != nil {
+		t.Fatalf("runDashScope: %v", err)
+	}
+	params, _ := (*bodyPtr)["parameters"].(map[string]any)
+	if params["resolution"] != "720P" {
+		t.Errorf("resolution = %v, want 720P (2.7 has no 480P tier)", params["resolution"])
+	}
+}
+
+// 方舟首帧任务：ratio 必须 adaptive，图片项必须标 role=first_frame。
+func TestVolcengineImageToVideoUsesAdaptiveRatio(t *testing.T) {
+	origPoll := volcenginePollInterval
+	t.Cleanup(func() { volcenginePollInterval = origPoll })
+	volcenginePollInterval = time.Millisecond
+
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			json.NewDecoder(r.Body).Decode(&body)
+			io.WriteString(w, `{"id":"ark1"}`)
+		default:
+			io.WriteString(w, `{"status":"succeeded","content":{"video_url":"https://cdn.example/a.mp4"}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	tool := &VideoGenerationTool{config: &VideoGenConfig{
+		APIKey: "ak", BaseURL: srv.URL, Timeout: 5 * time.Second,
+	}}
+	if _, _, err := tool.runVolcengine(context.Background(), "x",
+		"https://example.com/f.png", "doubao-seedance-2-5-260628", 6, "16:9", "720p"); err != nil {
+		t.Fatalf("runVolcengine: %v", err)
+	}
+
+	content, _ := body["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content = %v, want text + first_frame", content)
+	}
+	item, _ := content[1].(map[string]any)
+	if item["role"] != "first_frame" {
+		t.Errorf("image role = %v, want first_frame", item["role"])
+	}
+	textItem, _ := content[0].(map[string]any)
+	if text, _ := textItem["text"].(string); !strings.Contains(text, "--ratio adaptive") {
+		t.Errorf("text flags = %q, want --ratio adaptive for a first-frame task", text)
+	}
+}
+
+// 同一家的旧型号能力更小：只按厂商上限发，会带着 20 秒去请求一个 15 秒封顶的模型。
+func TestDurationForModelNarrowsByModel(t *testing.T) {
+	cases := []struct {
+		provider VideoProvider
+		model    string
+		in, want int
+	}{
+		{ProviderVolcengine, "doubao-seedance-2-5-260628", 25, 25},
+		{ProviderVolcengine, "doubao-seedance-2-0-260128", 25, 15},
+		{"kling", "kling-3.0", 12, 12},
+		{"kling", "kling-2.6", 12, 10},
+		{"kling", "kling-2.5-turbo", 3, 5},
+		{"minimax", "MiniMax-H3", 4, 4},
+		{"minimax", "MiniMax-H3-Max", 4, 5},
+		// 百炼的上限按 wan3.0 标（30 秒），2.7 只到 15。
+		{ProviderDashScope, "wan3.0-video", 25, 25},
+		{ProviderDashScope, "wan2.7-t2v", 25, 15},
+	}
+	for _, c := range cases {
+		if got := durationForModel(c.provider, c.model, c.in); got != c.want {
+			t.Errorf("durationForModel(%q, %q, %d) = %d, want %d",
+				c.provider, c.model, c.in, got, c.want)
+		}
+	}
+}
+
+// 配置里 model 为空是常态（设置页只给占位）。若原样发 "model": ""，用户会拿到
+// 一个 400 而完全看不出是"没填模型"——必须回落到 catalog 的推荐值。
+func TestDashScopeEmptyModelFallsBackToCatalog(t *testing.T) {
+	srv, bodyPtr := captureDashScope(t)
+
+	tool := &VideoGenerationTool{config: &VideoGenConfig{
+		APIKey: "sk", BaseURL: srv.URL, Timeout: 5 * time.Second,
+	}}
+	if _, _, err := tool.runDashScope(context.Background(), "x", "",
+		"", "", 5, "16:9", "720p"); err != nil {
+		t.Fatalf("runDashScope: %v", err)
+	}
+
+	want := "wan2.7-t2v"
+	if info, ok := ProviderInfo(MediaKindVideo, "dashscope"); ok {
+		want = info.DefaultModel
+	}
+	if got := (*bodyPtr)["model"]; got != want {
+		t.Errorf("model = %v, want catalog default %s", got, want)
+	}
+}
+
+// Wan 3.0 虽然和 2.7 共用端点，但多 480P 和 21:9；2.7 发这两个值会被拒。
+func TestDashScopeEffectivePerGeneration(t *testing.T) {
+	cases := []struct {
+		model, ratio, res, wantRatio, wantRes string
+	}{
+		{"wan3.0-video", "21:9", "480p", "21:9", "480p"},
+		{"wan2.7-t2v", "21:9", "480p", "16:9", "720p"}, // 2.7 没有 21:9 / 480P
+		{"wan2.7-t2v", "4:3", "1080p", "4:3", "1080p"},
+		{"wan2.6-t2v", "4:3", "480p", "16:9", "480p"}, // 2.6 有 480P 但没有 4:3
+	}
+	for _, c := range cases {
+		gotRatio, gotRes := dashScopeEffective(c.model, c.ratio, c.res, false)
+		if gotRatio != c.wantRatio || gotRes != c.wantRes {
+			t.Errorf("dashScopeEffective(%q,%q,%q) = %q/%q, want %q/%q",
+				c.model, c.ratio, c.res, gotRatio, gotRes, c.wantRatio, c.wantRes)
 		}
 	}
 }

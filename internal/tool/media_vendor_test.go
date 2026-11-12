@@ -319,7 +319,10 @@ func TestDashScopeImageToVideoSendsDataURI(t *testing.T) {
 
 	cfg := &VideoGenConfig{APIKey: "sk", BaseURL: srv.URL, Timeout: 5 * time.Second}
 	res, err := dashscopeVideoBackend{}.Generate(context.Background(), cfg, VideoRequest{
-		Prompt: "x", ImagePath: frame, Duration: 5, Ratio: "16:9", Resolution: "720p",
+		// 显式指定老款型号：这条用例守的是 img_url + data URI 的旧协议，
+		// 2.7 的 media 数组另有用例（media_model_refresh_test.go）。
+		Prompt: "x", ImagePath: frame, Model: "wan2.2-i2v-plus",
+		Duration: 5, Ratio: "16:9", Resolution: "720p",
 	})
 	if err != nil {
 		t.Fatalf("Generate with local frame: %v", err)
@@ -767,8 +770,14 @@ func TestMinimaxSpeechSynthesizesHexAudio(t *testing.T) {
 		t.Fatalf("Synthesize: %v", err)
 	}
 
-	if body["model"] != "speech-02-hd" {
-		t.Errorf("model = %v, want catalog default speech-02-hd", body["model"])
+	// 断言用 catalog 的默认值而不是字面量：默认模型会随厂商换代变化，
+	// 写死一次就要在每次更新清单时改测试（而且改的人可能顺手把断言改成错的值）。
+	info, ok := ProviderInfo(MediaKindSpeech, "minimax")
+	if !ok {
+		t.Fatal("catalog is missing speech provider minimax")
+	}
+	if body["model"] != info.DefaultModel {
+		t.Errorf("model = %v, want catalog default %s", body["model"], info.DefaultModel)
 	}
 	vs, _ := body["voice_setting"].(map[string]any)
 	if vs["voice_id"] != "male-qn-qingse" {

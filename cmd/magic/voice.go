@@ -63,7 +63,9 @@ func init() {
 	rootCmd.Flags().StringVar(&voiceProvider, "provider", "", "Voice provider (openai, elevenlabs, azure, coqui)")
 	rootCmd.Flags().StringVar(&voiceLanguage, "lang", "en", "Voice language code")
 	rootCmd.Flags().StringVar(&voiceVoiceID, "voice", "", "Voice ID for TTS")
-	rootCmd.Flags().StringVar(&voiceModel, "model", "tts-1", "TTS model")
+	// 默认留空 = 用 provider 的推荐模型（voice.DefaultModelFor）。写死 "tts-1"
+	// 会让下面的 `if voiceModel != ""` 永远成立，等于把默认值钉在上一代模型上。
+	rootCmd.Flags().StringVar(&voiceModel, "model", "", "TTS model (default: the provider's recommended one)")
 
 	rootCmd.AddCommand(voiceCmd)
 	voiceCmd.AddCommand(voiceListenCmd)

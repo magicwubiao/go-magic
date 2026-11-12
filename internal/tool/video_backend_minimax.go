@@ -67,7 +67,9 @@ func (minimaxVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, re
 		"768p":  "768P",
 		"2k":    "2K",
 	}, req.Resolution, "768P")
-	duration := clampDuration(req.Duration, 5, 10)
+	// H3 是 4-15 秒（上一代 Hailuo 才是 5-10）：按 5-10 钳会把 4 秒和
+	// 11-15 秒整段砍掉。H3-Max 下限 5 秒由 durationForModel 提前处理。
+	duration := clampDuration(req.Duration, 4, 15)
 
 	content := []map[string]any{{"type": "text", "text": req.Prompt}}
 	ratio := pickRatio(req.Ratio, info.Ratios, "16:9")

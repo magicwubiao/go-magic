@@ -625,13 +625,14 @@ type VideoGenConfig struct {
 	Provider string `json:"provider,omitempty"`
 	// BaseURL 兼容自建/中转网关；为空时按 provider 取官方地址。
 	BaseURL string `json:"base_url,omitempty"`
-	// Model 模型名，如 wan2.2-t2v-plus / doubao-seedance-1-0-pro-250528。
+	// Model 模型名，如 wan2.7-t2v / doubao-seedance-2-5-260628。为空 = 用该
+	// provider 在 internal/tool/media_catalog.go 里的推荐模型。
 	Model string `json:"model,omitempty"`
 	// DefaultDuration 默认时长（秒）；0 = 用厂商默认，非 0 需在该厂商支持的区间内。
 	DefaultDuration int `json:"default_duration,omitempty"`
 	// DefaultRatio 默认画幅（16:9 / 9:16 / 1:1，按厂商目录校验）。
 	DefaultRatio string `json:"default_ratio,omitempty"`
-	// DefaultResolution 默认分辨率档，按厂商目录校验（如 dashscope 的 480p/720p/1080p、
+	// DefaultResolution 默认分辨率档，按厂商目录校验（如 dashscope 的 720p/1080p、
 	// minimax 的 768p/2k），保存接口会把目录里没有的档位打回 400。
 	DefaultResolution string `json:"default_resolution,omitempty"`
 	OutputDirectory   string `json:"output_dir,omitempty"`

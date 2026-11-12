@@ -1562,18 +1562,16 @@ Switching providers only swaps the backend; tool names and parameters stay the s
 
 | Capability | provider | Notes | Local first-frame image |
 | --- | --- | --- | --- |
-| image | `dall-e` | OpenAI GPT Image 2 (DALL·E is retired; the id is kept); the only backend with editing / variations | — |
+| image | `dall-e` | OpenAI GPT Image 2.5 (`-flare` / `-sunburst`; DALL·E is retired, the id is kept); the only backend with editing / variations | — |
 | image | `stable-diffusion` | Stability sd3 endpoint; the model is fixed by the endpoint | — |
 | image | `midjourney` | Third-party relay; submit only, returns a pending placeholder | — |
 | image | `together` | FLUX.2, model selectable | — |
-| image | `minimax` | Hailuo image-02, chosen by aspect ratio | — |
-| video | `dashscope` | Alibaba wan2.7 / 2.6, 720p-1080p (no 480p from 2.7 on) | Yes — data URI, ≤10MB |
+| image | `minimax` | Hailuo image-01 (legacy endpoint), chosen by aspect ratio | — |
+| video | `dashscope` | Alibaba wan3.0 / 2.7 / 2.6; 3.0 runs to 30s with 480p and 21:9, 2.7 has no 480p | Yes — data URI, ≤10MB |
 | video | `volcengine` | Ark Seedance 2.5, up to 30s, widest ratio set (incl. 21:9) | Yes |
 | video | `kling` | Kling 3.0; **the model is part of the URL path** | Yes — raw base64 |
 | video | `runway` | Gen-4.5; duration snaps to 5 or 10s | Yes — data URI, ≤5MB |
-| video | `minimax` | Hailuo H3; returns the video URL directly | Yes — data URI, ≤30MB |
-| video | `runway` | Gen-4.5; only 5 or 10 second clips | Yes (data URI, <=5MB) |
-| video | `minimax` | Hailuo H3; success returns the final URL directly | No — needs `image_url` |
+| video | `minimax` | Hailuo H3 family (4-15s); returns the video URL directly | Yes — data URI, ≤30MB |
 | speech | `cosyvoice` | Alibaba CosyVoice; shares the Bailian key with wan | — |
 | speech | `openai` / `elevenlabs` / `azure` / `google` | Existing `voice.Manager` path; defaults live in `internal/voice/defaults.go` | — |
 | speech | `whisper` | **Local** whisper CLI (`--model tiny\|base\|small\|medium\|large-v3`); the command must be on PATH. Use `openai` for the hosted API | — |
@@ -1582,9 +1580,9 @@ Aliases resolve too: `dalle`, `sd`, `wan`, `seedance`, `hailuo`, `runwayml`, `qw
 
 **Parameters are never silently dropped.** Providers disagree on what they accept, so the tool maps first and reports back what actually took effect:
 
-- Duration: Runway only renders 5 or 10 seconds, so 8 snaps to 10; others clamp to their own catalog range (Seedance 4-30, Wan 2-15, Kling 3-15).
-- Aspect ratio: an unsupported ratio falls back to that provider's default (Kling and MiniMax reject 4:3).
-- Resolution: MiniMax uses 768P / 2K and Kling has no 480p. The `duration` / `ratio` / `resolution` fields in the tool result are the **effective** values, not your input.
+- Duration: Runway only renders 5 or 10 seconds, so 8 snaps to 10; others clamp to their own catalog range (Seedance 2.5 4-30, Seedance 2.0 4-15, Wan 3.0 2-30, Wan 2.7/2.6 2-15, Kling 3.0 3-15 but 2.6/2.5-turbo 5 or 10 only, MiniMax H3 4-15).
+- Aspect ratio: an unsupported ratio falls back to that provider's default (Kling and Runway only do 16:9, 9:16, 1:1). With a first-frame image Ark forces `ratio=adaptive` so the clip follows the frame.
+- Resolution: MiniMax uses 768P / 2K, Kling has no 480p, and Wan 2.7 has no 480P tier (a stored `480p` is raised to 720P; only Wan 3.0 accepts it). The `duration` / `ratio` / `resolution` fields in the tool result are the **effective** values, not your input.
 
 **Errors tell you what to do next.** 401/403 names the provider that rejected the key, links its console and warns that a brand-new key can fail until the service is activated; 429 asks you to wait a minute and notes that limits are per account; 5xx says it is the provider's side, so don't touch the config.
 

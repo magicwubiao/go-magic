@@ -112,14 +112,18 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		// 值，改名等于让所有存量配置失效。DALL·E 本体已于 2026-05-12 停用，实际调用
 		// 的是 GPT Image 系列 —— 所以 Label 与模型清单必须跟着换，标识留着。
 		Kind: MediaKindImage, Name: string(ProviderDALLE), Label: "OpenAI GPT Image",
-		DefaultModel: "gpt-image-2", Models: []string{"gpt-image-2", "gpt-image-2.5"},
+		// 模型 ID 必须写全：gpt-image-2.5 不是一个可调用的名字，真正上线的是
+		// gpt-image-2.5-flare（默认，快）和 gpt-image-2.5-sunburst（精修）。
+		// 少写后缀就是一次 404，而设置页看不出来——它只是把字符串原样发出去。
+		DefaultModel:   "gpt-image-2.5-flare",
+		Models:         []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2"},
 		DefaultBaseURL: "https://api.openai.com/v1",
 		ConsoleURL:     "https://platform.openai.com/api-keys",
 		DocsURL:        "https://platform.openai.com/docs/guides/image-generation",
 		KeyHint:        "sk-... （OpenAI API key）",
 		Capabilities:   []string{CapTextToImage, CapImageEdit},
 		Ratios:         []string{"1:1", "16:9", "9:16"},
-		Notes:          "GPT Image only accepts 1024x1024, 1536x1024 and 1024x1536; other sizes are snapped to the nearest. DALL-E 2/3 were retired on 2026-05-12.",
+		Notes:          "2.5 models accept quality low/medium/high/xhigh/max and custom WxH sizes (multiples of 16); the UI offers 1024x1024, 1536x1024 and 1024x1536, other values are snapped. DALL-E 2/3 were retired on 2026-05-12.",
 	},
 	{
 		Kind: MediaKindImage, Name: string(ProviderStableDiffusion), Label: "Stability AI",
@@ -160,33 +164,40 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	},
 	{
 		Kind: MediaKindImage, Name: "minimax", Label: "MiniMax 海螺",
-		DefaultModel: "image-02", Models: []string{"image-02", "image-01", "image-01-live"},
+		// 只能列 image-01 / image-01-live：它们是 /v1/image_generation 这个
+		// legacy 端点唯一接受的型号（文档里 model 是单值枚举）。新一代
+		// MiniMax-H3-Image 换了独立端点，在本后端重写前写进来只会 400。
+		DefaultModel: "image-01", Models: []string{"image-01", "image-01-live"},
 		DefaultBaseURL: "https://api.minimax.io",
 		ConsoleURL:     "https://platform.minimax.io/user-center/basic-information/interface-key",
 		DocsURL:        "https://platform.minimax.io/docs/api-reference/image-generation-t2i",
 		KeyHint:        "MiniMax API key（中国大陆账号把接口地址改成 https://api.minimaxi.com）",
 		Capabilities:   []string{CapTextToImage},
 		Ratios:         []string{"1:1", "16:9", "9:16", "4:3", "3:4"},
-		Notes:          "image-02 is the current generation; image-01-live is the style-preset variant of the previous one.",
+		Notes:          "Uses the legacy /v1/image_generation endpoint, whose model enum is image-01; image-01-live is the style-preset variant. The newer H3-Image models need a different endpoint and are not wired yet.",
 	},
 
 	// ---- 视频 ----
 	{
 		Kind: MediaKindVideo, Name: string(ProviderDashScope), Label: "阿里云百炼 · 通义万相",
-		// wan2.7 是当前生产主力：resolution + ratio 控制规格（新协议）。
-		// wan3.0（2026-08 公测）走的是 workspace 域名下的全模态端点，请求体是
-		// input.media 数组，与这条 video-synthesis 链路不兼容，等单独做后端再接。
+		// 默认留在 wan2.7（成熟、价格稳定）。wan3.0 走的是同一个 video-synthesis
+		// 端点：t2v 用 resolution+ratio、i2v 用 input.media，只是时长到 30 秒、
+		// 多一个 480P 档和 21:9，所以这里能直接列出来。
 		DefaultModel:   "wan2.7-t2v",
-		Models:         []string{"wan2.7-t2v", "wan2.7-i2v", "wan2.6-t2v", "wan2.6-i2v"},
+		Models:         []string{"wan3.0-video", "wan3.0-video-prime", "wan2.7-t2v", "wan2.7-i2v", "wan2.6-t2v", "wan2.6-i2v"},
 		DefaultBaseURL: "https://dashscope.aliyuncs.com/api/v1",
 		ConsoleURL:     "https://bailian.console.aliyun.com/",
 		DocsURL:        "https://help.aliyun.com/zh/model-studio/text-to-video-api-reference",
 		KeyHint:        "sk-... （百炼 API-KEY，与 CosyVoice 通用）",
 		Capabilities:   []string{CapTextToVideo, CapImageToVideo},
-		Ratios:         []string{"16:9", "9:16", "1:1", "4:3", "3:4"},
-		Resolutions:    []string{"720p", "1080p"},
-		MinDuration:    2, MaxDuration: 15,
-		Notes: "Wan 2.7 takes resolution + ratio; Wan 2.6 and earlier take size. Neither supports 480p or audio-off overrides. First-frame images accept a public URL or a base64 data URI (JPG/PNG/BMP/WEBP, max 10MB).",
+		Ratios:         []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
+		// 480p 只有 wan3.0 有，所以排在最后：设置页切换厂商时取第一项当默认，
+		// 把 480p 放前面会让默认模型（2.7）拿到一个自己没有的档位。
+		Resolutions: []string{"720p", "1080p", "480p"},
+		// 上限按 wan3.0 标（2-30 秒）；2.7 / 2.6 只到 15 秒，由 durationForModel
+		// 按型号收窄，否则会带着 20 秒去请求一个 15 秒封顶的模型。
+		MinDuration: 2, MaxDuration: 30,
+		Notes: "Wan 3.0 and 2.7 take resolution + ratio (2.6 t2v takes size). Image-to-video differs too: 3.0/2.7 use input.media[{type:first_frame,url}], 2.6 uses input.img_url. 3.0 supports 480P, 21:9 and up to 30s; 2.7 is 720P/1080P and 2-15s. First-frame images accept a public URL or a base64 data URI (JPG/PNG/BMP/WEBP, max 10MB).",
 	},
 	{
 		Kind: MediaKindVideo, Name: string(ProviderVolcengine), Label: "火山方舟 · Seedance",
@@ -206,8 +217,10 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Ratios:         []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 		Resolutions:    []string{"480p", "720p", "1080p"},
 		// 2.5 下限 4 秒（1.0 是 3 秒），上限从 15 秒放宽到 30 秒。
+		// 注意上限是"这家最强模型"的上限：2.0 系列只到 15 秒，选 2.0 时由
+		// durationForModel 按型号收窄，否则会带着 20 秒去请求一个 15 秒封顶的模型。
 		MinDuration: 4, MaxDuration: 30,
-		Notes: "Accepts local first-frame images via base64 data URI. Seedance 2.5 supports up to 30s per generation.",
+		Notes: "Accepts local first-frame images via base64 data URI; with a first frame the ratio must be adaptive. Seedance 2.5 supports up to 30s per generation, the 2.0 series stops at 15s.",
 	},
 	{
 		Kind: MediaKindVideo, Name: "kling", Label: "可灵 Kling",
@@ -221,7 +234,7 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 		Ratios:         []string{"16:9", "9:16", "1:1"},
 		Resolutions:    []string{"720p", "1080p"},
 		MinDuration:    3, MaxDuration: 15,
-		Notes: "Image-to-video accepts a public URL or a raw base64 string (JPG/PNG, max 10MB; the model name is part of the path).",
+		Notes: "Image-to-video accepts a public URL or a raw base64 string (JPG/PNG, max 10MB; the model name is part of the path). Kling 2.6 / 2.5-turbo only render 5 or 10 seconds.",
 	},
 	{
 		Kind: MediaKindVideo, Name: "runway", Label: "Runway",
@@ -239,17 +252,21 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	},
 	{
 		Kind: MediaKindVideo, Name: "minimax", Label: "MiniMax 海螺 H3",
-		DefaultModel:   "MiniMax-H3",
-		Models:         []string{"MiniMax-H3", "MiniMax-H3-Highspeed", "MiniMax-H3-Lite"},
+		DefaultModel: "MiniMax-H3",
+		// H3 系列共享同一套 content[] 协议，换模型只改 model 字段；差异在分辨率
+		// 与时长：H3 支持 768P/2K，Highspeed/Lite 只有 480P/768P，H3-Max 下限 5 秒。
+		Models:         []string{"MiniMax-H3", "MiniMax-H3-Max", "MiniMax-H3-Highspeed", "MiniMax-H3-Lite"},
 		DefaultBaseURL: "https://api.minimax.io",
 		ConsoleURL:     "https://platform.minimax.io/user-center/basic-information/interface-key",
 		DocsURL:        "https://platform.minimax.io/docs/guides/video-generation",
 		KeyHint:        "MiniMax API key（中国大陆账号把接口地址改成 https://api.minimaxi.com）",
 		Capabilities:   []string{CapTextToVideo, CapImageToVideo},
-		Ratios:         []string{"16:9", "9:16", "1:1"},
+		Ratios:         []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 		Resolutions:    []string{"768p", "2k"},
-		MinDuration:    5, MaxDuration: 10,
-		Notes: "Success returns content.url directly (no file_id exchange). First-frame images accept a public URL or a base64 data URI (JPG/PNG/WEBP/HEIC/HEIF, max 30MB).",
+		// H3 是 4-15 秒（不是上一代 Hailuo 的 5-10）：写 5-10 会把 4 秒和
+		// 11-15 秒整段能力砍掉，而模型本身是支持的。
+		MinDuration: 4, MaxDuration: 15,
+		Notes: "H3 runs 4-15s at 768P/2K; Highspeed/Lite are 480P/768P only and H3-Max starts at 5s. Success returns content.url directly (no file_id exchange). First-frame images accept a public URL or a base64 data URI (JPG/PNG/WEBP/HEIC/HEIF, max 30MB).",
 	},
 
 	// ---- 语音 ----
@@ -334,8 +351,15 @@ var builtinProviderCatalog = []BuiltinProviderInfo{
 	},
 	{
 		Kind: MediaKindSpeech, Name: "minimax", Label: "MiniMax 语音",
-		DefaultModel:   "speech-02-hd",
-		Models:         []string{"speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo", "asr-1.0"},
+		// 语音模型已到 2.8（speech-2.8-hd / turbo 是当前主推），speech-02 是
+		// 上一代，仍可用所以留在清单里，但不再做默认。
+		DefaultModel: "speech-2.8-hd",
+		Models: []string{
+			"speech-2.8-hd", "speech-2.8-turbo",
+			"speech-2.6-hd", "speech-2.6-turbo",
+			"speech-02-hd", "speech-02-turbo",
+			"asr-1.0",
+		},
 		DefaultBaseURL: "https://api.minimaxi.com",
 		ConsoleURL:     "https://platform.minimaxi.com/user-center/basic-information/interface-key",
 		DocsURL:        "https://platform.minimaxi.com/docs/guides/text-to-speech",

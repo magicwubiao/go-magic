@@ -39,7 +39,7 @@ import (
 
 // minimaxASRDefaultModel 语音识别的默认模型。
 //
-// 注意不能复用 catalog 的 DefaultModel（那是 speech-02-hd，TTS 用的）：
+// 注意不能复用 catalog 的 DefaultModel（那是 speech-2.8-hd，TTS 用的）：
 // 同一个厂商条目下两种能力各有各的默认模型，识别这边在方法里自兜底。
 const minimaxASRDefaultModel = "asr-1.0"
 

@@ -580,7 +580,7 @@ func (t *ImageGenerationTool) generateWithTogether(ctx context.Context, prompt, 
 	width, height := parseSize(size)
 
 	// 选择模型：配置优先。原来是"两个分支赋同一个值"的死代码（都指向 SDXL），
-	// 现在默认改成 Together 主推的 FLUX.1-schnell（更快更便宜），想用 SDXL 或
+	// 现在默认取 catalog 里的 FLUX.2-pro（Together 当前主推），想用 SDXL 或
 	// 其他模型在设置页选即可——这也是把模型开放成配置项的实际理由。
 	model := infoOrDefaultModel(MediaKindImage, string(ProviderTogether), t.config.Model)
 

@@ -60,8 +60,11 @@ type VideoGenConfig struct {
 // DefaultVideoGenConfig 返回默认视频生成配置
 func DefaultVideoGenConfig() *VideoGenConfig {
 	return &VideoGenConfig{
-		Provider:          ProviderDashScope,
-		Model:             "wan2.2-t2v-plus",
+		Provider: ProviderDashScope,
+		// Model 留空 = 用 catalog 里该 provider 的推荐模型。这里曾经写死
+		// wan2.2-t2v-plus：厂商换代后设置页显示 wan2.7、实际请求还发 wan2.2，
+		// 而 wan2.2 是固定 5 秒，duration 参数等于空转。默认值只能有一份。
+		Model:             "",
 		DefaultDuration:   5,
 		DefaultRatio:      "16:9",
 		DefaultResolution: "720p",
@@ -116,16 +119,16 @@ func NewVideoGenerationTool(config *VideoGenConfig) *VideoGenerationTool {
 					},
 					"duration": map[string]interface{}{
 						"type":        "number",
-						"description": "Video length in seconds. Per-provider range: dashscope 2-15, volcengine 4-30, kling 3-15, runway 5 or 10, minimax 5-10. Out-of-range values are clamped and the actual value is reported back. Default comes from config (video_gen.default_duration).",
+						"description": "Video length in seconds. Per-provider range: dashscope 2-30 on wan3.0 and 2-15 on wan2.7/2.6, volcengine 4-30 on Seedance 2.5 and 4-15 on 2.0, kling 3-15 (2.6/2.5-turbo: 5 or 10), runway 5 or 10, minimax 4-15. Out-of-range values are clamped and the actual value is reported back. Default comes from config (video_gen.default_duration).",
 					},
 					"ratio": map[string]interface{}{
 						"type":        "string",
-						"description": "Aspect ratio. dashscope supports 16:9, 9:16, 1:1, 4:3 and 3:4 on Wan 2.7 (16:9/9:16/1:1 on earlier models); volcengine also supports 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Omit to use the configured default ratio (Settings > Media). Unsupported values fall back to 16:9 and the actual value is reported back.",
+						"description": "Aspect ratio. dashscope supports 16:9, 9:16, 1:1, 4:3, 3:4 and 21:9 on Wan 3.0, 4:3/3:4 are 2.7-only, and 2.6 or earlier only do 16:9/9:16/1:1; volcengine also supports 21:9; kling, runway and minimax support 16:9, 9:16 and 1:1. Omit to use the configured default ratio (Settings > Media). Unsupported values fall back to 16:9 and the actual value is reported back (image-to-video reports adaptive, since the frame decides).",
 						"enum":        []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 					},
 					"resolution": map[string]interface{}{
 						"type":        "string",
-						"description": "Resolution tier: 480p, 720p or 1080p. dashscope (Wan 2.6/2.7) only supports 720p and 1080p. Omit to use the configured default resolution (Settings > Media). Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
+						"description": "Resolution tier: 480p, 720p or 1080p. dashscope supports 720p/1080p on Wan 2.6/2.7 and 480p only on Wan 3.0. Omit to use the configured default resolution (Settings > Media). Providers map this to their own tiers (minimax uses 768P/2K) and the actual value is reported back.",
 						"enum":        []string{"480p", "720p", "1080p"},
 					},
 					"negative_prompt": map[string]interface{}{
@@ -227,6 +230,7 @@ func (t *VideoGenerationTool) Execute(ctx context.Context, params map[string]int
 	// 变成"新模型的能力在工具层被砍掉一半"，而模型那边看到的能力面也是错的。
 	minDur, maxDur := videoDurationRange(provider)
 	duration = clampDuration(duration, minDur, maxDur)
+	duration = durationForModel(provider, model, duration)
 
 	// 先查后端：provider 拼错 / 插件已卸载要立刻报"不支持"，而不是误导性的"未配置"。
 	// 首帧图的处理（公网 URL 直用 / 本地文件转 data URI / 不支持就报错）属于
@@ -355,8 +359,52 @@ func videoDurationRange(provider VideoProvider) (int, int) {
 	return 3, 15
 }
 
+// durationForModel 在 provider 区间之内再按型号收窄。
+//
+// catalog 的 Min/MaxDuration 描述的是"这家最强型号"的能力（Seedance 2.5 到
+// 30 秒、Kling 3.0 到 15 秒），同一家的旧型号往往到不了。只按厂商上限发出去，
+// 表现是一次只有服务端能看懂的 400/任务失败。把型号差异收在这里还有一个好处：
+// 钳制发生在工具层，回显给调用方的 duration 与实际发出的完全一致。
+func durationForModel(provider VideoProvider, model string, duration int) int {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		// 没指定型号 = 用 catalog 的默认款，provider 区间就是它的区间。
+		return duration
+	}
+	switch provider {
+	case ProviderVolcengine:
+		// 只有 2.5 支持 30 秒；2.0 / fast / mini 都是 4-15。
+		if !strings.Contains(m, "2-5") {
+			return clampDuration(duration, 4, 15)
+		}
+	case "kling":
+		// 2.6 / 2.5-turbo 只有 5、10 两档；3.0 才是 3-15 任意值。
+		if strings.Contains(m, "2.6") || strings.Contains(m, "2-6") ||
+			strings.Contains(m, "2.5") || strings.Contains(m, "2-5") {
+			return snapDuration(clampDuration(duration, 5, 10), 5, 10)
+		}
+	case "minimax":
+		// H3-Max 的下限是 5 秒（其余 H3 型号 4 秒起）。匹配 "-max" 而不是
+		// "max"：厂商名 minimax 本身就含 max，裸匹配会把每个型号都当成 Max。
+		if strings.Contains(m, "-max") {
+			return clampDuration(duration, 5, 15)
+		}
+	case ProviderDashScope:
+		// 只有 wan3.0 到 30 秒，2.7 / 2.6 都是 2-15。
+		if !isWan3Model(m) {
+			return clampDuration(duration, 2, 15)
+		}
+	}
+	return duration
+}
+
 // runDashScope 提交百炼视频生成任务并轮询到出片。
-// 文生视频走 video-generation 端点，带首帧图时走 image2video 端点。
+//
+// 百炼有三套并存的图生视频形态，混用就是一次读不懂的 400：
+//   - wan2.7：与文生视频共用 video-generation 端点，首帧走 input.media
+//     [{type:first_frame,url}]，且**没有 ratio**（画幅由首帧决定）；
+//   - wan2.6：同一端点，首帧走 input.img_url，规格用 resolution（无 ratio）；
+//   - wan2.2 及更早：旧 image2video 端点 + input.img_url + 像素 size。
 func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negativePrompt, imageURL, model string, duration int, ratio, resolution string) (videoURL, taskID string, err error) {
 	baseURL := t.config.BaseURL
 	if baseURL == "" {
@@ -364,21 +412,48 @@ func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negative
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
+	// 配置里 model 为空是常态（设置页只显示占位）：这里必须回落 catalog 的
+	// 推荐值，否则请求体里就是 "model": ""，回一个看不懂的 400。
+	model = infoOrDefaultModel(MediaKindVideo, string(ProviderDashScope), model)
+
 	// 有首帧图时切 i2v 端点；若用户没显式指定 i2v 模型，把 t2v 型号换成 i2v 型号。
 	endpoint := "/services/aigc/video-generation/video-synthesis"
 	if imageURL != "" {
 		model = dashScopeImageModel(model)
-		endpoint = "/services/aigc/image2video/video-synthesis"
+		// 3.0/2.7/2.6 的图生视频和文生视频同一个端点；只有更早的 wan2.x 用 image2video。
+		if !isWan3Model(model) && !isWan27Model(model) && !isWan26Model(model) {
+			endpoint = "/services/aigc/image2video/video-synthesis"
+		}
 	}
 
+	// effRatio/effRes 是这条请求实际会生效的档位。发请求和回显都用它，
+	// 免得"结果里写 480p、实际按 720P 出片"这种回声失真。
+	effRatio, effRes := dashScopeEffective(model, ratio, resolution, imageURL != "")
+
 	parameters := map[string]interface{}{}
-	// wan2.7 换了规格表达方式：resolution 档位 + ratio，不再接受像素 size；
-	// 2.6 及更早反过来，只认 size。混发会被 422 打回，所以按型号分流。
-	if isWan27Model(model) {
-		parameters["resolution"] = strings.ToUpper(resolution) // 720P / 1080P
-		parameters["ratio"] = ratio
-	} else {
-		size, serr := dashScopeSize(ratio, resolution)
+	input := map[string]interface{}{"prompt": prompt}
+	if negativePrompt != "" {
+		input["negative_prompt"] = negativePrompt
+	}
+
+	switch {
+	case isWan3Model(model) || isWan27Model(model):
+		// 3.0/2.7：resolution + ratio（图生视频用 media，画幅由首帧决定）。
+		parameters["resolution"] = strings.ToUpper(effRes)
+		if imageURL != "" {
+			input["media"] = []map[string]interface{}{
+				{"type": "first_frame", "url": imageURL},
+			}
+		} else {
+			parameters["ratio"] = effRatio
+		}
+	case imageURL != "":
+		// 图生视频（2.6 及更早）：画幅由首帧决定，参数里只有分辨率档位。
+		input["img_url"] = imageURL
+		parameters["resolution"] = strings.ToUpper(effRes)
+	default:
+		// 老款文生视频：只认像素 size，不认 resolution/ratio。
+		size, serr := dashScopeSize(effRatio, effRes)
 		if serr != nil {
 			return "", "", serr
 		}
@@ -387,14 +462,6 @@ func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negative
 	// wan2.2 / wanx2.1 是固定 5 秒，传 duration 会被拒（"duration is not supported"）。
 	if !isFixedDurationWan(model) {
 		parameters["duration"] = duration
-	}
-
-	input := map[string]interface{}{"prompt": prompt}
-	if negativePrompt != "" {
-		input["negative_prompt"] = negativePrompt
-	}
-	if imageURL != "" {
-		input["img_url"] = imageURL
 	}
 
 	reqBody := map[string]interface{}{
@@ -412,21 +479,115 @@ func (t *VideoGenerationTool) runDashScope(ctx context.Context, prompt, negative
 	return videoURL, taskID, err
 }
 
+// wan27Ratios / wan3Ratios / legacyWanRatios 是各代模型实际接受的画幅。
+// 4:3 / 3:4 是 2.7 才有的，21:9 是 3.0 才有的；往老款发这些值会被拒，所以逐代收窄。
+var (
+	wan3Ratios      = []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"}
+	wan27Ratios     = []string{"16:9", "9:16", "1:1", "4:3", "3:4"}
+	legacyWanRatios = []string{"16:9", "9:16", "1:1"}
+)
+
+// dashScopeEffective 返回这次请求实际生效的画幅与分辨率（catalog 风格的
+// 小写档位）。runDashScope 与后端回显共用它，两条路径不会各说一套。
+func dashScopeEffective(model, ratio, resolution string, hasImage bool) (effRatio, effResolution string) {
+	if isWan3Model(model) {
+		// 3.0 多一个 480P 档和 21:9；图生视频同样是画幅跟随首帧。
+		effResolution = dashScopeResolution(resolution, true)
+		if hasImage {
+			return "adaptive", effResolution
+		}
+		return pickRatio(ratio, wan3Ratios, "16:9"), effResolution
+	}
+	if isWan27Model(model) {
+		effResolution = dashScopeResolution(resolution, false)
+		if hasImage {
+			return "adaptive", effResolution
+		}
+		return pickRatio(ratio, wan27Ratios, "16:9"), effResolution
+	}
+	effResolution = dashScopeResolution(resolution, true)
+	if hasImage {
+		return "adaptive", effResolution
+	}
+	effRatio = pickRatio(ratio, legacyWanRatios, "16:9")
+	// 老款 1:1 没有 1080p 档，实际是按 960*960（720p 级）出图。
+	if effRatio == "1:1" && effResolution == "1080p" {
+		effResolution = "720p"
+	}
+	return effRatio, effResolution
+}
+
+// dashScopeResolution 把统一档位收敛到该代模型支持的档位（小写，与 catalog 一致）。
+// allow480 为 false 时（wan2.7）向上取 720p —— 2.7 没有 480p 档，原样发 480P
+// 会 422，而错在"配置里存的是上一代的值"，用户很难联想到。
+func dashScopeResolution(resolution string, allow480 bool) string {
+	switch strings.ToLower(strings.TrimSpace(resolution)) {
+	case "1080p":
+		return "1080p"
+	case "480p":
+		if allow480 {
+			return "480p"
+		}
+		return "720p"
+	default:
+		return "720p"
+	}
+}
+
 // dashScopeImageModel 把文生视频型号换成对应的图生视频型号。
 //
 // 百炼有两种命名：wan2.2-t2v-plus（-t2v- 夹在中间）和 wan2.7-t2v（t2v 在结尾）。
 // 只匹配 "-t2v-" 会漏掉后者，于是图生视频请求带着文生视频模型发出去 —— 表现是
 // 一次莫名其妙的 400，而不是"模型不支持首帧图"这种能自查的错误。
 func dashScopeImageModel(model string) string {
-	if i := strings.Index(model, "t2v"); i >= 0 {
-		return model[:i] + "i2v" + model[i+3:]
+	swapped := model
+	if i := strings.Index(swapped, "t2v"); i >= 0 {
+		swapped = swapped[:i] + "i2v" + swapped[i+3:]
 	}
-	return model
+	// 带日期快照的型号不能照搬日期：wan2.7-t2v-2026-06-12 对应的 i2v 快照是
+	// 另一个日期（2026-04-25），原样替换会拼出一个不存在的 ID。退回不带日期的
+	// 稳定别名 —— 少钉一个快照，好过 404。
+	if swapped != model {
+		swapped = stripModelDateSuffix(swapped)
+	}
+	return swapped
 }
 
-// isWan27Model 报告是否为 Wan 2.7 系列（新协议：resolution + ratio）。
+// stripModelDateSuffix 去掉 "-YYYY-MM-DD" 形式的版本后缀；没有就原样返回。
+func stripModelDateSuffix(model string) string {
+	if len(model) < 11 || model[len(model)-11] != '-' {
+		return model
+	}
+	tail := model[len(model)-10:]
+	if tail[4] != '-' || tail[7] != '-' {
+		return model
+	}
+	for i, c := range tail {
+		if i == 4 || i == 7 {
+			continue
+		}
+		if c < '0' || c > '9' {
+			return model
+		}
+	}
+	return model[:len(model)-11]
+}
+
+// isWan3Model 报告是否为 Wan 3.0 系列（同一个 video-synthesis 端点，
+// 但多 480P/21:9，时长到 30 秒）。
+func isWan3Model(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "wan3")
+}
+
+// isWan27Model 报告是否为 Wan 2.7 系列（新协议：resolution + ratio / media）。
 func isWan27Model(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "wan2.7")
+}
+
+// isWan26Model 报告是否为 Wan 2.6 系列（图生视频的过渡协议：同一端点，
+// img_url + resolution，但文生视频仍是像素 size）。
+func isWan26Model(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "wan2.6")
 }
 
 // isFixedDurationWan 报告是否为时长固定 5 秒的老款模型（不接受 duration 参数）。
@@ -454,6 +615,10 @@ func dashScopeSize(ratio, resolution string) (string, error) {
 	case ratio == "9:16" && resolution == "1080p":
 		return "1080*1920", nil
 	case ratio == "1:1" && resolution == "720p":
+		return "960*960", nil
+	// 老款 1:1 没有 1080p 档。与其让整次调用死在参数校验上，不如按 720p 出图
+	// ——1:1 表达的是画幅意图，不是精确像素。
+	case ratio == "1:1" && resolution == "1080p":
 		return "960*960", nil
 	}
 	return "", fmt.Errorf(
@@ -552,6 +717,17 @@ func (t *VideoGenerationTool) runVolcengine(ctx context.Context, prompt, imageUR
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
+	// 同 dashscope：空 model 必须回落 catalog，不能原样发空字符串。
+	model = infoOrDefaultModel(MediaKindVideo, string(ProviderVolcengine), model)
+
+	// 首帧/首尾帧任务方舟要求 ratio 必须是 adaptive（输出跟着首帧走）；再带一个
+	// 具体画幅会被判成参数冲突，任务提交后才异步失败。首帧素材还必须显式标
+	// role=first_frame —— 2.5 的 content 里有 reference_image 等多种角色，缺省
+	// 不再等于首帧。
+	if imageURL != "" {
+		ratio = "adaptive"
+	}
+
 	text := fmt.Sprintf("%s --duration %d --ratio %s --resolution %s --watermark false", prompt, duration, ratio, resolution)
 	content := []map[string]interface{}{
 		{"type": "text", "text": text},
@@ -559,6 +735,7 @@ func (t *VideoGenerationTool) runVolcengine(ctx context.Context, prompt, imageUR
 	if imageURL != "" {
 		content = append(content, map[string]interface{}{
 			"type":      "image_url",
+			"role":      "first_frame",
 			"image_url": map[string]string{"url": imageURL},
 		})
 	}
@@ -608,10 +785,14 @@ func (t *VideoGenerationTool) runVolcengine(ctx context.Context, prompt, imageUR
 	return videoURL, taskID, err
 }
 
+// volcenginePollInterval 轮询间隔。变量而非常量：测试调到毫秒级，
+// 否则每个方舟用例都要真等 10 秒。
+var volcenginePollInterval = 10 * time.Second
+
 // pollVolcengineTask 轮询方舟任务：queued/running → succeeded/failed/expired/cancelled
 func (t *VideoGenerationTool) pollVolcengineTask(ctx context.Context, baseURL, taskID string) (string, error) {
 	url := baseURL + "/contents/generations/tasks/" + taskID
-	return pollUntilDone(ctx, 10*time.Second, func() (done bool, videoURL string, err error) {
+	return pollUntilDone(ctx, volcenginePollInterval, func() (done bool, videoURL string, err error) {
 		req, rerr := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if rerr != nil {
 			return true, "", fmt.Errorf("failed to create poll request: %w", rerr)

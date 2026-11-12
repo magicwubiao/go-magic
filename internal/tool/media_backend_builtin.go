@@ -115,12 +115,27 @@ func (dashscopeVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig, 
 		}
 		imageURL = imageDataURI(mime, data)
 	}
+	// 先把 model 解析成实际会发的那个（配置为空时用 catalog 推荐值），
+	// 请求与回显都用它。
+	info, _ := ProviderInfo(MediaKindVideo, string(ProviderDashScope))
+	model := info.Model(req.Model)
+
 	t := &VideoGenerationTool{config: cfg}
-	videoURL, taskID, err := t.runDashScope(ctx, req.Prompt, req.NegativePrompt, imageURL, req.Model, req.Duration, req.Ratio, req.Resolution)
+	videoURL, taskID, err := t.runDashScope(ctx, req.Prompt, req.NegativePrompt, imageURL, model, req.Duration, req.Ratio, req.Resolution)
 	if err != nil {
 		return nil, err
 	}
-	return &VideoResult{URL: videoURL, TaskID: taskID}, nil
+	// 回显实际生效的档位：首帧会把画幅变成 adaptive、2.7 会把 480p 提到 720p，
+	// 继续回显原始输入等于撒谎。
+	effRatio, effRes := dashScopeEffective(model, req.Ratio, req.Resolution, imageURL != "")
+	duration := req.Duration
+	if isFixedDurationWan(model) {
+		duration = 5
+	}
+	return &VideoResult{
+		URL: videoURL, TaskID: taskID,
+		Duration: duration, Ratio: effRatio, Resolution: effRes, Model: model,
+	}, nil
 }
 
 // dashscopePollInterval 百炼的轮询间隔。变量而非常量：测试调到毫秒级，
@@ -154,12 +169,23 @@ func (volcengineVideoBackend) Generate(ctx context.Context, cfg *VideoGenConfig,
 		imageURL = dataURI
 	}
 
+	info, _ := ProviderInfo(MediaKindVideo, string(ProviderVolcengine))
+	model := info.Model(req.Model)
+
 	t := &VideoGenerationTool{config: cfg}
-	videoURL, taskID, err := t.runVolcengine(ctx, req.Prompt, imageURL, req.Model, req.Duration, req.Ratio, req.Resolution)
+	videoURL, taskID, err := t.runVolcengine(ctx, req.Prompt, imageURL, model, req.Duration, req.Ratio, req.Resolution)
 	if err != nil {
 		return nil, err
 	}
-	return &VideoResult{URL: videoURL, TaskID: taskID}, nil
+	// 首帧任务的画幅由方舟强制成 adaptive（跟着首帧走），回显要说实话。
+	ratio := req.Ratio
+	if imageURL != "" {
+		ratio = "adaptive"
+	}
+	return &VideoResult{
+		URL: videoURL, TaskID: taskID,
+		Duration: req.Duration, Ratio: ratio, Resolution: req.Resolution, Model: model,
+	}, nil
 }
 
 func videoBackendHasKey(cfg *VideoGenConfig) bool {

@@ -5,7 +5,7 @@ package tool
 // 契约要点（https://platform.minimaxi.com/docs/guides/text-to-speech）：
 //
 //	POST {base}/v1/t2a_v2?GroupId={group_id}
-//	{"model":"speech-02-hd","text":"...","stream":false,
+//	{"model":"speech-2.8-hd","text":"...","stream":false,
 //	 "voice_setting":{"voice_id":"male-qn-qingse","speed":1.0,"vol":1.0,"pitch":0},
 //	 "audio_setting":{"sample_rate":32000,"bitrate":128000,"format":"mp3","channel":1}}
 //	→ {"data":{"audio":"<hex>"},"base_resp":{"status_code":0}}
