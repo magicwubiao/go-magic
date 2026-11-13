@@ -5,7 +5,6 @@ import (
 	"io"
 	stdlog "log"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/magicwubiao/go-magic/pkg/config"
@@ -84,9 +83,7 @@ func initLogging() {
 	os.MkdirAll(logDir, 0755)
 
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	// 文件名带 PID：两个进程同一秒启动时，os.Create 会互相截断日志
-	// （2026-11-13 排查服务重启问题时发现的隐患）。
-	logPath := logDir + "/magic_" + timestamp + "_" + strconv.Itoa(os.Getpid()) + ".log"
+	logPath := logDir + "/magic_" + timestamp + ".log"
 
 	f, err := os.Create(logPath)
 	if err != nil {
