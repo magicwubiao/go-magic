@@ -73,10 +73,6 @@ func (t *FileEditTool) Description() string {
 	return "PRECISELY edit existing files using EXACT text matching (old_content -> new_content). IMPORTANT: call read_file on the target first and copy old_content verbatim from it; never write old_content from memory. Multi-level tolerant matching: exact text → leading whitespace(tab<->spaces) → trailing whitespace → leading+trailing combined → blank-edge tolerant. Always reports match location + surrounding context for verification. Prefer this over shell commands (sed/grep/python) for deterministic edits."
 }
 
-func (t *FileEditTool) Parameters() map[string]interface{} {
-	return t.Schema()
-}
-
 func (t *FileEditTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
@@ -199,7 +195,7 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 	tc := FromContext(ctx)
 
 	if path == "" {
-		return nil, fmt.Errorf("path is required")
+		return nil, fmt.Errorf("path argument is required")
 	}
 
 	// DEFENSE-IN-DEPTH 1: ValidateParams runs in ExecuteWithProtection BEFORE

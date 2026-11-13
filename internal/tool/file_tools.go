@@ -296,7 +296,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 	scanner := bufio.NewScanner(bufio.NewReaderSize(f, 256*1024))
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	// Keep trailing \r on CRLF files: previous os.ReadFile+strings.Split
-	// semantics preserved them, and edit_file's verbatim old_content
+	// semantics preserved them, and file_edit's verbatim old_content
 	// matching depends on read_file returning the exact bytes.
 	endedWithNewline := false
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
@@ -568,7 +568,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 
 	// Post-write lint (non-blocking)
 	if issues, _ := LintFile(absPath); len(issues) > 0 {
-		result["lint_warning"] = fmt.Sprintf("⚠ Lint issues found:\n%s", strings.Join(issues, "\n"))
+		result["lint_warning"] = fmt.Sprintf("Lint issues found:\n%s", strings.Join(issues, "\n"))
 	}
 
 	return result, nil
