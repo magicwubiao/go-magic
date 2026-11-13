@@ -237,6 +237,14 @@ export const useChatStore = defineStore('chat', () => {
   // 刻意不用 ref：位点只服务于内部逻辑（重连时读一次），每来一个 delta 就
   // 触发一次响应式更新是纯浪费——流式过程中事件每秒可达数十条。
   const sessionStreamOffsets = new Map<string, number>()
+  // 每个会话"已渲染"的最大事件序号。与 sessionStreamOffsets 的区别：位点
+  // 只代表"收到过"，而这里代表"处理过并上了屏"。重连补发（since 位点落后
+  // 于实际渲染位置——连接被浏览器丢弃时回调不触发，位点停在旧值）会把
+  // 已经渲染过的事件整段重放，tool_start/delta 没有任何按内容去重的手段，
+  // 用户看到的就是同一个回合里工具卡与正文成倍重复（2026-11-13 "两个
+  // 会话同时提交，渲染串了"）。渲染前按 seq 过滤一条即可让重放幂等，
+  // 覆盖所有事件类型。与位点同刻意不用 ref（理由同上）。
+  const sessionRenderedSeq = new Map<string, number>()
   // 每个会话上次尝试实时续传的时刻，用于退避。服务端不可达时若在 onerror
   // 里无条件立刻重连，会形成"建流→立刻失败→再建流"的忙循环，反而拖慢恢复。
   const sessionLastResumeAt = new Map<string, number>()
@@ -1743,6 +1751,16 @@ export const useChatStore = defineStore('chat', () => {
         {
           sessionLastEventAt.set(sessionId, Date.now())
           const n = eventSource.getLastEventId()
+          // 重放去重：id <= 已渲染位点的事件必定已经上过屏（handleFrame 在
+          // dispatch 之前就更新了 lastEventId，因此这里的 n 就是本帧的 seq）。
+          // 重连补发时位点若落后于实际渲染位置，服务端重放的旧事件会整段
+          // 再来一遍——工具卡、正文、done 全部翻倍。按 seq 丢弃是唯一可靠
+          // 的幂等手段（事件本身不带可判重的业务键）。
+          if (n > 0) {
+            const rendered = sessionRenderedSeq.get(sessionId) || 0
+            if (n <= rendered) return
+            sessionRenderedSeq.set(sessionId, n)
+          }
           if (n > (sessionStreamOffsets.get(sessionId) || 0)) {
             sessionStreamOffsets.set(sessionId, n)
           }
@@ -1934,6 +1952,11 @@ export const useChatStore = defineStore('chat', () => {
           // 重新对齐，否则本地正文会带着一段永久缺口，而且用户与后续上下文
           // 都不知道究竟少了什么。
           if (data.type === 'resync') {
+            // 服务端宣告旧位点失效：队列可能已被回收重建、seq 从头计数。
+            // 已渲染位点必须一并清零，否则重建后的小序号事件会被上面的
+            // 重放去重全部误丢——那比重复渲染严重得多（正文永远不再增长）。
+            // resync 本身不带 id（服务端 writeSSE 直发），不会被去重吞掉。
+            sessionRenderedSeq.delete(sessionId)
             void resyncTurnFromServer(sessionId)
             return
           }
@@ -2888,6 +2911,7 @@ export const useChatStore = defineStore('chat', () => {
     // 位点与退避记录也要清：它们是会话级的，留着会在会话 id 复用时
     // 拿一个陈旧的位点去续传，触发无谓的 resync 对账。
     sessionStreamOffsets.clear()
+    sessionRenderedSeq.clear()
     sessionLastResumeAt.clear()
     sessionLastEventAt.clear()
     sessionStallStrikes.clear()
