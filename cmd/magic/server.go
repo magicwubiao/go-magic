@@ -29,73 +29,85 @@ var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the web dashboard server",
 	Run: func(cmd *cobra.Command, args []string) {
-		magicHome := viper.GetString("magic-home")
-		if magicHome == "" {
-			magicHome = config.GetMagicHome()
+		// 崩溃守卫：外层 re-exec 自身拉起内层 server，stderr 落盘到
+		// logs/crash_*.log（捕获 runtime panic），异常退出自动重启（限流）。
+		// 内层（MAGIC_SERVER_GUARD_CHILD=1）跳过守卫直接运行。
+		if !isServerGuardChild() {
+			runServerGuarded()
+			return
 		}
-
-		dbPath := filepath.Join(magicHome, "sessions.db")
-
-		// Ensure directory exists
-		if err := os.MkdirAll(magicHome, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create magic home directory: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("Database: %s\n", dbPath)
-
-		// Forward the ldflags-injected build metadata (see version.go) so the HTTP
-		// API reports the real release. Must happen *before* NewServer, which
-		// snapshots these values when it constructs the Server.
-		server.SetBuildInfo(Version, Commit, BuildDate)
-
-		// Create server
-		srv := server.NewServer(dbPath)
-
-		// Handle shutdown signals
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		go func() {
-			sig := <-sigCh
-			fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
-			if srv != nil {
-				srv.Stop()
-			}
-			// 给一点时间让 goroutine 退出
-			time.Sleep(500 * time.Millisecond)
-			os.Exit(0)
-		}()
-
-		fmt.Printf("Starting server on http://localhost:%d\n", serverPort)
-		fmt.Println()
-		fmt.Println("Dashboard features:")
-		fmt.Println("  - Chat interface")
-		fmt.Println("  - Session management")
-		fmt.Println("  - Configuration tools")
-		fmt.Println("  - Skill browser")
-		fmt.Println("  - System logs")
-		fmt.Println()
-
-		// Start server in goroutine
-		errCh := make(chan error, 1)
-		go func() {
-			errCh <- srv.Start(serverPort)
-		}()
-
-		// Open browser if requested
-		if serverOpenBrowser {
-			go func() {
-				waitForServer(serverPort)
-				openBrowser(fmt.Sprintf("http://localhost:%d", serverPort))
-			}()
-		}
-
-		// Wait for server error (signal handled by goroutine above)
-		if err := <-errCh; err != nil {
-			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-			os.Exit(1)
-		}
+		runServerInner()
 	},
+}
+
+// runServerInner 是真正的 server 主体（由 runServerGuarded 拉起）。
+func runServerInner() {
+	magicHome := viper.GetString("magic-home")
+	if magicHome == "" {
+		magicHome = config.GetMagicHome()
+	}
+
+	dbPath := filepath.Join(magicHome, "sessions.db")
+
+	// Ensure directory exists
+	if err := os.MkdirAll(magicHome, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create magic home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Database: %s\n", dbPath)
+
+	// Forward the ldflags-injected build metadata (see version.go) so the HTTP
+	// API reports the real release. Must happen *before* NewServer, which
+	// snapshots these values when it constructs the Server.
+	server.SetBuildInfo(Version, Commit, BuildDate)
+
+	// Create server
+	srv := server.NewServer(dbPath)
+
+	// Handle shutdown signals
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
+		if srv != nil {
+			srv.Stop()
+		}
+		// 给一点时间让 goroutine 退出
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+
+	fmt.Printf("Starting server on http://localhost:%d\n", serverPort)
+	fmt.Println()
+	fmt.Println("Dashboard features:")
+	fmt.Println("  - Chat interface")
+	fmt.Println("  - Session management")
+	fmt.Println("  - Configuration tools")
+	fmt.Println("  - Skill browser")
+	fmt.Println("  - System logs")
+	fmt.Println()
+
+	// Start server in goroutine
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Start(serverPort)
+	}()
+
+	// Open browser if requested
+	if serverOpenBrowser {
+		go func() {
+			waitForServer(serverPort)
+			openBrowser(fmt.Sprintf("http://localhost:%d", serverPort))
+		}()
+	}
+
+	// Wait for server error (signal handled by goroutine above)
+	if err := <-errCh; err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func waitForServer(port int) {
