@@ -85,7 +85,7 @@
             >
               <n-button size="tiny" quaternary class="zoom-menu-trigger" :title="t('chat.zoomMenu')">
                 <span class="zoom-label">{{ zoomLabel }}</span>
-                <n-icon :component="ChevronDownOutline" :size="10" class="zoom-caret" />
+                <n-icon :component="ChevronDownOutline" :size="12" class="zoom-caret" />
               </n-button>
             </n-dropdown>
           </template>
@@ -1391,25 +1391,46 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 0;
+  /* 按钮放大到 28px 后不能再贴边排（几个方形热区会连成一整块），留 2px 缝 */
+  gap: 2px;
   margin-left: auto;
   flex-shrink: 0;
 }
 
+/* 工具栏图标按钮的统一尺寸。
+   模板里按钮是 size="tiny"（22px 见方），在触摸屏上明显偏小，桌面鼠标下
+   点关闭/全屏这类高频目标也要瞄一下。这里在样式层统一抬到 28px 见方：
+   naive-ui 的按钮高度走 CSS，直接写 height 即可覆盖；min-width 保证纯图标
+   按钮是正方形热区，图标跟着放大一档。
+   不逐个改模板里的 size，是因为按钮数量多、调用点分散，样式统一更好维护；
+   移动端另有 30px 规则（见文件末尾 media query）。 */
+.preview-actions .n-button {
+  height: 28px;
+  min-width: 28px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.preview-actions .n-button .n-icon {
+  font-size: 17px;
+}
+
+/* 按钮变大后分隔线也跟着长一点，否则夹在两行 28px 按钮中间显得很短 */
 .toolbar-divider {
   width: 1px;
-  height: 14px;
+  height: 16px;
   margin: 0 2px;
   background: #e0e0e0;
 }
 
 /* 弹窗里：卡片被 .modal-scroll 限高 85vh，正文必须再让出「卡片内边距 39px（上 19 + 下 20）
-   + 工具栏 49px（28 按钮 + 上下 14 内边距 + 1 边框 + 8 下间距）」。
+   + 工具栏 45px（28 按钮 + 上下 8 内边距 + 1 边框 + 8 下间距）」。
    原来只减 60px，总和是 85vh + 28px，长文本撑满时会超出卡片，
    卡片跟着冒出第二根滚动条——就是「只多几十像素、只有长文本才触发」那根。
-   92 是 88 再留 4px 余量，防止字体渲染差异。 */
+   98 是 84 再留 14px 余量：工具栏按钮从 22px 抬到 28px 后高度多了 6px，
+   余量一并放大，字体渲染差异与 tag 高度上限都不会再顶出第二根滚动条。 */
 .file-preview-panel--dialog .preview-content-container {
-  max-height: calc(85vh - 92px);
+  max-height: calc(85vh - 98px);
 }
 
 /* 并排面板里：高度由父容器给，正文吃掉剩余空间后自己滚。
@@ -1656,9 +1677,9 @@ onUnmounted(() => {
 .zoom-label {
   display: inline-flex;
   align-items: center;
-  min-width: 34px;
+  min-width: 38px;
   justify-content: center;
-  font-size: 11px;
+  font-size: 12px;
   color: #666;
   font-variant-numeric: tabular-nums;
 }
@@ -1827,8 +1848,13 @@ onUnmounted(() => {
 
   .preview-actions .n-button {
     height: 30px;
+    min-width: 30px;
     padding-left: 6px;
     padding-right: 6px;
+  }
+
+  .preview-actions .n-button .n-icon {
+    font-size: 19px;
   }
 
   .zoom-menu-trigger {
