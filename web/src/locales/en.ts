@@ -28,7 +28,7 @@ export default {
     files: 'Files',
     media: 'Media',
     mcp: 'Connectors',
-    acp: 'ACP Agents',
+    acp: 'ACP',
     workspaces: 'Workspaces',
     manage: 'Manage',
     settings: 'Settings',

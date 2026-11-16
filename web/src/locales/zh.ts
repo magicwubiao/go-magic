@@ -28,7 +28,7 @@ export default {
     files: '文件',
     media: '媒体',
     mcp: '连接器',
-    acp: 'ACP 智能体',
+    acp: 'ACP',
     workspaces: '工作区',
     manage: '管理',
     settings: '设置',
