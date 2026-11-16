@@ -146,13 +146,26 @@ func init() {
 			os.Setenv(appconfig.ProfileEnvVar, p)
 		}
 
-		// 加载活动分身的 .env，真正注入进程环境。
+		// 加载 .env（固定 <magicHome>/.env），真正注入进程环境。
 		//
-		// 位置很关键：必须晚于上面两个 flag 的翻译（路径与分身名都已确定），
+		// 位置很关键：必须晚于上面两个 flag 的翻译（路径已确定），
 		// 又要早于任何可能读取环境变量的初始化 —— 例如 internal/tool 里
 		// visionBackendConfigured 用 sync.Once 缓存一次探测结果，一旦在加载前
 		// 被调用，整个进程生命周期内都会认为"没有视觉后端"。
 		loadProfileEnv()
+
+		// 显式 --profile <name>：把该人格预设应用到活动目录。
+		//
+		// 预设是内容模板，运行期只认 <magicHome>/cortex；应用 = 覆盖 SOUL.md /
+		// 用户画像。不这么做的话 `magic --profile work chat` 会变成"敲了没反应"。
+		if p := strings.TrimSpace(flagProfile); p != "" && p != appconfig.DefaultProfileName {
+			copied, err := appconfig.ApplyPersonaToActive(appconfig.GetMagicHome(), p)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to apply profile %q: %v\n", p, err)
+			} else if len(copied) > 0 {
+				fmt.Fprintf(os.Stderr, "applied profile %q (%s)\n", p, strings.Join(copied, ", "))
+			}
+		}
 	}
 
 	// Version flag

@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -121,9 +120,9 @@ type Server struct {
 
 	skillMgr  *skills.Manager
 	magicHome string
-	// runtimeProfile 是本次进程真正在用的分身（启动时定死）。
-	// 切换分身只改配置，cortex 与启发时注入的 .env 要重启才跟得上，
-	// 因此不能用 cfg.Profile 当"当前分身"。见 Server.activeProfile。
+	// runtimeProfile 是"当前已应用的人格预设名"（default = 不属于任何预设）。
+	// 应用预设会立刻写入活动 cortex，所以它和配置里的选择是同步的；这个字段
+	// 只是进程内的单一出处。见 Server.activeProfile。
 	runtimeProfile string
 	execPath       string // Store the executable path for gateway restart
 	version        string
@@ -564,9 +563,8 @@ Your working directory is: %s
 			cortexConfig.GEPAEnabled = *cfg.Cortex.GEPAEnabled
 		}
 	}
-	// 把当前生效的分身交给 cortex：决定 SOUL.md / USER.md 落在哪儿。
-	// 之前这里恒传 ""，等于"分身"只是个 UI 概念，人设与画像永远读写
-	// <magicHome>/cortex 下的那一份。
+	// 人设与画像固定落在 <magicHome>/cortex：人格预设只是模板，应用时由
+	// applyProfile 把内容写进这里。第三个参数保留但已废弃（见 cortex 侧注释）。
 	activeProfile := appconfig.DefaultProfileName
 	if cfg != nil {
 		activeProfile = cfg.ActiveProfile()
@@ -2570,45 +2568,6 @@ func execCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
-}
-
-func copyFile(src, dst string) error {
-	source, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer source.Close()
-
-	destination, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destination.Close()
-
-	_, err = io.Copy(destination, source)
-	return err
-}
-
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Calculate relative path
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-
-		dstPath := filepath.Join(dst, relPath)
-
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, info.Mode())
-		}
-
-		return copyFile(path, dstPath)
-	})
 }
 
 // policySnapshot 返回当前准入白名单（nil 表示不限制）。

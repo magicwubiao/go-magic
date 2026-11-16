@@ -152,37 +152,27 @@ func TestHandleEnvRejectsKeyInjection(t *testing.T) {
 	}
 }
 
-// .env 路径必须跟随**本进程实际生效**的分身。
+// .env 路径固定为 <magicHome>/.env，不随人格预设变化。
 //
-// 注意不是跟随 config.json 里的 Profile：切换分身只写配置，进程仍在用旧分身
-// （人设/记忆/启动期注入的 .env 都还是旧的）。若这里跟着配置走，用户在面板
-// 改的 key 会被写进新分身的 .env，而进程读的是旧分身的凭据。
-func TestEnvFilePathFollowsActiveProfile(t *testing.T) {
+// 人格预设降级为内容模板后，凭据与"当前应用了哪套人格"彻底解耦：一套部署
+// 一份 key，切人格不换账号。历史实现按活动分身选文件，切一次就换一份凭据。
+func TestEnvFilePathIsProfileIndependent(t *testing.T) {
 	s, home := newEnvTestServer(t)
 	t.Setenv(appconfig.ProfileEnvVar, "")
 	s.setCfg(&appconfig.Config{})
 
 	if got, want := s.envFilePath(), filepath.Join(home, ".env"); got != want {
-		t.Fatalf("default profile env path: got %q want %q", got, want)
+		t.Fatalf("default preset env path: got %q want %q", got, want)
 	}
 
-	// 配置改成 work：本进程未重启，路径必须还留在 default 的 .env 上。
+	// 记录里是别的预设、或进程按别的预设启动，路径都不该动。
 	s.setCfg(&appconfig.Config{Profile: "work"})
 	if got, want := s.envFilePath(), filepath.Join(home, ".env"); got != want {
-		t.Fatalf("pending switch must not move env path: got %q want %q", got, want)
+		t.Fatalf("selected preset must not move env path: got %q want %q", got, want)
 	}
-	if got := s.pendingProfile(); got != "work" {
-		t.Fatalf("pendingProfile: got %q want %q", got, "work")
-	}
-
-	// 进程按 work 启动（runtimeProfile=work）后，路径才跟随 work。
 	s.runtimeProfile = "work"
-	want := filepath.Join(home, "profiles", "work", ".env")
-	if got := s.envFilePath(); got != want {
-		t.Fatalf("work profile env path: got %q want %q", got, want)
-	}
-	if got := s.pendingProfile(); got != "" {
-		t.Fatalf("pendingProfile after restart: got %q want empty", got)
+	if got, want := s.envFilePath(), filepath.Join(home, ".env"); got != want {
+		t.Fatalf("applied preset must not move env path: got %q want %q", got, want)
 	}
 }
 
@@ -204,7 +194,7 @@ func TestHandleEnvGetReportsSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 必须用显式 home：server 的 magicHome 未必等于全局 GO_MAGIC_HOME。
-	appconfig.LoadEnvFor(home, appconfig.DefaultProfileName)
+	appconfig.LoadEnvFor(home)
 
 	w := doEnvRequest(t, s, http.MethodGet, "")
 	if w.Code != http.StatusOK {
@@ -269,14 +259,20 @@ func TestHandleEnvPreservesCommentsAndOrder(t *testing.T) {
 	}
 }
 
-// cloneProfile 的凭据来源必须走统一裁决：default 在 magicHome 下。
-func TestCloneProfileCopiesDefaultEnv(t *testing.T) {
+// 克隆预设**不复制凭据**：一套部署一份 .env，克隆模板不该多出一份明文 key。
+func TestCloneProfileDoesNotCopyEnv(t *testing.T) {
 	s, home := newEnvTestServer(t)
 
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("K=self\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// 目标分身目录必须先存在（cloneProfile 只负责内容，不建目录）。
+	cortexDir := appconfig.ProfileDir(home, appconfig.DefaultProfileName)
+	if err := os.MkdirAll(cortexDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cortexDir, "SOUL.md"), []byte("# soul\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	workDir := filepath.Join(home, "profiles", "work")
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		t.Fatal(err)
@@ -286,11 +282,11 @@ func TestCloneProfileCopiesDefaultEnv(t *testing.T) {
 		t.Fatalf("clone failed: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(workDir, ".env"))
-	if err != nil {
-		t.Fatalf("target .env not created: %v", err)
+	if _, err := os.Stat(filepath.Join(workDir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf(".env must not be cloned into a preset, stat err = %v", err)
 	}
-	if !strings.Contains(string(data), "K=self") {
-		t.Fatalf("env not copied: %s", data)
+	// 人设仍然要带过去，否则"从默认克隆"就没有意义了。
+	if _, err := os.Stat(filepath.Join(workDir, "SOUL.md")); err != nil {
+		t.Fatalf("SOUL.md should be cloned: %v", err)
 	}
 }

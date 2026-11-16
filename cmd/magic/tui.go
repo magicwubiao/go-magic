@@ -1836,7 +1836,7 @@ func (m *TUIModel) doSave(name string) {
 }
 
 func (m *TUIModel) doLoad(id string) {
-	sessions, err := m.store.ListSessions(context.Background(), m.cfg.Profile)
+	sessions, err := m.store.ListSessions(context.Background(), "")
 	if err != nil {
 		m.addMessage("error", fmt.Sprintf("Failed to load sessions: %v", err))
 		m.refreshViewport()
@@ -1933,7 +1933,7 @@ func (m *TUIModel) doInsights(args string) {
 	msgCount := len(history)
 
 	sessionCount := 1
-	sessions, _ := m.store.ListSessions(context.Background(), m.cfg.Profile)
+	sessions, _ := m.store.ListSessions(context.Background(), "")
 	if sessions != nil {
 		sessionCount = len(sessions) + 1
 	}

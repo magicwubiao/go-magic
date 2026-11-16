@@ -15,10 +15,14 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// 分身（profile）的文件约定：
+// 人格预设（profile）的文件约定：
 //
-//	<magicHome>/cortex/{SOUL.md,USER.md,USER.json}       ← default 分身 = 正在运行的这套数据
-//	<magicHome>/profiles/<name>/{SOUL.md,USER.md,USER.json}
+//	<magicHome>/cortex/{SOUL.md,USER.md,USER.json}       ← 活动人格（运行时唯一读写的地方）
+//	<magicHome>/profiles/<name>/{SOUL.md,USER.md,USER.json}  ← 预设模板
+//
+// 预设不再是"第二个身份目录"：应用预设 = 把模板内容写进活动 cortex（走 live
+// SoulManager / UserProfile，立即生效，不需要重启）。凭据与会话历史不再随
+// 预设变化 —— 一套部署一份凭据。
 //
 // 路径一律由 appconfig.ProfileDir 裁决（见 pkg/config/profile.go），不要在
 // 这里自己拼 "profiles/<name>" —— 历史 bug 就是这么来的：面板写
@@ -83,24 +87,16 @@ func isEmptyTree(root string) (bool, error) {
 	return empty, nil
 }
 
-// activeProfile 返回**实际生效**的分身名。
+// activeProfile 返回**当前已应用**的人格预设名（可能是 "default" = 不属于
+// 任何预设，就用 cortex 里这份）。
 //
-// 注意不能直接从配置快照取 ActiveProfile()：切换分身只改 config.json +
-// s.cfg，cortex（SOUL/USER/记忆）和启动期注入的 .env 全部还是旧分身的。
-// 若这里跟着配置走，切完立刻出现"列表说新分身是当前分身，但读它的人设却
-// 拿到另一个目录""面板把凭据写进新分身、进程仍用旧凭据"这种错位。
-// 所以活动分身固定为启动时算出的那份；"已选定待重启"由 pendingProfile 表达。
+// 应用预设会立刻写入活动 cortex，所以这里和配置里的选择总是同步的；维护
+// 独立字段只为了让"进程内视角"有单一出处（配置可能被外部改写）。
 func (s *Server) activeProfile() string {
-	return s.runtimeProfile
-}
-
-// pendingProfile 返回"已经写进 config.json、但本进程还没切过去"的分身名；
-// 没有待生效切换时返回空串。
-func (s *Server) pendingProfile() string {
-	if want := s.cfgSnapshot().ActiveProfile(); want != s.runtimeProfile {
-		return want
+	if s.runtimeProfile == "" {
+		return appconfig.DefaultProfileName
 	}
-	return ""
+	return s.runtimeProfile
 }
 
 // profilePaths 解析分身的人设文件路径；名字非法时返回 error（调用方回 400）。
@@ -170,9 +166,9 @@ func (s *Server) createProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.CloneFromDefault {
-		// 语义是"从 default 克隆"，源必须是 default，而不是"当前生效分身"：
-		// 用户在其他分身（比如 work）里点"新建 + 从默认克隆"，期望拿到的是
-		// default 的人设，此前会悄悄把 work 的人设复制过去。
+		// 语义是"从 default 克隆"，源必须是 default，而不是"当前已应用的预设"：
+		// 用户在别处点"新建 + 从默认克隆"，期望拿到的是 default 的人设，
+		// 此前会悄悄把当前预设的人设复制过去。
 		if err := s.cloneProfile(appconfig.DefaultProfileName, name); err != nil {
 			// 目录已经建出来了，但克隆失败：保留空分身并明确报错，比假装成功好。
 			http.Error(w, "Profile created but clone failed: "+err.Error(), http.StatusInternalServerError)
@@ -183,38 +179,20 @@ func (s *Server) createProfile(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "path": dir})
 }
 
-// cloneProfile 把 src 分身的人设/技能/凭据复制到 dst。
+// cloneProfile 把 src 预设的**人设与画像**复制到 dst。
 //
-// 源目录同样走 ProfileDir：default 的 .env 在 magicHome 下、人设在 cortex 下，
-// 不能假设三者同目录。
+// 刻意不复制 .env 与 skills/：
+//   - 凭据一套部署只有一份，复制会在磁盘上多一份明文 API key，切预设也不该换 key；
+//   - 技能是全局的（skillMgr 只扫 <magicHome>/skills），预设目录里的 skills/
+//     运行时不加载，复制过去只会让面板显示一个假的技能数。
 func (s *Server) cloneProfile(src, dst string) error {
 	srcDir, srcSoul, _, _, err := s.profilePaths(src)
 	if err != nil {
 		return err
 	}
-	dstDir, dstSoul, dstUserMD, dstUserJSON, err := s.profilePaths(dst)
+	_, dstSoul, dstUserMD, dstUserJSON, err := s.profilePaths(dst)
 	if err != nil {
 		return err
-	}
-
-	// .env：各分身的凭据路径统一由 EnvFilePath 裁决（default 在 magicHome 下，
-	// 其它分身在自己目录里）。以前手写"src 是 default 就换 magicHome"的分支，
-	// 一旦 ProfileDir 的布局变化就会两边不一致。
-	if err := copyFileIfExists(appconfig.EnvFilePath(s.magicHome, src),
-		appconfig.EnvFilePath(s.magicHome, dst), 0600); err != nil {
-		return err
-	}
-
-	// skills/：与 scanProfiles 的 skill_count 口径保持一致 —— default 的技能
-	// 在 <magicHome>/skills，分身自己的在 <profileDir>/skills。
-	skillsSrc := filepath.Join(srcDir, "skills")
-	if src == appconfig.DefaultProfileName {
-		skillsSrc = filepath.Join(s.magicHome, "skills")
-	}
-	if info, statErr := os.Stat(skillsSrc); statErr == nil && info.IsDir() {
-		if err := copyDir(skillsSrc, filepath.Join(dstDir, "skills")); err != nil {
-			return err
-		}
 	}
 
 	// 人设三件套。旧版本曾把 SOUL.md 写成小写 soul.md，读取时一并兜住。
@@ -248,15 +226,22 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 
 	switch action {
 	case "setup-command":
-		jsonResponse(w, map[string]string{"command": fmt.Sprintf("magic --profile %s chat", name)})
+		// default 就是活动人格，不需要 --profile；其它预设启动时会被应用一次。
+		cmd := "magic chat"
+		if name != appconfig.DefaultProfileName {
+			cmd = fmt.Sprintf("magic --profile %s chat", name)
+		}
+		jsonResponse(w, map[string]string{"command": cmd})
 		return
 
-	case "switch":
+	case "apply", "switch":
+		// "switch" 保留为别名：旧前端 / 已部署的书签仍然打这个路径。
+		// 语义已从"写配置、等重启"变成"立即把人设写进活动 cortex"。
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		s.switchProfile(w, name, dir)
+		s.applyProfile(w, name, dir)
 		return
 
 	case "soul":
@@ -293,11 +278,19 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// switchProfile 把分身选择写进 config.json，并在进程内立即跟上凭据层。
+// applyProfile 把人格预设**立刻应用**到活动 cortex。
 //
-// 允许"切回"正在生效的分身：那等价于撤销待生效的切换。没有这条，用户点错
-// 之后只能去手改配置或等重启，而面板上那个分身已经不再显示"切换"按钮。
-func (s *Server) switchProfile(w http.ResponseWriter, name, dir string) {
+// 旧实现（switchProfile）只把人选写进 config.json，人设/记忆要等重启才换，
+// 于是面板必须同时表达"生效中 / 待重启"两种状态，逻辑和 UI 都被这份
+// 中间态拖累。降级后预设只是内容模板：把它抄进活动目录，改完即生效。
+//
+// 不碰凭据：一套部署只有一份 .env。预设目录里历史的 .env 原样留在磁盘上，
+// 既不读取也不复制 —— 让"换人格"和"换账号"彻底分开。
+func (s *Server) applyProfile(w http.ResponseWriter, name, dir string) {
+	if name == appconfig.DefaultProfileName {
+		http.Error(w, `Profile "default" is the active persona itself, nothing to apply`, http.StatusBadRequest)
+		return
+	}
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "Profile not found: "+name, http.StatusNotFound)
@@ -306,38 +299,127 @@ func (s *Server) switchProfile(w http.ResponseWriter, name, dir string) {
 		http.Error(w, "Failed to inspect profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// 环境变量优先级高于持久化配置：此时写 config.json 也不会生效，直接说清楚，
-	// 别让用户以为切换成功了。
-	if pinned := strings.TrimSpace(os.Getenv(appconfig.ProfileEnvVar)); pinned != "" && pinned != name {
-		http.Error(w, "Profile is pinned by "+appconfig.ProfileEnvVar+"="+pinned+"; restart without it to switch", http.StatusConflict)
+
+	applied, err := s.applyPersonaFiles(name)
+	if err != nil {
+		http.Error(w, "Failed to apply profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !applied.hasSoul && !applied.hasUser {
+		http.Error(w, "Profile is empty: add a SOUL.md or user profile before applying", http.StatusBadRequest)
 		return
 	}
 
+	// 记录"最近应用的是哪套预设"：只用于重启后仍能显示来源，以及面板标记。
+	// 失败不影响本次已生效的内容，所以只记日志、不回滚。
 	if err := s.persistProfileSelection(name); err != nil {
-		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
-		return
+		log.Warnf("[profiles] applied %q but failed to record selection: %v", name, err)
 	}
+	s.runtimeProfile = name
 
-	// 重新注入新分身的 .env：撤销旧分身注入的键，再加载新分身的。
-	//
-	// 即使人设/记忆仍要重启才完全切换（cortex 在启动时绑定目录），凭据层
-	// 可以立即跟上——用户切到 work 后马上在面板里看/改 API key，看到的必须
-	// 是 work 的那份，而不是 default 的。
-	//
-	// 注意 Clear 只撤销"由我们注入"的键：外部环境变量（systemd/docker
-	// export 的）不受影响，否则一次切换就会把运维的配置抹掉。
-	appconfig.ProcessEnv().Clear()
-	appconfig.LoadEnvFor(s.magicHome, name)
-	invalidateEnvCaches()
-
-	// restart_required 按真实状态给：切回当前正在用的分身时没有待生效变化，
-	// 再提示"重启后生效"就是在骗用户。
 	jsonResponse(w, map[string]interface{}{
 		"ok":               true,
 		"name":             name,
-		"active_profile":   s.activeProfile(),
-		"restart_required": name != s.activeProfile(),
+		"applied":          true,
+		"has_soul":         applied.hasSoul,
+		"has_user":         applied.hasUser,
+		"restart_required": false,
 	})
+}
+
+// personaApplyResult 描述一次应用实际写入了什么。
+type personaApplyResult struct {
+	hasSoul bool
+	hasUser bool
+}
+
+// applyPersonaFiles 读预设目录里的人设文件，写进活动 cortex。
+//
+// 必须走 live SoulManager / UserProfile：它们内存里各有一份内容，直接覆盖
+// 磁盘会被下一次保存冲掉（丢更新），也会绕过大小闸与快照保护。
+func (s *Server) applyPersonaFiles(name string) (personaApplyResult, error) {
+	var res personaApplyResult
+
+	presetDir, presetSoul, presetUserMD, presetUserJSON, err := s.profilePaths(name)
+	if err != nil {
+		return res, err
+	}
+
+	soulData, _, soulErr := readFirstExisting(presetSoul, legacyLowerName(presetSoul))
+	if soulErr != nil && !os.IsNotExist(soulErr) {
+		return res, fmt.Errorf("read soul: %w", soulErr)
+	}
+	if soulErr == nil {
+		res.hasSoul = true
+	}
+
+	doc, jsonErr := readUserJSON(presetUserJSON)
+	if jsonErr != nil && !os.IsNotExist(jsonErr) {
+		return res, jsonErr
+	}
+	mdData, _, mdErr := readFirstExisting(presetUserMD, legacyLowerName(presetUserMD))
+	if mdErr != nil && !os.IsNotExist(mdErr) {
+		return res, fmt.Errorf("read user profile: %w", mdErr)
+	}
+	if doc != nil || mdErr == nil {
+		res.hasUser = true
+	}
+
+	// 画像的取值优先级与读接口一致：USER.json 是权威，缺失时退回解析 USER.md。
+	var info cortex.UserProfileInfo
+	switch {
+	case doc != nil:
+		prefValue := func(key string) string {
+			if p := doc.Preferences[key]; p != nil {
+				return p.Value
+			}
+			return ""
+		}
+		info = cortex.UserProfileInfo{
+			Name:               prefValue("Name"),
+			Role:               prefValue("Role"),
+			CommunicationStyle: prefValue("Communication style"),
+			CodeStyle:          prefValue("Code style"),
+			TechStack:          doc.TechStack,
+			Interests:          doc.Interests,
+		}
+	case mdErr == nil:
+		data := s.parseUserMD(string(mdData))
+		info = cortex.UserProfileInfo{
+			Name:               mapString(data, "name"),
+			Role:               mapString(data, "role"),
+			CommunicationStyle: mapString(data, "communication_style"),
+			CodeStyle:          mapString(data, "code_style"),
+			TechStack:          mapStringSlice(data, "tech_stack"),
+			Interests:          mapStringSlice(data, "interests"),
+		}
+	}
+
+	activeDir := appconfig.ProfileDir(s.magicHome, appconfig.DefaultProfileName)
+
+	if res.hasSoul {
+		soul := s.liveSoulManager(activeDir)
+		if soul == nil {
+			// cortex 被配置关掉时没有 SoulManager：人设无处可写，明确拒绝，
+			// 不要假装应用成功（那会让"应用了却没变化"变成一个悬案）。
+			return res, fmt.Errorf("cortex is disabled; enable cortex to apply personas")
+		}
+		if err := soul.SetSoul(string(soulData)); err != nil {
+			return res, fmt.Errorf("save soul: %w", err)
+		}
+	}
+	if res.hasUser {
+		up, err := s.userProfileForWrite(activeDir)
+		if err != nil {
+			return res, fmt.Errorf("load user profile: %w", err)
+		}
+		if err := up.UpdateProfileInfo(info); err != nil {
+			return res, fmt.Errorf("save user profile: %w", err)
+		}
+	}
+
+	_ = presetDir // 路径已由 profilePaths 校验；保留变量便于日后诊断
+	return res, nil
 }
 
 // persistProfileSelection 把 cfg.Profile 落盘（与其它配置写入走同一套锁）。
@@ -364,17 +446,16 @@ func (s *Server) deleteProfile(w http.ResponseWriter, name, dir string) {
 		return
 	}
 
-	// 删除正在生效或已被选定为待生效的分身：先把选择切回 default 再删，避免
-	// config.json 里留下一个不存在的 profile（下次启动时 cortex 会把它当合法
-	// 名字继续用）。只看 activeProfile 会漏掉"已选定待重启"的场景：那种状态下
-	// config.json 同样指向这个分身，删掉目录后配置就成了悬空引用。
-	wasActive := s.activeProfile() == name
-	needReset := wasActive || s.pendingProfile() == name
-	if needReset {
+	// 删除预设**不会**改变当前人格：应用预设时内容已经抄进 cortex 了，模板
+	// 现在只是历史记录。唯一要处理的是配置里的"最近应用"标记别指向一个
+	// 已不存在的目录（下次面板会拿它当来源显示）。
+	wasApplied := s.activeProfile() == name
+	if wasApplied {
 		if err := s.persistProfileSelection(appconfig.DefaultProfileName); err != nil {
-			http.Error(w, "Failed to reset active profile: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to reset profile selection: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.runtimeProfile = appconfig.DefaultProfileName
 	}
 
 	if err := os.RemoveAll(dir); err != nil {
@@ -382,16 +463,7 @@ func (s *Server) deleteProfile(w http.ResponseWriter, name, dir string) {
 		return
 	}
 
-	// 与 switchProfile 对齐：删掉的是生效中的分身时，凭据层立即回退到 default。
-	// 以前只回退了配置，进程内还挂着被删分身注入的 env 键——面板看到的是
-	// "分身已删、凭据还在"，排障时非常迷惑。
-	if wasActive {
-		appconfig.ProcessEnv().Clear()
-		appconfig.LoadEnvFor(s.magicHome, appconfig.DefaultProfileName)
-		invalidateEnvCaches()
-	}
-
-	jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "was_active": wasActive})
+	jsonResponse(w, map[string]interface{}{"ok": true, "name": name, "was_applied": wasApplied})
 }
 
 func (s *Server) renameProfile(w http.ResponseWriter, r *http.Request, name, dir string) {
@@ -438,10 +510,9 @@ func (s *Server) renameProfile(w http.ResponseWriter, r *http.Request, name, dir
 		return
 	}
 
-	// 分身被本进程引用（正在生效，或已写进 config.json 待重启生效）时，改名后
-	// 必须同步更新配置，否则 config.json 会指向一个已不存在的目录。
-	wasActive := s.activeProfile() == name
-	needConfigUpdate := wasActive || s.pendingProfile() == name
+	// 配置里若记着"最近应用的是它"，改名后要跟着变，否则标记指向一个不存在
+	// 的目录。仅此而已：当前人格内容早已在 cortex 里，不受改名影响。
+	needConfigUpdate := s.activeProfile() == name
 	if err := os.Rename(dir, newDir); err != nil {
 		http.Error(w, "Failed to rename profile: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -452,21 +523,23 @@ func (s *Server) renameProfile(w http.ResponseWriter, r *http.Request, name, dir
 			// 明确告诉用户新位置，别让人对着旧路径找文件。
 			if rbErr := os.Rename(newDir, dir); rbErr != nil {
 				http.Error(w, fmt.Sprintf(
-					"Renamed to %q but failed to update active profile (%s); rollback also failed (%s), the directory now lives at %s",
+					"Renamed to %q but failed to update profile selection (%s); rollback also failed (%s), the directory now lives at %s",
 					newName, err.Error(), rbErr.Error(), newDir), http.StatusInternalServerError)
 				return
 			}
-			http.Error(w, "Failed to update active profile, rename rolled back: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "Failed to update profile selection, rename rolled back: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		s.runtimeProfile = newName
 	}
 	jsonResponse(w, map[string]interface{}{"ok": true, "name": newName, "path": newDir})
 }
 
-// handleProfileSoul 读写分身的 SOUL.md。
+// handleProfileSoul 读写预设的 SOUL.md。
 //
-// 对"正在生效"的分身必须走 live SoulManager：内存里有一份内容，直接写盘会
-// 被它下一次保存覆盖（丢更新），而且绕过大小闸/快照/区块淘汰这些保护。
+// default 预设就是活动人格，必须走 live SoulManager：内存里有一份内容，直接
+// 写盘会被它下一次保存覆盖（丢更新），而且绕过大小闸/快照/区块淘汰这些保护。
+// 其它预设是纯模板文件，直接读写磁盘即可。
 func (s *Server) handleProfileSoul(w http.ResponseWriter, r *http.Request, name, dir, soulPath string) {
 	live := s.liveSoulManager(dir)
 
@@ -518,12 +591,16 @@ func (s *Server) handleProfileSoul(w http.ResponseWriter, r *http.Request, name,
 	}
 }
 
-// liveSoulManager 当 dir 就是 cortex 当前使用的人设目录时返回其 SoulManager。
+// liveSoulManager 当 dir 就是活动 cortex 的目录时返回其 SoulManager。
+//
+// 活动目录恒为 <magicHome>/cortex（与"当前应用了哪个预设"无关），所以这里
+// 必须按 default 解析，不能再用 activeProfile() —— 否则应用过 work 预设后，
+// 编辑 default 卡片反而拿不到 live 实例，写盘会被下一次内存保存冲掉。
 func (s *Server) liveSoulManager(dir string) *cortex.SoulManager {
 	if s.cortexMgr == nil || s.cortexMgr.Soul == nil {
 		return nil
 	}
-	activeDir := appconfig.ProfileDir(s.magicHome, s.activeProfile())
+	activeDir := appconfig.ProfileDir(s.magicHome, appconfig.DefaultProfileName)
 	if filepath.Clean(activeDir) != filepath.Clean(dir) {
 		return nil
 	}

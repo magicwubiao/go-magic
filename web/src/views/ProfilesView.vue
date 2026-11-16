@@ -18,19 +18,6 @@
       </n-space>
     </div>
 
-    <!-- 切换只改 config.json：人设/记忆要等下次启动才真正换过来。这里只报
-         "已选定、待重启"，不要把那一个分身说成"当前使用"——真正生效的还是旧的。 -->
-    <n-alert
-      v-if="pendingRestart"
-      class="pending-alert"
-      type="warning"
-      :title="t('profiles.pendingRestart', { name: pendingRestart, active: activeProfileName })"
-      closable
-      @close="pendingRestart = ''"
-    >
-      {{ t('profiles.pendingRestartHint', { name: pendingRestart, active: activeProfileName }) }}
-    </n-alert>
-
     <n-spin :show="loading">
       <n-grid
         v-if="profiles.length > 0"
@@ -43,11 +30,11 @@
           <n-card
             size="small"
             class="profile-card"
-            :class="{ 'is-active': profile.is_active }"
+            :class="{ 'is-active': profile.is_applied }"
             :segmented="{ footer: true }"
           >
             <div class="pf-top">
-              <div class="pf-avatar" :class="{ 'is-active': profile.is_active }">
+              <div class="pf-avatar" :class="{ 'is-active': profile.is_applied }">
                 {{ initialOf(profile.name) }}
               </div>
               <div class="pf-ident">
@@ -56,11 +43,8 @@
                   <n-tag v-if="profile.is_default" size="tiny" :bordered="false">
                     {{ t('profiles.builtin') }}
                   </n-tag>
-                  <n-tag v-if="profile.is_active" size="tiny" type="success" :bordered="false">
+                  <n-tag v-if="profile.is_applied" size="tiny" type="success" :bordered="false">
                     {{ t('profiles.inUse') }}
-                  </n-tag>
-                  <n-tag v-else-if="profile.is_pending" size="tiny" type="warning" :bordered="false">
-                    {{ t('profiles.pendingTag') }}
                   </n-tag>
                 </div>
                 <div class="pf-desc" :title="describeProfile(profile)">{{ describeProfile(profile) }}</div>
@@ -68,17 +52,13 @@
             </div>
 
             <div class="pf-facts">
-              <span class="fact">
-                <n-icon :size="14"><LayersOutline /></n-icon>
-                {{ t('profiles.skillsCount', { count: profile.skill_count || 0 }) }}
-              </span>
-              <span class="fact" :class="{ muted: !profile.has_env }">
-                <n-icon :size="14"><KeyOutline /></n-icon>
-                {{ profile.has_env ? t('profiles.credentialsSet') : t('profiles.credentialsMissing') }}
-              </span>
               <span class="fact" :class="{ muted: !profile.has_soul }">
                 <n-icon :size="14"><SparklesOutline /></n-icon>
                 {{ profile.has_soul ? t('profiles.soulSet') : t('profiles.soulMissing') }}
+              </span>
+              <span class="fact" :class="{ muted: !profile.has_user }">
+                <n-icon :size="14"><PersonOutline /></n-icon>
+                {{ profile.has_user ? t('profiles.tabs.userProfile') : t('profiles.userProfileMissing') }}
               </span>
             </div>
 
@@ -88,24 +68,14 @@
               <div class="pf-footer">
                 <n-space :size="6">
                   <n-button
-                    v-if="profile.is_pending || (profile.is_active && pendingRestart)"
+                    v-if="!profile.is_default && !profile.is_applied"
                     size="tiny"
                     type="primary"
-                    :loading="switchingName === profile.name"
-                    :disabled="!!switchingName && switchingName !== profile.name"
-                    @click="switchProfile(profile.name)"
+                    :loading="applyingName === profile.name"
+                    :disabled="!!applyingName && applyingName !== profile.name"
+                    @click="applyProfile(profile.name)"
                   >
-                    {{ t('profiles.switchBack') }}
-                  </n-button>
-                  <n-button
-                    v-else-if="!profile.is_active"
-                    size="tiny"
-                    type="primary"
-                    :loading="switchingName === profile.name"
-                    :disabled="!!switchingName && switchingName !== profile.name"
-                    @click="switchProfile(profile.name)"
-                  >
-                    {{ t('profiles.switch') }}
+                    {{ t('profiles.apply') }}
                   </n-button>
                   <n-button size="tiny" secondary @click="openProfileDetail(profile)">
                     {{ t('profiles.manage') }}
@@ -136,7 +106,7 @@
       </n-empty>
     </n-spin>
 
-    <!-- 新建分身 -->
+    <!-- 新建预设 -->
     <n-modal
       v-model:show="showCreateModal"
       preset="card"
@@ -199,7 +169,7 @@
       </template>
     </n-modal>
 
-    <!-- 分身详情：概览 / 用户画像 / AI 人格 / 学习偏好 -->
+    <!-- 预设详情：概览 / 用户画像 / AI 人格 / 学习偏好 -->
     <n-modal
       :show="showDetailModal"
       preset="card"
@@ -213,7 +183,7 @@
     >
       <template #header>
         <div class="detail-head">
-          <div class="pf-avatar" :class="{ 'is-active': detailProfile?.is_active }">
+          <div class="pf-avatar" :class="{ 'is-active': detailProfile?.is_applied }">
             {{ initialOf(editingProfile) }}
           </div>
           <div class="detail-ident">
@@ -222,11 +192,8 @@
               <n-tag v-if="detailProfile?.is_default" size="tiny" :bordered="false">
                 {{ t('profiles.builtin') }}
               </n-tag>
-              <n-tag v-if="detailProfile?.is_active" size="tiny" type="success" :bordered="false">
+              <n-tag v-if="detailProfile?.is_applied" size="tiny" type="success" :bordered="false">
                 {{ t('profiles.inUse') }}
-              </n-tag>
-              <n-tag v-else-if="detailProfile?.is_pending" size="tiny" type="warning" :bordered="false">
-                {{ t('profiles.pendingTag') }}
               </n-tag>
             </div>
             <div class="detail-sub">{{ describeProfile(detailProfile) }}</div>
@@ -238,7 +205,7 @@
       </template>
 
       <n-tabs v-model:value="activeTab" type="line" animated>
-        <!-- 概览：把"这个分身到底落在磁盘哪里、缺什么"讲清楚 -->
+        <!-- 概览：把"这个预设落在磁盘哪里、缺什么、是否已应用"讲清楚 -->
         <n-tab-pane name="overview" :tab="t('profiles.tabs.overview')">
           <n-descriptions :column="1" label-placement="left" size="small" bordered class="overview-desc">
             <n-descriptions-item :label="t('profiles.overview.dir')">
@@ -247,14 +214,6 @@
                 <n-button v-if="detailProfile?.path" text size="tiny" type="primary" @click="copyText(detailProfile?.path || '', t('profiles.overview.pathCopied'))">
                   {{ t('profiles.overview.copyPath') }}
                 </n-button>
-              </div>
-            </n-descriptions-item>
-            <n-descriptions-item :label="t('profiles.overview.envPath')">
-              <div class="kv">
-                <code class="kv-value">{{ detailProfile?.env_path || '-' }}</code>
-                <n-tag size="tiny" :type="detailProfile?.has_env ? 'success' : 'default'" :bordered="false">
-                  {{ detailProfile?.has_env ? t('profiles.overview.present') : t('profiles.overview.absent') }}
-                </n-tag>
               </div>
             </n-descriptions-item>
             <n-descriptions-item :label="t('profiles.overview.skeleton')">
@@ -267,9 +226,6 @@
                 </n-tag>
               </n-space>
             </n-descriptions-item>
-            <n-descriptions-item :label="t('profiles.overview.skills')">
-              {{ t('profiles.skillsCount', { count: detailProfile?.skill_count || 0 }) }}
-            </n-descriptions-item>
             <n-descriptions-item :label="t('profiles.overview.cli')">
               <div class="kv">
                 <code class="kv-value">{{ setupCommand || '-' }}</code>
@@ -281,6 +237,17 @@
           </n-descriptions>
           <n-alert type="info" :bordered="false" class="overview-tip">
             {{ t('profiles.overview.syncHint') }}
+          </n-alert>
+          <n-alert
+            v-if="detailProfile && !detailProfile.is_default"
+            type="warning"
+            :bordered="false"
+            class="overview-tip"
+          >
+            {{ t('profiles.templateHint') }}
+          </n-alert>
+          <n-alert v-else-if="detailProfile" type="success" :bordered="false" class="overview-tip">
+            {{ t('profiles.liveHint') }}
           </n-alert>
         </n-tab-pane>
 
@@ -402,6 +369,14 @@
             >
               {{ t('common.save') }}
             </n-button>
+            <n-button
+              v-if="activeTab === 'overview' && detailProfile && !detailProfile.is_default && !detailProfile.is_applied"
+              type="primary"
+              :loading="applyingName === editingProfile"
+              @click="applyProfile(editingProfile)"
+            >
+              {{ t('profiles.apply') }}
+            </n-button>
           </n-space>
         </div>
       </template>
@@ -447,8 +422,7 @@ import {
   CloseOutline,
   CreateOutline,
   EllipsisHorizontal,
-  KeyOutline,
-  LayersOutline,
+  PersonOutline,
   RefreshOutline,
   SparklesOutline,
   TerminalOutline,
@@ -457,22 +431,15 @@ import {
 import { useI18n } from 'vue-i18n'
 import { request } from '@/api/client'
 import { useConfigStore } from '@/stores/config'
-import { useChatStore } from '@/stores/chat'
 
 interface Profile {
   name: string
   path: string
-  env_path: string
-  is_active: boolean
-  // 已写进 config.json 但本进程还没切过去（重启后才生效）
-  is_pending?: boolean
   is_default: boolean
-  model: string | null
-  provider: string | null
-  has_env: boolean
+  // 当前活动人格就是这套预设（应用后内容已抄进 cortex）
+  is_applied: boolean
   has_soul: boolean
   has_user: boolean
-  skill_count: number
   user_name: string
   user_role: string
 }
@@ -498,20 +465,13 @@ const { t } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
 const configStore = useConfigStore()
-const chatStore = useChatStore()
 
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
 const refreshing = ref(false)
 const creating = ref(false)
 const renaming = ref(false)
-const switchingName = ref('')
-const pendingRestart = ref('')
-// 本进程实际生效的分身（后端 is_active 的权威口径）。切到别的分身只算"待重启"，
-// 所以"切回"按钮必须一直留在生效中的那个分身卡片上，否则点错了没处撤回。
-const activeProfileName = computed(
-  () => profiles.value.find((p) => p.is_active)?.name ?? '',
-)
+const applyingName = ref('')
 
 const showCreateModal = ref(false)
 const showRenameModal = ref(false)
@@ -676,29 +636,18 @@ async function createProfile(): Promise<void> {
   }
 }
 
-async function switchProfile(name: string): Promise<void> {
-  if (switchingName.value) return
-  switchingName.value = name
+async function applyProfile(name: string): Promise<void> {
+  if (applyingName.value) return
+  applyingName.value = name
   try {
-    // 切换只写 config.json：SOUL/USER 由下次启动的 cortex 读。是否真的需要
-    // 重启由后端给出（切回当前生效的分身时不需要），别一律提示"重启后生效"。
-    const res = await request<{ restart_required?: boolean; active_profile?: string }>(
-      `/profiles/${name}/switch`,
-      { method: 'POST' },
-    )
-    const restartRequired = res?.restart_required !== false
-    message.success(t('profiles.switched', { name }))
-    // 空串表示"没有待生效的切换"，正好用来消除之前那条提示。
-    pendingRestart.value = restartRequired ? name : ''
-    await Promise.all([
-      configStore.loadConfig(),
-      chatStore.loadSessions(),
-      loadProfiles(),
-    ])
+    // 应用 = 把人设与画像写进活动 cortex，立即生效（没有"待重启"这一说）。
+    await request(`/profiles/${name}/apply`, { method: 'POST' })
+    message.success(t('profiles.appliedMsg', { name }))
+    await Promise.all([configStore.loadConfig(), loadProfiles()])
   } catch (e: unknown) {
-    message.error(errorText(e) || t('profiles.failedToSwitch'))
+    message.error(errorText(e) || t('profiles.failedToApply'))
   } finally {
-    switchingName.value = ''
+    applyingName.value = ''
   }
 }
 
@@ -764,7 +713,7 @@ async function copySetupCommand(name: string): Promise<void> {
 }
 
 function menuOptions(profile: Profile): DropdownOption[] {
-  const deleteBlocked = profile.is_default || profile.is_active
+  const deleteBlocked = profile.is_default
   return [
     {
       label: t('profiles.rename'),
@@ -784,7 +733,7 @@ function menuOptions(profile: Profile): DropdownOption[] {
       key: 'delete',
       disabled: deleteBlocked,
       // disabled 项没有点击事件，用 title 说明为什么不能点。
-      props: deleteBlocked ? { title: t('profiles.deleteActiveBlocked') } : undefined,
+      props: deleteBlocked ? { title: t('profiles.deleteBuiltinBlocked') } : undefined,
       icon: () => h(NIcon, null, { default: () => h(TrashOutline) }),
     },
   ]

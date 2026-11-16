@@ -218,7 +218,7 @@ magic config reset     # restore defaults
 
 ```jsonc
 {
-  "profile": "default",                 // profile name
+  "profile": "default",                 // current persona preset (recorded only; --profile applies it at startup)
   "magic_home": "~/.magic",
   "provider": "deepseek",               // current provider
   "model": "deepseek-chat",             // deprecated; prefer providers.<x>.models[0]
@@ -325,7 +325,7 @@ magic config reset     # restore defaults
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `TOGETHER_API_KEY` | per-provider API keys | ✅ |
 | `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | gateway tokens | ✅ |
 
-> Switch profiles via the `--profile/-p` flag or the `profile` field in the config file — there is no corresponding environment variable.
+> Apply a persona preset with the `--profile/-p` flag (the `profile` field only records the last applied preset) — there is no corresponding environment variable.
 
 ### 5.4 Global flags
 
@@ -339,7 +339,7 @@ Available on all sub-commands:
 | `-o, --output <fmt>` | output format: `text` / `json` / `yaml` / `table` |
 | `--no-color` | disable colored output |
 | `--magic-home <dir>` | specify magic home |
-| `-p, --profile <name>` | specify profile |
+| `-p, --profile <name>` | apply that persona preset (soul + user profile) at startup |
 
 > `-p` is a globally reserved shorthand. It conflicts with local flags of some sub-commands; see [22. Known Issues](#22-known-issues-verified).
 
@@ -526,7 +526,7 @@ Launch: `magic server` (default `http://localhost:5000`). On first visit it walk
 | `/bots` | Bots | bot profile management |
 | `/logs` | Logs | live logs |
 | `/system` | System | system info and health checks |
-| `/profiles` | Profiles | switch between multiple profiles |
+| `/profiles` | Persona Presets | persona/profile templates, apply with one click |
 | `/goals` | Goals | goal decomposition and tracking |
 | `/approval` | Approval | approve high-risk tool calls |
 | `/files` | Files | browse / upload / download / archive online |

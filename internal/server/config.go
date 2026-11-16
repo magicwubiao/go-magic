@@ -60,18 +60,17 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, schema)
 }
 
-// scanProfiles 列出所有分身。
+// scanProfiles 列出所有人格预设。
 //
-// default 不是磁盘上的一个目录，而是"正在运行的这套数据"（<magicHome>/cortex），
+// default 不是磁盘上的一个目录，而是"当前正在使用的那份人格"（<magicHome>/cortex），
 // 所以永远先合成一张卡片。profiles/default 是早期版本建出来的空骨架，
-// 这里刻意跳过：它既不参与运行，列出来还会出现两个 default，点进去编辑的
-// 也不是真正生效的那份文件。
+// 这里刻意跳过：它既不参与运行，列出来还会出现两个 default。
 func (s *Server) scanProfiles() []map[string]interface{} {
 	s.legacyProfileOnce.Do(s.cleanupLegacyDefaultProfile)
 
 	defaultDir := appconfig.ProfileDir(s.magicHome, appconfig.DefaultProfileName)
 	profiles := []map[string]interface{}{
-		s.profileSummary(appconfig.DefaultProfileName, defaultDir, filepath.Join(s.magicHome, "skills")),
+		s.profileSummary(appconfig.DefaultProfileName, defaultDir),
 	}
 
 	entries, err := os.ReadDir(s.profileRoot())
@@ -85,20 +84,18 @@ func (s *Server) scanProfiles() []map[string]interface{} {
 			continue
 		}
 		dir := filepath.Join(s.profileRoot(), entry.Name())
-		profiles = append(profiles, s.profileSummary(entry.Name(), dir, filepath.Join(dir, "skills")))
+		profiles = append(profiles, s.profileSummary(entry.Name(), dir))
 	}
 
 	return profiles
 }
 
-// profileSummary 汇总单个分身用于列表展示的信息。
+// profileSummary 汇总单个预设用于列表展示的信息。
 //
-// model/provider 仍恒为 nil：一个分身实际用哪个模型取决于自身 .env 与全局
-// config.json 的组合，列表接口不去猜（猜错比留空更糟），前端按空值隐藏。
-//
-// 其余字段都是"磁盘上真实存在的东西"：人设/画像是否已写、画像里的姓名与角色、
-// 凭据文件路径。面板据此判断"这个分身是空壳还是已经配好了"，而不是只看技能数。
-func (s *Server) profileSummary(name, dir, skillsDir string) map[string]interface{} {
+// 只报磁盘上真实存在、且真的会影响行为的东西：人设、画像、是否当前应用。
+// 曾经的 model/provider 恒为 nil（猜不出来就别猜），skill_count 与 has_env
+// 则是"看着有用、其实运行时不读"的假信号，随降级一并删除。
+func (s *Server) profileSummary(name, dir string) map[string]interface{} {
 	var userName, userRole string
 	if doc, err := readUserJSON(filepath.Join(dir, "USER.json")); err == nil && doc != nil {
 		prefValue := func(key string) string {
@@ -111,21 +108,13 @@ func (s *Server) profileSummary(name, dir, skillsDir string) map[string]interfac
 	}
 
 	userMD := filepath.Join(dir, "USER.md")
-	envPath := appconfig.EnvFilePath(s.magicHome, name)
 
 	return map[string]interface{}{
-		"name":      name,
-		"path":      dir,
-		"is_active": name == s.activeProfile(),
-		// is_pending：已写进 config.json，但当前进程还在用旧分身（重启才生效）。
-		// 没有它，面板会把"已选定"错标成"当前使用"，而人设/凭据其实还没换。
-		"is_pending":  name == s.pendingProfile(),
-		"is_default":  name == appconfig.DefaultProfileName,
-		"model":       nil,
-		"provider":    nil,
-		"has_env":     fileExists(envPath),
-		"env_path":    envPath,
-		"skill_count": countDirEntries(skillsDir),
+		"name":       name,
+		"path":       dir,
+		"is_default": name == appconfig.DefaultProfileName,
+		// is_applied：当前活动人格就是这套预设（应用过之后内容已抄进 cortex）。
+		"is_applied": name == s.activeProfile(),
 		// 旧版本把文件名写成小写，读取时一并兜住（与 handleProfileUser 一致）。
 		"has_soul":  fileExists(readableSoulPath(filepath.Join(dir, "SOUL.md"))),
 		"has_user":  fileExists(userMD) || fileExists(legacyLowerName(userMD)) || fileExists(filepath.Join(dir, "USER.json")),
@@ -137,14 +126,6 @@ func (s *Server) profileSummary(name, dir, skillsDir string) map[string]interfac
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func countDirEntries(dir string) int {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
-	return len(entries)
 }
 
 func (s *Server) handleConfigByID(w http.ResponseWriter, r *http.Request) {
@@ -676,20 +657,14 @@ func (s *Server) writeEnvFile(path string, vars map[string]string) error {
 	return appconfig.WriteEnvFile(path, vars)
 }
 
-// envFilePath 返回**活动分身**的 .env 路径。
+// envFilePath 返回 .env 的路径。
 //
-// 之前这里硬编码 magicHome/.env，于是无论切到哪个分身，面板改的都是
-// default 的凭据：在 work 分身里填的 key 永远不生效，而 default 的 key
-// 会被悄悄覆盖。分身的其它数据（SOUL/USER/skills）都已按活动分身裁决，
-// 凭据也必须一致。
+// 固定 magicHome/.env：人格预设降级为内容模板后，凭据不再跟着预设走。
+// 曾经这里是"活动分身目录下的 .env"（切 work 就换一份 key），但那让
+// "换人格"和"换账号"绑在一起，而预设本身又不隔离会话与记忆——半套隔离
+// 比不隔离更容易让人误判。现在一套部署只有一份凭据，切人格不影响它。
 func (s *Server) envFilePath() string {
-	path := appconfig.EnvFilePath(s.magicHome, s.activeProfile())
-	if path == "" {
-		// 活动分身名非法（手改 config.json 写进 "../.." 之类）：
-		// 退回 default 的路径，绝不拿非法名字拼路径。
-		return appconfig.EnvFilePath(s.magicHome, appconfig.DefaultProfileName)
-	}
-	return path
+	return appconfig.EnvFilePath(s.magicHome, appconfig.DefaultProfileName)
 }
 
 func (s *Server) handleEnv(w http.ResponseWriter, r *http.Request) {

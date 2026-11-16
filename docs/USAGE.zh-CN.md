@@ -216,7 +216,7 @@ magic config reset     # 恢复默认
 
 ```jsonc
 {
-  "profile": "default",                 // 配置档名
+  "profile": "default",                 // 当前应用的人格预设（仅记录，--profile 才会在启动时应用）
   "magic_home": "~/.magic",
   "provider": "deepseek",               // 当前 Provider
   "model": "deepseek-chat",             // 已废弃，建议用 providers.<x>.models[0]
@@ -337,7 +337,7 @@ magic config reset     # 恢复默认
 | `-o, --output <fmt>` | 输出格式：`text` / `json` / `yaml` / `table` |
 | `--no-color` | 关闭彩色输出 |
 | `--magic-home <dir>` | 指定 magic home |
-| `-p, --profile <name>` | 指定配置档 |
+| `-p, --profile <name>` | 启动时应用该人格预设（人设与用户画像） |
 
 > `-p` 是全局保留的简写。注意它与部分子命令的本地标志冲突，见 [22. 已知问题](#22-已知问题实测确认)。
 
@@ -524,7 +524,7 @@ magic coding debug --chat              # 带编码上下文的交互调试
 | `/bots` | Bots | Bot 档案管理 |
 | `/logs` | 日志 | 实时日志 |
 | `/system` | 系统 | 系统信息与健康检查 |
-| `/profiles` | 配置档 | 多 Profile 切换 |
+| `/profiles` | 人格预设 | 人设/画像模板，一键应用 |
 | `/goals` | 目标 | 目标分解与追踪 |
 | `/approval` | 审批 | 高危工具调用审批 |
 | `/files` | 文件 | 在线文件浏览 / 上传 / 下载 / 打包 |
@@ -1133,7 +1133,7 @@ magic mcp add github --transport http --url https://api.githubcopilot.com/mcp/ \
 | `headers` | 远程传输的自定义请求头（`Authorization` / `X-API-Key` 等）。API 返回值一律掩码为 `***`，表单回传掩码时保留磁盘真值。 |
 | `disabled_tools` | 屏蔽该 server 下的指定工具：不注册进工具表，模型完全看不到。 |
 | `enabled` | `false` = 启动时不自动连接（配置保留，可在页面手动连）。缺省视为 `true`。 |
-| `profiles` | 只在列出的分身里生效；留空 = 所有分身。 |
+| `profiles` | 只在列出的 人格预设 里生效；留空 = 全部生效。 |
 | `require_approval` | 每次工具调用都要人工确认。用于没写 tool annotations 的 server。 |
 | `lazy` | 启动时不连接，只用上次缓存的工具清单注册影子工具，首次调用才建连（见下）。 |
 | `oauth` | 启用 OAuth 2.1 授权（见下节）。`true` 或 `{}` = 纯自动；也可带 `client_id` / `client_secret` / `scopes`。 |

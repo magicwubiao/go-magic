@@ -17,7 +17,6 @@ import (
 	"github.com/magicwubiao/go-magic/internal/review"
 	"github.com/magicwubiao/go-magic/internal/skills"
 	"github.com/magicwubiao/go-magic/internal/trigger"
-	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
@@ -147,33 +146,24 @@ func NewManager(baseDir string, prov provider.Provider) *Manager {
 	return NewManagerWithProfileAndConfig(baseDir, prov, "", nil)
 }
 
-// NewManagerWithProfile creates a new Cortex manager with specific profile
-// The profile parameter specifies which profile's user.md to load
+// NewManagerWithProfile 保留旧签名，但 profile 已不影响人设目录（见下方说明）。
 func NewManagerWithProfile(baseDir string, prov provider.Provider, profile string) *Manager {
 	return NewManagerWithProfileAndConfig(baseDir, prov, profile, nil)
 }
 
 // NewManagerWithProfileAndConfig creates a new Cortex manager with profile and custom config
-func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, profile string, config *ManagerConfig) *Manager {
+//
+// profile 参数已废弃：人格预设（profiles/<name>）降级为**内容模板**，应用预设时
+// 由 server 把 SOUL.md / USER.json 写进活动目录，运行期只认 baseDir 这一份。
+// 之前按 profile 换目录的写法要求「换分身必须重启」，且让面板与运行时各读一处；
+// 现在目录恒定，切换语义变成一次内容应用。
+func NewManagerWithProfileAndConfig(baseDir string, prov provider.Provider, _ string, config *ManagerConfig) *Manager {
 	// baseDir is already the cortex directory (e.g. <magicHome>/cortex);
 	// do NOT add another "cortex" subdirectory here.
 	cortexDir := baseDir
 
-	// 分身人设目录统一由 pkg/config.ProfileDir 裁决，避免出现"面板写
-	// <magicHome>/profiles/<p>/user.md、运行时读 <magicHome>/cortex/USER.md"
-	// 这种两份事实源。baseDir 的约定是 <magicHome>/cortex，因此 magicHome
-	// 取它的父目录；少数独立用法（测试/嵌入式）直接传非 cortex 目录时，
-	// 把它自身当作 home，保持原有行为。
-	magicHome := cortexDir
-	if clean := filepath.Clean(cortexDir); filepath.Base(clean) == "cortex" {
-		magicHome = filepath.Dir(clean)
-	}
-	personaDir := appconfig.ProfileDir(magicHome, profile)
-	if personaDir == "" {
-		// 非法分身名（含路径分隔符 / ".."）绝不进文件路径，回退 default。
-		log.Warnf("cortex: invalid profile name %q, falling back to %q", profile, appconfig.DefaultProfileName)
-		personaDir = appconfig.ProfileDir(magicHome, appconfig.DefaultProfileName)
-	}
+	// 人设与画像只有一个事实源：活动 cortex 目录。
+	personaDir := cortexDir
 
 	// Apply defaults for nil config
 	if config == nil {

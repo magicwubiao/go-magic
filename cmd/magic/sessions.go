@@ -79,12 +79,6 @@ func init() {
 }
 
 func runSessionsList(cmd *cobra.Command, args []string) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Printf("Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
 	dbPath := filepath.Join(config.GetMagicHome(), "sessions.db")
 
 	store, err := session.NewStore(dbPath)
@@ -94,7 +88,8 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 	}
 	defer store.Close()
 
-	sessions, err := store.ListSessions(context.Background(), cfg.Profile)
+	// 不再按 profile 过滤：人格预设只是内容模板，会话历史始终是一份。
+	sessions, err := store.ListSessions(context.Background(), "")
 	if err != nil {
 		fmt.Printf("Failed to list sessions: %v\n", err)
 		os.Exit(1)

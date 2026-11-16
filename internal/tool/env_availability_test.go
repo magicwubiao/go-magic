@@ -37,7 +37,7 @@ func TestVisionToolBecomesAvailableAfterEnvLoad(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte(key+"=sk-test\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if applied := appconfig.LoadEnvFor(home, appconfig.DefaultProfileName); applied != 1 {
+	if applied := appconfig.LoadEnvFor(home); applied != 1 {
 		t.Fatalf("expected 1 applied var, got %d", applied)
 	}
 	ResetEnvProbes()

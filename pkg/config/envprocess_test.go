@@ -45,7 +45,7 @@ func TestLoadProfileEnvInjectsActiveProfileVars(t *testing.T) {
 	}
 }
 
-func TestLoadProfileEnvUsesPinnedProfile(t *testing.T) {
+func TestLoadProfileEnvIgnoresProfileSelection(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GO_MAGIC_HOME", home)
 
@@ -54,14 +54,15 @@ func TestLoadProfileEnvUsesPinnedProfile(t *testing.T) {
 	processEnv.Clear()
 	t.Cleanup(processEnv.Clear)
 
-	// default 里的值不应生效：--profile work 已经把活动分身钉住了。
+	// 凭据不跟人格预设走：即使 --profile work 把预设钉住了，读的仍是
+	// <magicHome>/.env。旧预设目录里的 .env 留作历史，不再生效。
 	writeProfileEnv(t, home, DefaultProfileName, key+"=default-value\n")
 	writeProfileEnv(t, home, "work", key+"=work-value\n")
 	t.Setenv(ProfileEnvVar, "work")
 
 	LoadProfileEnv()
-	if got := os.Getenv(key); got != "work-value" {
-		t.Fatalf("pinned profile .env not used: %q", got)
+	if got := os.Getenv(key); got != "default-value" {
+		t.Fatalf("credentials must not follow presets: got %q want default-value", got)
 	}
 }
 
@@ -76,19 +77,19 @@ func TestLoadProfileEnvMissingFileIsQuiet(t *testing.T) {
 	}
 }
 
-func TestActiveEnvPathFollowsProfile(t *testing.T) {
+func TestActiveEnvPathIsProfileIndependent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GO_MAGIC_HOME", home)
 	t.Setenv(ProfileEnvVar, "")
 
 	if got, want := ActiveEnvPath(), filepath.Join(home, ".env"); got != want {
-		t.Fatalf("default profile env path: got %q want %q", got, want)
+		t.Fatalf("default env path: got %q want %q", got, want)
 	}
 
+	// 选中/钉住某个预设都不该换凭据文件。
 	t.Setenv(ProfileEnvVar, "work")
-	want := filepath.Join(home, "profiles", "work", ".env")
-	if got := ActiveEnvPath(); got != want {
-		t.Fatalf("work profile env path: got %q want %q", got, want)
+	if got, want := ActiveEnvPath(), filepath.Join(home, ".env"); got != want {
+		t.Fatalf("pinned preset env path: got %q want %q", got, want)
 	}
 }
 

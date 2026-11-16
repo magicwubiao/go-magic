@@ -19,38 +19,33 @@ var processEnv EnvSet
 // ProcessEnv 返回进程级注入器，供 server / bot / gateway 侧读写环境变量时记账。
 func ProcessEnv() *EnvSet { return &processEnv }
 
-// LoadProfileEnv 加载活动分身的 .env 并注入进程环境。
+// LoadProfileEnv 加载 <magicHome>/.env 并注入进程环境。
+//
+// 历史包袱：这个函数过去按"活动分身"选文件（profiles/<p>/.env）。人格预设
+// 降级为内容模板后，凭据不再跟着预设走 —— 一套部署只有一份凭据，切人格
+// 不该换 key（那会让"换个说话风格"变成"换账号"，语义更混乱）。旧预设目录
+// 里的 .env 原样留在磁盘上，但不再被读取。
 //
 // 这是"面板里填的 key 到底有没有生效"的唯一开关：调用点必须早于任何
 // 会把探测结果缓存起来的初始化（`sync.Once`、单例构造、Available() 判定）。
 //
-// 返回注入的键数。文件不存在、分身名非法、读盘失败都**不返回错误**：
-// 凭据文件属于可选的运行期配置，缺了只影响对应能力（视觉/搜索/GitHub），
-// 不该让整个进程起不来。真出错时留一条日志，便于排查"为什么 key 没用"。
+// 返回注入的键数。文件不存在、读盘失败都**不返回错误**：凭据文件属于可选的
+// 运行期配置，缺了只影响对应能力（视觉/搜索/GitHub），不该让整个进程起不来。
+// 真出错时留一条日志，便于排查"为什么 key 没用"。
 func LoadProfileEnv() int {
-	home := GetMagicHome()
-
-	profile := ""
-	if cfg, err := Load(); err == nil && cfg != nil {
-		profile = cfg.ActiveProfile()
-	} else {
-		// config.json 还没建出来（首次启动）时仍然要认 GO_MAGIC_PROFILE，
-		// 否则 `magic --profile work chat` 在首次运行时会漏掉 work 的凭据。
-		profile = (&Config{}).ActiveProfile()
-	}
-	return LoadEnvFor(home, profile)
+	return LoadEnvFor(GetMagicHome())
 }
 
-// LoadEnvFor 按显式的 magicHome + 分身名加载 .env。
+// LoadEnvFor 按显式的 magicHome 加载 .env。
 //
 // 单独提供的原因：server 持有的 magicHome 来自它自己的配置（可能由
 // `--magic-home`、测试注入或守护进程参数决定），未必等于 GetMagicHome()
 // 读到的全局环境变量。两者用错，面板就会写 A 目录、进程去读 B 目录 ——
 // 表现为"保存成功但工具永远说 key 没配置"。
-func LoadEnvFor(magicHome, profile string) int {
-	path := EnvFilePath(magicHome, profile)
+func LoadEnvFor(magicHome string) int {
+	path := EnvFilePath(magicHome, DefaultProfileName)
 	if path == "" {
-		log.Warnf("[env] invalid profile %q; skipping .env load", profile)
+		log.Warnf("[env] cannot resolve .env path under %q; skipping load", magicHome)
 		return 0
 	}
 
@@ -66,7 +61,7 @@ func LoadEnvFor(magicHome, profile string) int {
 	applied := processEnv.Apply(vars)
 	skipped := len(vars) - len(applied)
 	if len(applied) > 0 {
-		log.Infof("[env] loaded %d variable(s) from %s (profile=%s)", len(applied), path, profile)
+		log.Infof("[env] loaded %d variable(s) from %s", len(applied), path)
 	}
 	if skipped > 0 {
 		// 明确说清楚"文件里有、但环境里已经有"，避免用户以为 .env 被忽略了。
@@ -75,17 +70,9 @@ func LoadEnvFor(magicHome, profile string) int {
 	return len(applied)
 }
 
-// ActiveEnvPath 返回活动分身 .env 的路径（面板展示用）。
+// ActiveEnvPath 返回 .env 的路径（面板展示用）。
 func ActiveEnvPath() string {
-	return EnvFilePath(GetMagicHome(), activeProfileFromDisk())
-}
-
-// activeProfileFromDisk 从磁盘配置解析活动分身（读不到时仍认 GO_MAGIC_PROFILE）。
-func activeProfileFromDisk() string {
-	if cfg, err := Load(); err == nil && cfg != nil {
-		return cfg.ActiveProfile()
-	}
-	return (&Config{}).ActiveProfile()
+	return EnvFilePath(GetMagicHome(), DefaultProfileName)
 }
 
 // EnvVarSource 说明一个环境变量的来源，用于面板区分
