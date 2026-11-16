@@ -2016,8 +2016,6 @@ export default {
     requireApproval: '每次调用都需人工确认',
     lazyToggle: '懒连接（首次调用时才连接）',
     lazyHint: '启动时不连接，只用上次缓存的工具清单；模型第一次调用时才真正建连。适合连接器多、或某个 server 启动很慢的场景。',
-    profilesPlaceholder: '仅在指定人设生效，例如 work, home（留空 = 所有人设）',
-    profilesHint: '留空表示在所有人设里都可用。',
     stateUnauthorized: '需要凭据',
     stateDisabled: '已关闭自动连接',
     connNoDesc: '未提供描述',

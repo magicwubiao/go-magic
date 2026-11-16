@@ -14,7 +14,7 @@ func TestSyncToRegistryRaw(t *testing.T) {
 	conn.Raw = true
 	mgr := cliconn.New(map[string]cliconn.Connector{"gh": conn})
 
-	if n := SyncToRegistry(mgr, reg, ""); n != 2 {
+	if n := SyncToRegistry(mgr, reg); n != 2 {
 		t.Fatalf("registered %d tools, want 2 (declared + raw)", n)
 	}
 	if !reg.HasTool("cli_gh_pr_list") {
@@ -27,7 +27,7 @@ func TestSyncToRegistryRaw(t *testing.T) {
 	// 关掉 raw 再同步：raw 工具必须被整体清理掉（SyncToRegistry 先清全部 cli_*）
 	conn.Raw = false
 	mgr = cliconn.New(map[string]cliconn.Connector{"gh": conn})
-	if n := SyncToRegistry(mgr, reg, ""); n != 1 {
+	if n := SyncToRegistry(mgr, reg); n != 1 {
 		t.Fatalf("registered %d tools, want 1", n)
 	}
 	if reg.HasTool("cli_gh_raw") {

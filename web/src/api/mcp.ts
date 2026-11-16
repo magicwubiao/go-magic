@@ -28,8 +28,6 @@ export interface MCPServer {
   protocol?: string
   /** 启动时是否自动连接 */
   enabled?: boolean
-  /** 限定生效的人设；空 = 所有人设 */
-  profiles?: string[]
   /** 被屏蔽的工具（不注册给模型） */
   disabled_tools?: string[]
   require_approval?: boolean
@@ -54,7 +52,6 @@ export interface MCPConfig {
   transport: string
   url?: string
   enabled?: boolean
-  profiles?: string[]
   disabled_tools?: string[]
   require_approval?: boolean
   lazy?: boolean
@@ -329,7 +326,6 @@ export function serverConfigToJSON(server: MCPServer): string {
   if (server.env && Object.keys(server.env).length) entry.env = server.env
   if (server.headers && Object.keys(server.headers).length) entry.headers = server.headers
   if (server.disabled_tools?.length) entry.disabled_tools = server.disabled_tools
-  if (server.profiles?.length) entry.profiles = server.profiles
   if (server.require_approval) entry.require_approval = true
   if (server.lazy) entry.lazy = true
   if (server.oauth) entry.oauth = server.oauth

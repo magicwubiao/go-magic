@@ -29,12 +29,12 @@ import (
 
 // bridgeConfiguredCLITools 把 config 里配置的 CLI 连接器注册进工具表，
 // 返回注册成功的工具数。与 web server 走同一条 cliconnbridge.BuildAndSync，
-// 避免两个入口的过滤规则（enabled / profiles）出现分叉。
+// 避免两个入口的过滤规则（enabled）出现分叉。
 func bridgeConfiguredCLITools(reg *tool.Registry, cfg *config.Config) int {
 	if reg == nil || cfg == nil || cfg.Cli == nil || len(cfg.Cli.Connectors) == 0 {
 		return 0
 	}
-	_, count := cliconnbridge.BuildAndSync(cfg.Cli.Connectors, reg, "", &cfg.Policy)
+	_, count := cliconnbridge.BuildAndSync(cfg.Cli.Connectors, reg, &cfg.Policy)
 	return count
 }
 

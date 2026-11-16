@@ -77,8 +77,6 @@ type Connector struct {
 	// Enabled 控制该连接器是否注册工具。nil = true（老配置没有该字段，
 	// 语义必须是"照旧生效"）。
 	Enabled *bool `json:"enabled,omitempty"`
-	// Profiles 限定只在指定分身里生效；空 = 所有分身。
-	Profiles []string `json:"profiles,omitempty"`
 	// RequireApproval 强制该连接器下每个工具都走人工确认。
 	// nil = 按工具自己的 read_only 决定（read_only 才免确认）。
 	RequireApproval *bool `json:"require_approval,omitempty"`
@@ -248,19 +246,6 @@ type ParamSpec struct {
 
 // AutoConnect 报告该连接器是否应该注册工具。
 func (c Connector) AutoConnect() bool { return c.Enabled == nil || *c.Enabled }
-
-// AppliesToProfile 报告该连接器是否在给定分身里生效。
-func (c Connector) AppliesToProfile(profile string) bool {
-	if len(c.Profiles) == 0 {
-		return true
-	}
-	for _, p := range c.Profiles {
-		if strings.EqualFold(strings.TrimSpace(p), strings.TrimSpace(profile)) {
-			return true
-		}
-	}
-	return false
-}
 
 // ApprovalRequired 判定某个工具是否需要人工确认。
 //

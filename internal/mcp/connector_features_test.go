@@ -181,23 +181,13 @@ func TestMCPToolRequiresApproval(t *testing.T) {
 	}
 }
 
-func TestServerConfigProfileAndAutoConnect(t *testing.T) {
+func TestServerConfigAutoConnect(t *testing.T) {
 	off := false
 	if (ServerConfig{}).AutoConnect() != true {
 		t.Error("zero value must auto-connect (backwards compatible with old configs)")
 	}
 	if (ServerConfig{Enabled: &off}).AutoConnect() {
 		t.Error("enabled:false must not auto-connect")
-	}
-
-	if !(ServerConfig{}).AppliesToProfile("work") {
-		t.Error("empty Profiles means every profile")
-	}
-	if (ServerConfig{Profiles: []string{"home"}}).AppliesToProfile("work") {
-		t.Error("connector scoped to home must not apply to work")
-	}
-	if !(ServerConfig{Profiles: []string{"Home"}}).AppliesToProfile("home") {
-		t.Error("profile matching must be case-insensitive")
 	}
 }
 
@@ -207,7 +197,6 @@ func TestParseServersJSONHeaders(t *testing.T) {
 		"url": "https://example.com/mcp",
 		"headers": {"Authorization": "Bearer x", "X-Api-Key": "k"},
 		"disabled_tools": ["a", "b"],
-		"profiles": ["work"],
 		"require_approval": true
 	}}}`
 	got, err := ParseServersJSON([]byte(raw))
@@ -223,9 +212,6 @@ func TestParseServersJSONHeaders(t *testing.T) {
 	}
 	if len(cfg.DisabledTools) != 2 || cfg.DisabledTools[0] != "a" {
 		t.Errorf("disabled_tools not parsed: %+v", cfg.DisabledTools)
-	}
-	if len(cfg.Profiles) != 1 || cfg.Profiles[0] != "work" {
-		t.Errorf("profiles not parsed: %+v", cfg.Profiles)
 	}
 	if !cfg.RequireApproval {
 		t.Error("require_approval not parsed")

@@ -76,7 +76,6 @@ type mcpServerView struct {
 	// Enabled 表示启动时是否自动连接；nil 在 JSON 里序列化为 true 的等价物
 	// （视图层总是给出明确布尔值）。
 	Enabled         bool     `json:"enabled"`
-	Profiles        []string `json:"profiles,omitempty"`
 	DisabledTools   []string `json:"disabled_tools,omitempty"`
 	RequireApproval bool     `json:"require_approval,omitempty"`
 	// Lazy 表示启动时不连接、首次调用才建连（工具清单来自缓存）。
@@ -592,7 +591,6 @@ func (s *Server) listMCPServers() []mcpServerView {
 			Headers:         maskServerHeaders(cfg.Headers),
 			URL:             cfg.URL,
 			Enabled:         cfg.AutoConnect(),
-			Profiles:        cfg.Profiles,
 			DisabledTools:   cfg.DisabledTools,
 			RequireApproval: cfg.RequireApproval,
 			Lazy:            cfg.Lazy,

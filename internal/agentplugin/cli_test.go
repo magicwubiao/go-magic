@@ -210,14 +210,13 @@ func demoConnector(t *testing.T) cliconn.Connector {
 	return cliconn.Connector{}
 }
 
-// 插件 cli.json 与全局连接器必须共用同一套"生效规则"：enabled=false 与
-// profiles 在插件侧曾经被完全忽略（配置通过校验、保存成功、工具照样注册）。
-func TestPluginCLIConnectorHonorsEnabledAndProfiles(t *testing.T) {
+// 插件 cli.json 与全局连接器必须共用同一套"生效规则"：enabled=false 在插件侧
+// 曾经被完全忽略（配置通过校验、保存成功、工具照样注册）。
+func TestPluginCLIConnectorHonorsEnabled(t *testing.T) {
 	const cliJSON = `{
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "connectors": {
     "off": {"command": "git", "enabled": false, "tools": [{"name": "s", "description": "s", "args": ["status"]}]},
-    "workonly": {"command": "git", "profiles": ["work"], "tools": [{"name": "w", "description": "w", "args": ["status"]}]},
     "always": {"command": "git", "tools": [{"name": "a", "description": "a", "args": ["status"]}]}
   }
 }`
@@ -226,25 +225,15 @@ func TestPluginCLIConnectorHonorsEnabledAndProfiles(t *testing.T) {
 	p := Load(dir, filepath.Join(dir, "data"))
 	plugins := map[string]*ManagedPlugin{"demo": {Plugin: p}}
 
-	home := tool.NewRegistry()
-	RegisterCLIToolsWithOptions(plugins, home, CLIRegisterOptions{Profile: "home"})
-	defer UnregisterCLITools(plugins, home)
+	reg := tool.NewRegistry()
+	RegisterCLIToolsWithOptions(plugins, reg, CLIRegisterOptions{})
+	defer UnregisterCLITools(plugins, reg)
 
-	for _, name := range []string{"ap_demo_cli_off_s", "ap_demo_cli_workonly_w"} {
-		if _, err := home.Get(name); err == nil {
-			t.Fatalf("%q must not register when disabled or outside its profile", name)
-		}
+	if _, err := reg.Get("ap_demo_cli_off_s"); err == nil {
+		t.Fatal("disabled connector must not register")
 	}
-	if _, err := home.Get("ap_demo_cli_always_a"); err != nil {
-		t.Fatalf("unrestricted connector should register: %v", err)
-	}
-
-	// 同一份定义在它声明的分身里必须生效（否则 profiles 成了"永久禁用"）。
-	work := tool.NewRegistry()
-	RegisterCLIToolsWithOptions(plugins, work, CLIRegisterOptions{Profile: "work"})
-	defer UnregisterCLITools(plugins, work)
-	if _, err := work.Get("ap_demo_cli_workonly_w"); err != nil {
-		t.Fatalf("profile-scoped connector should register in its profile: %v", err)
+	if _, err := reg.Get("ap_demo_cli_always_a"); err != nil {
+		t.Fatalf("enabled connector should register: %v", err)
 	}
 }
 

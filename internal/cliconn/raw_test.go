@@ -162,7 +162,7 @@ func TestRawConnectorNeedsNoDeclaredTools(t *testing.T) {
 	}
 
 	m := New(map[string]Connector{"gh": conn})
-	tools := m.ToolsForProfile("")
+	tools := m.ToolsForRegistration()
 	if len(tools) != 1 || tools[0].Name() != "cli_gh_raw" {
 		t.Fatalf("raw-only connector should register exactly cli_gh_raw, got %v", tools)
 	}

@@ -199,10 +199,6 @@ type ServerConfig struct {
 	// server 会把整轮启动拖到超时。代价是首次调用会多一次握手的延迟。
 	Lazy bool `json:"lazy,omitempty"`
 
-	// Profiles 限定该连接器只在指定分身里生效；空 = 所有分身。切换分身
-	// 需要重启本来就是既有约定，因此这里只需在启动连接时过滤。
-	Profiles []string `json:"profiles,omitempty"`
-
 	// RequireApproval 强制该 server 的每次工具调用都走人工确认。
 	// 给没写 tool annotations 的 server 兜底——annotations 是可选字段，
 	// 不写就无从判断危险程度，只能由用户显式声明。
@@ -217,19 +213,6 @@ type ServerConfig struct {
 // AutoConnect 报告该连接器是否应在启动时自动连接。
 func (c ServerConfig) AutoConnect() bool {
 	return c.Enabled == nil || *c.Enabled
-}
-
-// AppliesToProfile 报告该连接器是否在给定分身里生效。
-func (c ServerConfig) AppliesToProfile(profile string) bool {
-	if len(c.Profiles) == 0 {
-		return true
-	}
-	for _, p := range c.Profiles {
-		if strings.EqualFold(strings.TrimSpace(p), strings.TrimSpace(profile)) {
-			return true
-		}
-	}
-	return false
 }
 
 // Transport interface for MCP transport layers

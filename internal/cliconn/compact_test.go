@@ -41,7 +41,7 @@ func TestCompactToolsCollapseIntoOne(t *testing.T) {
 	}
 
 	m := New(map[string]Connector{"gh": conn})
-	tools := m.ToolsForProfile("")
+	tools := m.ToolsForRegistration()
 	if len(tools) != 1 {
 		names := make([]string, 0, len(tools))
 		for _, tl := range tools {
@@ -55,7 +55,7 @@ func TestCompactToolsCollapseIntoOne(t *testing.T) {
 
 	// 非紧凑模式仍然逐条展开，证明这只是 opt-in。
 	plain := New(map[string]Connector{"gh": compactFixture()})
-	if got := len(plain.ToolsForProfile("")); got != 2 {
+	if got := len(plain.ToolsForRegistration()); got != 2 {
 		t.Fatalf("non-compact connector should register 2 tools, got %d", got)
 	}
 }

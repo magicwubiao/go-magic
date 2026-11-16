@@ -40,7 +40,7 @@ func (s *Server) applyCLIConnectors() {
 	// 策略在持锁前取：cfgSnapshot 走 cfgMu，持 s.mu 再进它是反序。
 	pol := s.policySnapshot()
 	s.acquireServerMu("applyCLIConnectors")
-	_, count := cliconnbridge.BuildAndSync(defs, s.toolReg, s.activeProfile(), pol)
+	_, count := cliconnbridge.BuildAndSync(defs, s.toolReg, pol)
 	s.releaseServerMu()
 
 	log.Infof("[CLI] connectors synced: %d connectors, %d tools", len(defs), count)

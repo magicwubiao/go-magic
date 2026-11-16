@@ -318,12 +318,11 @@ func normalizeServerConfig(name string, raw interface{}) (ServerConfig, bool, er
 		cfg.Headers = EnvSliceToMap(headers)
 	}
 
-	// disabled_tools / profiles：本项目扩展字段，外部配置里通常没有。
+	// disabled_tools / require_approval / lazy / enabled：本项目扩展字段，
+	// 外部配置里通常没有。profiles 已移除（人设只是内容模板，不再限定连接器）；
+	// 老配置里的该字段会被 encoding/json 当未知键忽略。
 	if v, ok := m["disabled_tools"].([]interface{}); ok {
 		cfg.DisabledTools, _ = toStringSlice(v)
-	}
-	if v, ok := m["profiles"].([]interface{}); ok {
-		cfg.Profiles, _ = toStringSlice(v)
 	}
 	if v, ok := m["require_approval"].(bool); ok {
 		cfg.RequireApproval = v

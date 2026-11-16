@@ -506,22 +506,14 @@ func TestToolMetadataAndApproval(t *testing.T) {
 func TestManagerFiltersAndUpsert(t *testing.T) {
 	off := false
 	m := New(map[string]Connector{
-		"gh": {Command: "gh", Tools: []ToolSpec{{Name: "a", Description: "d", Args: []string{"a"}}}},
-		"kubectl": {
-			Command:  "kubectl",
-			Profiles: []string{"work"},
-			Tools:    []ToolSpec{{Name: "b", Description: "d", Args: []string{"b"}}},
-		},
-		"old": {Command: "x", Enabled: &off, Tools: []ToolSpec{{Name: "c", Description: "d", Args: []string{"c"}}}},
+		"gh":      {Command: "gh", Tools: []ToolSpec{{Name: "a", Description: "d", Args: []string{"a"}}}},
+		"kubectl": {Command: "kubectl", Tools: []ToolSpec{{Name: "b", Description: "d", Args: []string{"b"}}}},
+		"old":     {Command: "x", Enabled: &off, Tools: []ToolSpec{{Name: "c", Description: "d", Args: []string{"c"}}}},
 	})
 
-	got := m.ToolsForProfile("home")
-	if len(got) != 1 || got[0].Name() != "cli_gh_a" {
-		t.Fatalf("home tools = %v", names(got))
-	}
-	got = m.ToolsForProfile("work")
-	if len(got) != 2 {
-		t.Fatalf("work tools = %v", names(got))
+	got := m.ToolsForRegistration()
+	if len(got) != 2 || got[0].Name() != "cli_gh_a" || got[1].Name() != "cli_kubectl_b" {
+		t.Fatalf("tools = %v", names(got))
 	}
 
 	if err := m.Upsert("bad", Connector{}); err == nil {

@@ -20,23 +20,21 @@ import (
 // "先 New 再 Sync"的顺序，也不会出现某个入口忘了同步的情况——CLI 连接器
 // 曾经只接在 web server 里，`magic` 启动的会话看不到任何 cli_* 工具。
 //
-// profile 用于过滤 profiles 限定的连接器（空串 = 不过滤）。
 // pol 是准入白名单（nil = 不限制）；策略在这里就生效，被拒的连接器不会注册出工具。
 // 返回新 Manager（没有子进程需要清理，仅用于查询定义与工具名）与注册的工具数。
-func BuildAndSync(defs map[string]cliconn.Connector, reg *tool.Registry, profile string, pol *policy.Policy) (*cliconn.Manager, int) {
+func BuildAndSync(defs map[string]cliconn.Connector, reg *tool.Registry, pol *policy.Policy) (*cliconn.Manager, int) {
 	mgr := cliconn.New(defs)
 	mgr.SetSecurityCheck(func(name string, c cliconn.Connector) error {
 		return pol.CheckCLI(name, c.Command)
 	})
-	return mgr, SyncToRegistry(mgr, reg, profile)
+	return mgr, SyncToRegistry(mgr, reg)
 }
 
 // SyncToRegistry 让注册表与 CLI 连接器定义保持一致：先清掉全部 cli_* 工具，
 // 再按当前定义重新注册。幂等，可反复调用。
 //
-// profile 用于过滤 profiles 限定的连接器（空串 = 不过滤）。
 // 返回注册的工具数。
-func SyncToRegistry(mgr *cliconn.Manager, reg *tool.Registry, profile string) int {
+func SyncToRegistry(mgr *cliconn.Manager, reg *tool.Registry) int {
 	if mgr == nil || reg == nil {
 		return 0
 	}
@@ -50,7 +48,7 @@ func SyncToRegistry(mgr *cliconn.Manager, reg *tool.Registry, profile string) in
 	}
 
 	count := 0
-	for _, t := range mgr.ToolsForProfile(profile) {
+	for _, t := range mgr.ToolsForRegistration() {
 		reg.Register(t)
 		// 按工具设置超时：注册表没有条目时执行器会套默认的 60s，
 		// 连接器里配的 timeout_seconds 就白写了（构建/同步类命令常超过 60s）。

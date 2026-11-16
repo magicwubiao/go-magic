@@ -1133,10 +1133,11 @@ magic mcp add github --transport http --url https://api.githubcopilot.com/mcp/ \
 | `headers` | 远程传输的自定义请求头（`Authorization` / `X-API-Key` 等）。API 返回值一律掩码为 `***`，表单回传掩码时保留磁盘真值。 |
 | `disabled_tools` | 屏蔽该 server 下的指定工具：不注册进工具表，模型完全看不到。 |
 | `enabled` | `false` = 启动时不自动连接（配置保留，可在页面手动连）。缺省视为 `true`。 |
-| `profiles` | 只在列出的人设里生效；留空 = 全部生效。 |
 | `require_approval` | 每次工具调用都要人工确认。用于没写 tool annotations 的 server。 |
 | `lazy` | 启动时不连接，只用上次缓存的工具清单注册影子工具，首次调用才建连（见下）。 |
 | `oauth` | 启用 OAuth 2.1 授权（见下节）。`true` 或 `{}` = 纯自动；也可带 `client_id` / `client_secret` / `scopes`。 |
+
+`profiles` 字段已移除：人设只是内容模板，不再用来限定连接器。旧配置里保留该键会被忽略，不会报错。
 
 #### 凭据用引用，不写值
 
@@ -1452,7 +1453,7 @@ cli_gh_call({"tool": "pr_list", "params": {"repo": "owner/name", "limit": 20}})
 }
 ```
 
-**插件里的 CLI 与全局连接器共用同一套生效规则**：`enabled`、`profiles`、`compact_tools`、`raw`、`timeout_seconds`、`max_output_bytes` 语义完全一致（工具清单由 `cliconn.ToolsForConnector` 统一展开，插件侧不再自己遍历 `tools`，所以 compact 在两边同时生效）。差异只有三处，且都是刻意的：工具名带 `ap_<plugin>_cli_` 前缀，避免与全局同名连接器撞名；`read_only` 不被信任——插件注册的所有 CLI 工具（含 `raw` 与 compact 调度工具）逐次审批；凭据来自插件凭据弹窗存下的 `agent_plugins.credentials`，而不是 `${ENV}` 引用。
+**插件里的 CLI 与全局连接器共用同一套生效规则**：`enabled`、`compact_tools`、`raw`、`timeout_seconds`、`max_output_bytes` 语义完全一致（工具清单由 `cliconn.ToolsForConnector` 统一展开，插件侧不再自己遍历 `tools`，所以 compact 在两边同时生效）。差异只有三处，且都是刻意的：工具名带 `ap_<plugin>_cli_` 前缀，避免与全局同名连接器撞名；`read_only` 不被信任——插件注册的所有 CLI 工具（含 `raw` 与 compact 调度工具）逐次审批；凭据来自插件凭据弹窗存下的 `agent_plugins.credentials`，而不是 `${ENV}` 引用。
 
 ```bash
 magic plugin list                      # 名称/版本/状态/技能数/MCP/CLI

@@ -313,7 +313,7 @@ func (m *Manager) Blocked() map[string]string {
 
 // RegisteredTool 是 Tool 与 RawTool 枚举时的公共视图：注册方（bridge）只需
 // 名字（注册/超时/注销）与 tool.Tool 隐式满足的四个执行方法。显式定义成
-// 接口而不是让 ToolsForProfile 返回 any 切片，是为了让"少了方法"在编译期
+// 接口而不是让 ToolsForRegistration 返回 any 切片，是为了让"少了方法"在编译期
 // 而不是运行时暴露。
 type RegisteredTool interface {
 	Name() string
@@ -325,15 +325,15 @@ type RegisteredTool interface {
 
 // ToolsForConnector 枚举单个连接器会产出哪些工具（含 compact / raw 展开）。
 //
-// 这是"一个连接器产出哪些工具"的唯一实现，三处消费者共用：Manager.ToolsForProfile
+// 这是"一个连接器产出哪些工具"的唯一实现，三处消费者共用：Manager.ToolsForRegistration
 // （web / chat / gateway 的全局连接器）、agentplugin.RegisterCLIToolsWithOptions
 // （插件的 cli.json 组件）、插件详情页的工具清单。此前是三份各自维护的循环，
 // 插件那份漏了 compact，于是 cli.json 里 `"compact_tools": true` 属于
 // "校验通过、保存成功、却不生效"——比拒绝保存更难排查。
 //
-// 刻意不在这里判 enabled / profiles：那是"这个连接器要不要生效"的策略，
-// 调用方各有额外动作（Manager 要记录被策略拦下的原因，插件侧要把拒绝写回
-// 条目状态）。调用方在遍历前各自判一次 AutoConnect / AppliesToProfile。
+// 刻意不在这里判 enabled：那是"这个连接器要不要生效"的策略，调用方各有
+// 额外动作（Manager 要记录被策略拦下的原因，插件侧要把拒绝写回条目状态）。
+// 调用方在遍历前各自判一次 AutoConnect。
 func ToolsForConnector(connector string, c Connector) []RegisteredTool {
 	var out []RegisteredTool
 	if c.Compact {
@@ -354,8 +354,9 @@ func ToolsForConnector(connector string, c Connector) []RegisteredTool {
 	return out
 }
 
-// ToolsForProfile 枚举在给定分身下应当注册的全部工具（已按 enabled / profiles 过滤）。
-func (m *Manager) ToolsForProfile(profile string) []RegisteredTool {
+// ToolsForRegistration 枚举应当注册进工具表的全部工具（已按 enabled 过滤；
+// 被准入策略拒绝的记入 blocked，供页面展示原因）。
+func (m *Manager) ToolsForRegistration() []RegisteredTool {
 	if m == nil {
 		return nil
 	}
@@ -366,7 +367,7 @@ func (m *Manager) ToolsForProfile(profile string) []RegisteredTool {
 	blocked := make(map[string]string)
 	for _, name := range sortedKeys(m.connectors) {
 		c := m.connectors[name]
-		if !c.AutoConnect() || !c.AppliesToProfile(profile) {
+		if !c.AutoConnect() {
 			continue
 		}
 		if m.check != nil {

@@ -323,12 +323,6 @@
                   <n-text style="font-size: 13px;">{{ t('mcp.lazyToggle') }}</n-text>
                 </n-space>
                 <n-text depth="3" style="font-size: 12px;">{{ t('mcp.lazyHint') }}</n-text>
-                <n-input
-                  v-model:value="formData.profilesStr"
-                  size="small"
-                  :placeholder="t('mcp.profilesPlaceholder')"
-                />
-                <n-text depth="3" style="font-size: 12px;">{{ t('mcp.profilesHint') }}</n-text>
 
                 <n-space align="center" size="small">
                   <n-switch
@@ -458,8 +452,6 @@ const formData = reactive({
   envStr: '',
   /** 请求头，一行一个 KEY=value。远程连接器的认证全靠它。 */
   headersStr: '',
-  /** 限定生效的人设，逗号分隔；空 = 所有人设 */
-  profilesStr: '',
   /** 每次调用都要人工确认（给没写 annotations 的 server 兜底） */
   requireApproval: false,
   /** 启动时自动连接 */
@@ -1193,7 +1185,6 @@ function resetForm() {
     url: '',
     envStr: '',
     headersStr: '',
-    profilesStr: '',
     requireApproval: false,
     autoConnect: true,
     lazy: false,
@@ -1224,7 +1215,6 @@ function openEditModal(row: MCPServer) {
     // env / headers 的值是 *** 掩码，原样回传时由后端还原成磁盘上的真值
     envStr: kvToLines(row.env),
     headersStr: kvToLines(row.headers),
-    profilesStr: (row.profiles || []).join(', '),
     requireApproval: !!row.require_approval,
     autoConnect: row.enabled !== false,
     lazy: !!row.lazy,
@@ -1293,11 +1283,6 @@ async function doSave() {
     return
   }
 
-  const profiles = formData.profilesStr
-    .split(',')
-    .map(p => p.trim())
-    .filter(Boolean)
-
   const config: MCPConfig = {
     command: formData.transport === 'stdio' ? formData.command : '',
     args: formData.transport === 'stdio' ? formData.argsStr.split(/\s+/).filter(Boolean) : [],
@@ -1306,7 +1291,6 @@ async function doSave() {
     env: formData.transport === 'stdio' ? formData.envStr.split('\n').filter(Boolean) : undefined,
     headers: isRemote.value ? linesToKV(formData.headersStr) : undefined,
     enabled: formData.autoConnect,
-    profiles: profiles.length ? profiles : undefined,
     require_approval: formData.requireApproval || undefined,
     lazy: formData.lazy || undefined,
     oauth: buildOAuthConfig(),

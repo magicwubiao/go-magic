@@ -27,7 +27,7 @@ func TestSecurityCheckFiltersTools(t *testing.T) {
 		return nil
 	})
 
-	tools := m.ToolsForProfile("")
+	tools := m.ToolsForRegistration()
 	if len(tools) != 1 {
 		t.Fatalf("want 1 allowed tool, got %d", len(tools))
 	}
@@ -49,7 +49,7 @@ func TestNoSecurityCheckAllowsAll(t *testing.T) {
 	m := New(map[string]Connector{
 		"gh": {Command: "gh", Tools: []ToolSpec{{Name: "x", Description: "x", Args: []string{"version"}}}},
 	})
-	if len(m.ToolsForProfile("")) != 1 {
+	if len(m.ToolsForRegistration()) != 1 {
 		t.Fatal("nil check must not filter anything")
 	}
 	if len(m.Blocked()) != 0 {

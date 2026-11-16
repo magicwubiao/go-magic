@@ -257,11 +257,6 @@ type CLIRegisterOptions struct {
 	// 而 policy 开篇就把"装插件"列为威胁模型。返回错误时该连接器整体
 	// 不注册，并把它记进条目状态（UI 能看见，不是凭空消失）。
 	AllowCommand func(connectorName, command string) error
-	// Profile 是当前分身名，用于过滤声明了 profiles 的连接器（空串 = 不过滤）。
-	//
-	// 与全局连接器同一语义：团队把插件连同 cli.json 一起分发时，
-	// "这条命令只在某个分身里生效"是合理需求。
-	Profile string
 }
 
 // RegisterCLITools 把插件声明的 CLI 工具注册到注册表（跳过被禁用的插件与校验失败的条目）。
@@ -311,10 +306,10 @@ func RegisterCLIToolsWithOptions(plugins map[string]*ManagedPlugin, reg ToolRegi
 					continue
 				}
 			}
-			// 与全局连接器同一套生效规则：enabled=false、或不在当前分身里，就整体
-			// 跳过。此前这里直接遍历 conn.Tools，导致这两个字段在 cli.json 里
-			// "能写、能通过校验、但不生效"，与 compact 是同一类静默失效。
-			if !st.Connector.AutoConnect() || !st.Connector.AppliesToProfile(opts.Profile) {
+			// 与全局连接器同一套生效规则：enabled=false 就整体跳过。此前这里直接
+			// 遍历 conn.Tools，导致 enabled 在 cli.json 里"能写、能通过校验、但不
+			// 生效"，与 compact 是同一类静默失效。
+			if !st.Connector.AutoConnect() {
 				continue
 			}
 			conn := withCLICredentials(st.Connector, pluginCreds)

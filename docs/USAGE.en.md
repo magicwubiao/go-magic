@@ -526,7 +526,7 @@ Launch: `magic server` (default `http://localhost:5000`). On first visit it walk
 | `/bots` | Bots | bot profile management |
 | `/logs` | Logs | live logs |
 | `/system` | System | system info and health checks |
-| `/profiles` | Persona Presets | persona/profile templates, apply with one click |
+| `/profiles` | Personas | persona templates, apply with one click |
 | `/goals` | Goals | goal decomposition and tracking |
 | `/approval` | Approval | approve high-risk tool calls |
 | `/files` | Files | browse / upload / download / archive online |
@@ -1152,10 +1152,11 @@ Optional per-connector fields:
 | `headers` | Custom request headers for remote transports (`Authorization`, `X-API-Key`, …). Masked as `***` in API responses; posting `***` back keeps the stored value. |
 | `disabled_tools` | Hide specific tools from the registry so the model never sees them. |
 | `enabled` | `false` = do not auto-connect on startup (config is kept). Defaults to `true`. |
-| `profiles` | Only active in the listed profiles; empty = all profiles. |
 | `require_approval` | Require confirmation for every tool call (for servers without tool annotations). |
 | `lazy` | Do not connect at startup; register tools from the last cached list and connect on first call (see below). |
 | `oauth` | Enable OAuth 2.1 authorization (see below). `true` or `{}` = fully automatic; or pass `client_id` / `client_secret` / `scopes`. |
+
+The `profiles` field has been removed: a persona is only a content template and no longer scopes connectors. The key is ignored if present in an old config.
 
 #### Reference credentials instead of writing them
 
@@ -1481,7 +1482,7 @@ A plugin is not a new runtime concept: a plugin is a **directory** holding skill
 }
 ```
 
-**Plugin CLI connectors follow the same activation rules as global ones**: `enabled`, `profiles`, `compact_tools`, `raw`, `timeout_seconds` and `max_output_bytes` behave identically (the tool list is expanded by `cliconn.ToolsForConnector`, so both paths honour `compact_tools`). Only three differences remain, all deliberate: tool names carry the `ap_<plugin>_cli_` prefix so they cannot collide with a global connector of the same name; `read_only` is not trusted — every plugin CLI tool (including `raw` and the compact dispatcher) asks for confirmation on each call; and credentials come from `agent_plugins.credentials` (collected by the plugin's credential dialog) rather than `${ENV}` references.
+**Plugin CLI connectors follow the same activation rules as global ones**: `enabled`, `compact_tools`, `raw`, `timeout_seconds` and `max_output_bytes` behave identically (the tool list is expanded by `cliconn.ToolsForConnector`, so both paths honour `compact_tools`). Only three differences remain, all deliberate: tool names carry the `ap_<plugin>_cli_` prefix so they cannot collide with a global connector of the same name; `read_only` is not trusted — every plugin CLI tool (including `raw` and the compact dispatcher) asks for confirmation on each call; and credentials come from `agent_plugins.credentials` (collected by the plugin's credential dialog) rather than `${ENV}` references.
 
 ```bash
 magic plugin list                      # name/version/status/skills/mcp/cli

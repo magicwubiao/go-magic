@@ -2013,8 +2013,6 @@ export default {
     requireApproval: 'Ask for confirmation on every tool call',
     lazyToggle: 'Lazy connect (connect on first call)',
     lazyHint: 'Do not connect at startup; register tools from the last cached list and connect only when the model first calls one. Useful with many connectors or a slow server.',
-    profilesPlaceholder: 'Only in these personas, e.g. work, home (empty = all)',
-    profilesHint: 'Leave empty to make this connector available in every persona.',
     stateUnauthorized: 'Needs credentials',
     stateDisabled: 'Auto-connect off',
     connNoDesc: 'No description',

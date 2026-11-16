@@ -35,7 +35,7 @@ func TestSyncToRegistry(t *testing.T) {
 	reg.Register(stub{name: "cli_gone_old"}) // 上一次同步留下的僵尸工具
 
 	mgr := cliconn.New(map[string]cliconn.Connector{"gh": testConnector()})
-	if n := SyncToRegistry(mgr, reg, ""); n != 1 {
+	if n := SyncToRegistry(mgr, reg); n != 1 {
 		t.Fatalf("registered %d tools, want 1", n)
 	}
 	if !reg.HasTool("cli_gh_pr_list") {
@@ -49,7 +49,7 @@ func TestSyncToRegistry(t *testing.T) {
 	}
 
 	// 重复同步幂等
-	if n := SyncToRegistry(mgr, reg, ""); n != 1 {
+	if n := SyncToRegistry(mgr, reg); n != 1 {
 		t.Fatalf("second sync registered %d tools, want 1", n)
 	}
 	if reg.Count() != 2 {
@@ -64,7 +64,7 @@ func TestSyncAppliesConnectorTimeout(t *testing.T) {
 	conn := testConnector()
 	conn.TimeoutSeconds = 180
 	conn.Tools[0].TimeoutSeconds = 240
-	SyncToRegistry(cliconn.New(map[string]cliconn.Connector{"gh": conn}), reg, "")
+	SyncToRegistry(cliconn.New(map[string]cliconn.Connector{"gh": conn}), reg)
 
 	if got := reg.GetTimeout("cli_gh_pr_list"); got.Seconds() != 240 {
 		t.Fatalf("tool timeout = %v, want 240s (tool-level override)", got)
@@ -73,21 +73,20 @@ func TestSyncAppliesConnectorTimeout(t *testing.T) {
 	// 工具级留空 → 用连接器级
 	conn2 := testConnector()
 	conn2.TimeoutSeconds = 180
-	SyncToRegistry(cliconn.New(map[string]cliconn.Connector{"gh": conn2}), reg, "")
+	SyncToRegistry(cliconn.New(map[string]cliconn.Connector{"gh": conn2}), reg)
 	if got := reg.GetTimeout("cli_gh_pr_list"); got.Seconds() != 180 {
 		t.Fatalf("tool timeout = %v, want 180s (connector default)", got)
 	}
 }
 
-func TestSyncToRegistryDisabledAndProfile(t *testing.T) {
+func TestSyncToRegistrySkipsDisabled(t *testing.T) {
 	off := false
 	reg := tool.NewRegistry()
 	mgr := cliconn.New(map[string]cliconn.Connector{
 		"gh": testConnector(),
 		"kubectl": {
-			Command:  "kubectl",
-			Profiles: []string{"work"},
-			Tools:    []cliconn.ToolSpec{{Name: "get", Description: "get", Args: []string{"get"}}},
+			Command: "kubectl",
+			Tools:   []cliconn.ToolSpec{{Name: "get", Description: "get", Args: []string{"get"}}},
 		},
 		"off": {
 			Command: "x",
@@ -96,11 +95,8 @@ func TestSyncToRegistryDisabledAndProfile(t *testing.T) {
 		},
 	})
 
-	if n := SyncToRegistry(mgr, reg, "home"); n != 1 {
-		t.Fatalf("home profile registered %d tools, want 1", n)
-	}
-	if n := SyncToRegistry(mgr, reg, "work"); n != 2 {
-		t.Fatalf("work profile registered %d tools, want 2", n)
+	if n := SyncToRegistry(mgr, reg); n != 2 {
+		t.Fatalf("registered %d tools, want 2", n)
 	}
 	if reg.HasTool("cli_off_y") {
 		t.Fatal("disabled connector must not register tools")
@@ -113,7 +109,7 @@ func TestRemoveConnectorToolsDoesNotCrossMatch(t *testing.T) {
 		"gh":  testConnector(),
 		"ghx": {Command: "ghx", Tools: []cliconn.ToolSpec{{Name: "t", Description: "t", Args: []string{"t"}}}},
 	})
-	SyncToRegistry(mgr, reg, "")
+	SyncToRegistry(mgr, reg)
 
 	RemoveConnectorTools(reg, "gh")
 	if reg.HasTool("cli_gh_pr_list") {
@@ -126,10 +122,10 @@ func TestRemoveConnectorToolsDoesNotCrossMatch(t *testing.T) {
 
 func TestSyncHandlesNil(t *testing.T) {
 	reg := tool.NewRegistry()
-	if n := SyncToRegistry(nil, reg, ""); n != 0 {
+	if n := SyncToRegistry(nil, reg); n != 0 {
 		t.Fatalf("nil manager returned %d", n)
 	}
-	if n := SyncToRegistry(cliconn.New(nil), nil, ""); n != 0 {
+	if n := SyncToRegistry(cliconn.New(nil), nil); n != 0 {
 		t.Fatalf("nil registry returned %d", n)
 	}
 	RemoveConnectorTools(nil, "gh") // 不应 panic
