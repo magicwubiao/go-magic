@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/check-i18n.mjs && vite build",
+    "check:i18n": "node scripts/check-i18n.mjs",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit"
   },

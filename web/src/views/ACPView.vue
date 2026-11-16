@@ -117,11 +117,13 @@
       </n-empty>
     </template>
 
-    <!-- 编辑/新建弹窗 -->
+    <!-- 编辑/新建弹窗。字段多（命令/参数/描述/工作区/cwd/附加目录/env/超时/
+         三个开关/白名单），必须带 modal-scroll，否则卡片高度超出视口、底部的
+         保存按钮永远在屏幕外（naive-ui 的 card 自身不滚动）。 -->
     <n-modal
       v-model:show="showEditor"
       preset="card"
-      class="modal-responsive"
+      class="modal-responsive modal-scroll"
       style="width: 720px; max-width: 96vw;"
       :title="editingName ? t('acp.edit') : t('acp.add')"
     >

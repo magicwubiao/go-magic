@@ -43,6 +43,12 @@ const maxACPAgentBody = 1 << 20
 // acpMaskedEnvValue 是 env 值的掩码占位符；回传该值时沿用磁盘上的旧值。
 const acpMaskedEnvValue = "***"
 
+// acpConnectTimeout 是"建连类"请求（test / reset）的服务端上限。
+//
+// 45s 对 npx 首次安装适配器包太紧：冷启动要下载几十 MB 的包再起 node，
+// 慢网下经常 60s 以上。前端等 100s，这里留 10s 余量。
+const acpConnectTimeout = 90 * time.Second
+
 // acpConfigMu 串行化 acp.json 的读-改-写。
 //
 // 不串行化就会丢改动：两个并发请求各自读到同一份旧配置，后写的把先写的抹掉
@@ -210,7 +216,13 @@ func (s *Server) handleACPAgentByID(w http.ResponseWriter, r *http.Request) {
 			delete(cfg.Agents, name)
 			return nil
 		}); err != nil {
-			jsonError(w, http.StatusNotFound, err.Error())
+			// 只有"确实没有这个 agent"才是 404；读盘/写盘失败是 500，
+			// 否则用户会以为配置不存在而去重建一个。
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			jsonError(w, status, err.Error())
 			return
 		}
 		s.acpManager().DropAgent(name)
@@ -282,7 +294,7 @@ func (s *Server) handleACPAgentUpdate(w http.ResponseWriter, r *http.Request, na
 func (s *Server) handleACPAgentTest(w http.ResponseWriter, r *http.Request, name string) {
 	mgr := s.acpManager()
 
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), acpConnectTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -328,7 +340,7 @@ func (s *Server) handleACPAgentTest(w http.ResponseWriter, r *http.Request, name
 }
 
 func (s *Server) handleACPAgentReset(w http.ResponseWriter, r *http.Request, name string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), acpConnectTimeout)
 	defer cancel()
 
 	if err := s.acpManager().ResetSession(ctx, name); err != nil {

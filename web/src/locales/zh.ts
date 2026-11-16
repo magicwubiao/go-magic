@@ -1469,11 +1469,13 @@ export default {
     host: '主持人',
     hostPlaceholder: '选择一位成员负责开场与控场（可选）',
     autoRoute: '自动分配开场发言',
-    autoRouteHint: '用户没指定 @某人 时，按标题/描述匹配度挑最合适的成员先发言；所有人仍会依次发言。',
+    // 指令名靠插值传入：文案里直接写 @xxx 会被 vue-i18n 当链接语法编译失败。
+    mentionSomeone: '某人',
+    autoRouteHint: '用户没直接点名（{mention}）时，按标题/描述匹配度挑最合适的成员先发言；所有人仍会依次发言。',
     notes: '群共享笔记',
     notesTitle: '群共享笔记 · {name}',
     notesPlaceholder: '写下这个群聊的共识、约定与待办：所有成员每轮都会读到，不随时间线裁剪。',
-    notesHint: '成员也可以在回复里用 @note 追加一条，这里可以随时修订。',
+    notesHint: '成员也可以在回复里用 {cmd} 追加一条，这里可以随时修订。',
     notesSaved: '笔记已保存',
     schedules: '定时推送',
     schedulesTitle: '定时推送 · {name}',
@@ -1932,7 +1934,10 @@ export default {
     fieldName: '名称',
     nameHint: '用于工具参数与日志。改名等于换一个条目，原条目的连接会断开。',
     fieldCommand: '启动命令',
-    commandHint: 'PATH 里的名字或绝对路径，例如 npx（参数里放 -y @zed-industries/claude-code-acp）。',
+    // 注意：文案里不能出现以 @ 开头的包名（如 @zed-industries/xxx）。
+    // vue-i18n 会把 @ 当链接消息前缀（@:key / @.mod）解析，直接抛
+    // "Invalid linked format"，渲染期炸掉整个组件（表现为点按钮没弹窗）。
+    commandHint: 'PATH 里的名字或绝对路径，例如 npx；ACP 适配器包放进下面的参数里。',
     fieldArgs: '启动参数',
     argsHint: '一行一个参数，按 argv 原样传给子进程（不经过 shell）。',
     fieldDescription: '描述',

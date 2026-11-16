@@ -963,7 +963,7 @@
           <n-form-item :label="t('rooms.autoRoute')">
             <div class="switch-row">
               <n-switch v-model:value="roomForm.auto_route" />
-              <n-text depth="3" class="switch-hint">{{ t('rooms.autoRouteHint') }}</n-text>
+              <n-text depth="3" class="switch-hint">{{ t('rooms.autoRouteHint', { mention: '@' + t('rooms.mentionSomeone') }) }}</n-text>
             </div>
           </n-form-item>
           <n-grid :cols="2" :x-gap="12">
@@ -1011,7 +1011,7 @@
       </n-spin>
       <template #action>
         <div class="notes-actions">
-          <n-text depth="3" class="notes-hint">{{ t('rooms.notesHint') }}</n-text>
+          <n-text depth="3" class="notes-hint">{{ t('rooms.notesHint', { cmd: '@note' }) }}</n-text>
           <n-button type="primary" :loading="roomsStore.notesSaving" :disabled="roomsStore.notesLoading" @click="saveRoomNotes">
             {{ t('common.save') }}
           </n-button>

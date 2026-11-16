@@ -1465,11 +1465,14 @@ export default {
     host: 'Moderator',
     hostPlaceholder: 'Pick one member to open and steer the discussion (optional)',
     autoRoute: 'Auto-pick the opening speaker',
-    autoRouteHint: 'When nobody is @mentioned, the member whose title/description best matches speaks first. Everyone still gets a turn.',
+    // Command names come in as params: a literal @ in the message text makes
+    // vue-i18n treat it as linked-message syntax and fail to compile.
+    mentionSomeone: 'someone',
+    autoRouteHint: 'When nobody is mentioned directly ({mention}), the member whose title/description best matches speaks first. Everyone still gets a turn.',
     notes: 'Shared notes',
     notesTitle: 'Shared notes · {name}',
     notesPlaceholder: 'Decisions, conventions and follow-ups for this room. Every member reads them on every turn — they are never trimmed with the message log.',
-    notesHint: 'Members can also append with @note in a reply; edit freely here.',
+    notesHint: 'Members can also append with {cmd} in a reply; edit freely here.',
     notesSaved: 'Notes saved',
     schedules: 'Schedules',
     schedulesTitle: 'Scheduled pushes · {name}',
@@ -1928,7 +1931,9 @@ export default {
     fieldName: 'Name',
     nameHint: 'Used in tool arguments and logs. Renaming creates a different entry and drops the old connection.',
     fieldCommand: 'Command',
-    commandHint: 'A PATH name or an absolute path, e.g. npx (with -y @zed-industries/claude-code-acp in args).',
+    // Never put an @-prefixed package name here: vue-i18n parses "@..." as a
+    // linked-message prefix and throws "Invalid linked format" at render time.
+    commandHint: 'A PATH name or an absolute path, e.g. npx; put the ACP adapter package in args below.',
     fieldArgs: 'Arguments',
     argsHint: 'One argument per line, passed to the subprocess as argv (no shell involved).',
     fieldDescription: 'Description',

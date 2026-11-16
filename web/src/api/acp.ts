@@ -84,19 +84,20 @@ export async function deleteACPAgent(name: string): Promise<void> {
  * 建连并返回协商结果。
  *
  * 这里真的会拉子进程（initialize + session/new），冷启动常见几秒到几十秒
- * ——超时给到 60s，别用默认的 30s 把正常启动判成失败。
+ * ——npx 首次安装适配器包时更久，所以超时给到 100s（服务端上限 90s，
+ * 留 10s 给网络往返与 JSON 编码）。
  */
 export async function testACPAgent(name: string): Promise<ACPTestResult> {
   return request<ACPTestResult>(`/acp/agents/${encodeURIComponent(name)}/test`, {
     method: 'POST',
-    timeoutMs: 60000,
+    timeoutMs: 100000,
   })
 }
 
 export async function resetACPAgentSession(name: string): Promise<void> {
   return request<void>(`/acp/agents/${encodeURIComponent(name)}/reset`, {
     method: 'POST',
-    timeoutMs: 60000,
+    timeoutMs: 100000,
   })
 }
 
