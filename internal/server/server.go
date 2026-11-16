@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/magicwubiao/go-magic/internal/acp"
 	"github.com/magicwubiao/go-magic/internal/agent"
 	"github.com/magicwubiao/go-magic/internal/agentplugin"
 	"github.com/magicwubiao/go-magic/internal/approval"
@@ -99,6 +100,9 @@ type Server struct {
 	uploadsMeta *uploadsMetaStore
 	provider    provider.Provider
 	toolReg     *tool.Registry
+	// acpMgr 是 ACP 外部 agent 的连接管理器；nil = 进程级单例（acp.Default()）。
+	// 只在测试里注入，见 acp.go 的 acpManager()。
+	acpMgr *acp.Manager
 
 	// terminalMu/terminalSessions 保护右侧栏 Web 终端的持久状态
 	// （每个终端会话只记一个当前 cwd）。见 terminal.go。
@@ -1809,6 +1813,10 @@ func (s *Server) buildRouter() *http.ServeMux {
 	// login 命令（只接受目录 id）。
 	mux.HandleFunc("/api/cli/catalog/login", withCORS(requireAuth(s.handleCLILoginStart)))
 	mux.HandleFunc("/api/cli/catalog/login/", withCORS(requireAuth(s.handleCLILoginByID)))
+
+	// ACP 外部 agent（acp.json 的增删改 + 试用/重置；见 acp.go）
+	mux.HandleFunc("/api/acp/agents", withCORS(requireAuth(s.handleACPAgents)))
+	mux.HandleFunc("/api/acp/agents/", withCORS(requireAuth(s.handleACPAgentByID)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))

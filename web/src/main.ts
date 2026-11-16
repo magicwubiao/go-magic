@@ -42,6 +42,7 @@ const ApprovalView = () => import('./views/ApprovalView.vue')
 const FilesView = () => import('./views/FilesView.vue')
 const UsageView = () => import('./views/UsageView.vue')
 const MCPView = () => import('./views/MCPView.vue')
+const ACPView = () => import('./views/ACPView.vue')
 const AgentPluginsView = () => import('./views/AgentPluginsView.vue')
 const PeersView = () => import('./views/PeersView.vue')
 
@@ -79,6 +80,8 @@ const router = createRouter({
     { path: '/files', component: FilesView },
     { path: '/usage', component: UsageView },
     { path: '/mcp', component: MCPView },
+    // ACP 外部智能体（acp.json 的管理面）。入口在左下角"设置"菜单，与连接器并列。
+    { path: '/acp', component: ACPView },
     // CLI 连接器已并入连接器页（MCP / CLI 两个页签），旧链接重定向
     { path: '/cli', redirect: '/mcp' },
     { path: '/plugins', component: AgentPluginsView },

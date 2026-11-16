@@ -1239,7 +1239,7 @@ magic mcp add --file ./mcp.json            # 从文件读
     "claude": {
       "command": "npx",
       "args": ["-y", "@zed-industries/claude-code-acp"],
-      "env": ["ANTHROPIC_API_KEY=sk-..."],   // 可选，接口与工具输出都不回显
+      "env": ["ANTHROPIC_API_KEY=sk-..."],   // 可选；支持 ${VAR} 引用，接口与工具输出都不回显
       "workspace": "/path/to/project",        // 会话 cwd，必须是绝对路径
       "description": "Claude Code",
       "timeout_seconds": 600,                 // 单轮超时，默认 600，上限 3600
@@ -1264,11 +1264,19 @@ magic acp reset claude
 
 行为与边界：
 
+- **Web 管理页**：左下角「设置 → ACP 智能体」（`/acp`）。列表显示连接状态，
+  卡片里可以新建/编辑（命令、参数、工作区、附加目录、env、超时、`allow_write`、
+  `auto_approve` 勾选）、测试连接（真的拉一次子进程，回显协议版本、会话 id、
+  可访问目录与能力协商结果）、重置会话、断开、删除。env 值以 `***` 回显，
+  原样提交回来会还原成磁盘真值；纯 `${VAR}` 引用不掩码。
 - **没有 connect / disconnect / list**。ACP 走 stdio，连接生命周期不可能超过宿主
   进程，所以每个命令都是「按需拉起 → 做完 → 退出」；持久化的是配置，不是连接。
 - **工具**：`acp_agents` / `acp_prompt` / `acp_reset_session`，归在「ACP Agents」
   分类。`acp_prompt` **每次调用都要人工确认**（外部 agent 会读改文件、跑命令）；
   没配 agent 时这三个工具不会出现在工具清单里。
+- **图片**：`acp_prompt` 支持 `images` 参数（本地图片绝对路径，最多 4 张、
+  单张 10MB，png/jpeg/webp/gif/bmp）。agent 没在 initialize 里声明 image 能力时
+  会直接报错，而不是静默丢掉。
 - **上下文**：同一 agent 的会话跨调用复用（多轮累积），换任务用
   `acp_reset_session` 或 `--reset` 清空。
 - **权限**：agent 请求授权（`session/request_permission`）时按 `auto_approve`

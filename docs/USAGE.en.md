@@ -1260,7 +1260,7 @@ path; `magic acp config` prints it):
     "claude": {
       "command": "npx",
       "args": ["-y", "@zed-industries/claude-code-acp"],
-      "env": ["ANTHROPIC_API_KEY=sk-..."],   // never echoed back
+      "env": ["ANTHROPIC_API_KEY=sk-..."],   // never echoed back; ${VAR} refs supported
       "workspace": "/path/to/project",        // session cwd, must be absolute
       "description": "Claude Code",
       "timeout_seconds": 600,                 // per turn; default 600, max 3600
@@ -1285,12 +1285,22 @@ magic acp reset claude
 
 Behaviour:
 
+- **Web UI**: Settings → ACP Agents (`/acp`). The list shows connection state; cards let
+  you create/edit an agent (command, args, workspace, extra directories, env, timeout,
+  `allow_write`, `auto_approve` checkboxes), test the connection (it really spawns the
+  subprocess and reports protocol version, session id, roots and negotiated
+  capabilities), reset the session, disconnect, or delete. Env values are shown as
+  `***` and restored from disk when submitted back; pure `${VAR}` references are left
+  unmasked.
 - **No connect / disconnect / list.** ACP is stdio: a connection cannot outlive the
   host process, so every command spawns on demand and exits when done. What persists
   is the config, not the connection.
 - **Tools**: `acp_agents`, `acp_prompt`, `acp_reset_session` under the "ACP Agents"
   category. `acp_prompt` always requires human approval; the tools stay hidden when
   no agent is configured.
+- **Images**: `acp_prompt` accepts an `images` array of absolute local paths (up to 4
+  files, 10MB each; png/jpeg/webp/gif/bmp). If the agent did not declare image prompt
+  support during initialize, the call fails instead of silently dropping the image.
 - **Context** persists per agent across calls; use `acp_reset_session` (or `--reset`)
   to start over.
 - **Permissions**: `session/request_permission` is answered from `auto_approve`.

@@ -142,6 +142,7 @@ import {
   ShareSocialOutline,
   LogOutOutline,
   ExtensionPuzzleOutline,
+  FlashOutline,
 } from '@vicons/ionicons5'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -290,6 +291,8 @@ const headerOptions = computed(() => [
   // 自定义连接器（MCP / CLI）从主导航移到这里：属于"接外部软件"的配置动作，
   // 低频且与配置/审批同类，不再占主菜单位置。
   { label: t('nav.mcp'), key: '/mcp', icon: renderIcon(ServerOutline) },
+  // ACP 外部智能体：和连接器一样是"接外部能力"的配置，放在相邻位置。
+  { label: t('nav.acp'), key: '/acp', icon: renderIcon(FlashOutline) },
   // 媒体能力（生图/生视频/语音）已并入配置页的「媒体」分区，不再单独设入口。
   { label: t('nav.config'), key: 'config', icon: renderIcon(SettingsOutline) },
   { type: 'divider' as const },

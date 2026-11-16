@@ -77,6 +77,17 @@ func TextBlock(text string) ContentBlock {
 	return ContentBlock{Type: ContentTypeText, Text: text}
 }
 
+// ImageBlock 构造一个 image 内容块。data 是 base64 编码的图片字节
+// （规范要求 JSON 里就是 base64，不是原始二进制）。
+func ImageBlock(base64Data, mimeType string) ContentBlock {
+	return ContentBlock{Type: ContentTypeImage, Data: base64Data, MimeType: mimeType}
+}
+
+// AudioBlock 构造一个 audio 内容块（data 为 base64 编码的音频字节）。
+func AudioBlock(base64Data, mimeType string) ContentBlock {
+	return ContentBlock{Type: ContentTypeAudio, Data: base64Data, MimeType: mimeType}
+}
+
 // Implementation 描述 client/agent 的实现信息（name 与 version 必填）。
 type Implementation struct {
 	Name    string `json:"name"`

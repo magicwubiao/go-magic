@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/magicwubiao/go-magic/pkg/envref"
 )
 
 // manager.go —— ACP agent 的进程内管理器。
@@ -225,12 +227,19 @@ func (m *Manager) clientOptions(name string, agent AgentConfig) (ClientOptions, 
 		dirs = append(dirs, abs)
 	}
 
+	// Env 里的 `${VAR}` 在**每次建连时**展开：换 token 只要改宿主进程环境
+	// 或重连，配置文件里不必落明文（与 mcp / cliconn 的约定一致）。
+	env, err := envref.ExpandList(agent.Env)
+	if err != nil {
+		return ClientOptions{}, fmt.Errorf("acp agent %q env: %w", name, err)
+	}
+
 	return ClientOptions{
 		Name:           name,
 		Cwd:            workspace,
 		Command:        agent.Command,
 		Args:           agent.Args,
-		Env:            agent.Env,
+		Env:            env,
 		WorkDir:        expandHome(agent.Cwd),
 		Timeout:        m.timeoutFor(name, agent),
 		AllowWrite:     agent.AllowWrite,
@@ -293,6 +302,25 @@ func (m *Manager) Cancel(name string) error {
 		return fmt.Errorf("%w: %s", ErrNoAgent, name)
 	}
 	return client.Cancel()
+}
+
+// DropAgent 关闭并丢弃某个 agent 的缓存连接，下次调用时按新配置重建。
+//
+// 配置改动（命令/参数/env/workspace/权限策略）后必须调用它：连接是长活的，
+// 不丢弃就还是按旧配置在跑，用户改完看不到任何变化。
+// 没有缓存的连接时是空操作。
+func (m *Manager) DropAgent(name string) {
+	m.mu.Lock()
+	client, ok := m.clients[name]
+	if ok {
+		delete(m.clients, name)
+	}
+	m.mu.Unlock()
+
+	if ok && client != nil {
+		// 关闭要等子进程退出，放到锁外（同 drop）。
+		go func() { _ = client.Close() }()
+	}
 }
 
 // Client 返回底层连接（诊断用）。
