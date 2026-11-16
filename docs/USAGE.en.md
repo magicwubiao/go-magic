@@ -1285,6 +1285,14 @@ magic acp reset claude
 
 Behaviour:
 
+- **One-click templates**: clicking "Add" first shows built-in template cards
+  (Claude Code, Codex, Gemini CLI, Qwen Code, iFlow CLI) with a local `npx`
+  availability probe. Picking one
+  pre-fills command, args and the approval whitelist; credential variables come
+  pre-filled as `${VAR}` environment references — just pick a workspace (or rely
+  on the host variable) and save. "Manual setup" keeps the full form. Template
+  data comes from `GET /api/acp/catalog` (internal/acp/catalog.go; a new template
+  = one entry plus frontend copy).
 - **Web UI**: Settings → ACP Agents (`/acp`). The list shows connection state; cards let
   you create/edit an agent (command, args, workspace, extra directories, env, timeout,
   `allow_write`, `auto_approve` checkboxes), test the connection (it really spawns the

@@ -1938,6 +1938,38 @@ export default {
     // vue-i18n 会把 @ 当链接消息前缀（@:key / @.mod）解析，直接抛
     // "Invalid linked format"，渲染期炸掉整个组件（表现为点按钮没弹窗）。
     commandHint: 'PATH 里的名字或绝对路径，例如 npx；ACP 适配器包放进下面的参数里。',
+    // 模板接入（catalog）。模板 id 对应 internal/acp/catalog.go；名称/描述只放这里，
+    // 包名等含 @ 的字面量由接口数据直接渲染，不进 i18n。
+    pickTitle: '添加 ACP 智能体',
+    pickSubtitle: '选一个模板快速接入，或手动填写完整配置。凭据变量会预填为本机环境变量引用，需要时改成具体值即可。',
+    pickNeedsEnv: '需要配置：',
+    pickManual: '手动配置',
+    pickEmpty: '暂无内置模板，可手动配置。',
+    runtimeOk: 'Node 已就绪',
+    runtimeMissing: '未检测到 npx，需先安装 Node.js',
+    tplNote: '已按「{name}」模板预填，补齐凭据与工作区后保存即可。',
+    tpl: {
+      'claude-code': {
+        name: 'Claude Code',
+        desc: 'Anthropic 的编码 agent。首次运行会自动下载适配器，需要 ANTHROPIC_API_KEY。',
+      },
+      gemini: {
+        name: 'Gemini CLI',
+        desc: 'Google 的编码 agent。首次运行会自动下载适配器，需要 GEMINI_API_KEY。',
+      },
+      codex: {
+        name: 'Codex',
+        desc: 'OpenAI 的编码 agent（Zed 维护的适配器）。支持 OPENAI_API_KEY 或本机 ChatGPT 登录态，Key 可选。',
+      },
+      qwen: {
+        name: 'Qwen Code',
+        desc: '通义千问的编码 agent。凭据走本机 qwen 登录态（免费额度）或 DASHSCOPE_API_KEY，二者选其一。',
+      },
+      iflow: {
+        name: 'iFlow CLI',
+        desc: '心流 CLI，聚合 GLM、Kimi、Qwen 等国产模型（免费额度）。没有 API key，首次需在本机终端运行一次 iflow 完成登录。',
+      },
+    },
     fieldArgs: '启动参数',
     argsHint: '一行一个参数，按 argv 原样传给子进程（不经过 shell）。',
     fieldDescription: '描述',

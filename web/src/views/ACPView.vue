@@ -128,6 +128,9 @@
       :title="editingName ? t('acp.edit') : t('acp.add')"
     >
       <div class="acp-form">
+        <n-alert v-if="activeTplId" type="info" :bordered="false" class="acp-tpl-note">
+          {{ t('acp.tplNote', { name: tplName(activeTplId) }) }}
+        </n-alert>
         <div class="acp-form-grid">
           <div class="acp-field">
             <label class="acp-label">{{ t('acp.fieldName') }}</label>
@@ -253,6 +256,54 @@
       </template>
     </n-modal>
 
+    <!-- 模板选择层：接入引导的第一步。卡片上的命令行预览直接渲染模板数据
+         （含 npx 包名），不经 i18n——包名里的 @ 与 vue-i18n 的链接语法冲突，
+         文案一律放 acp.tpl.<id>.* 且不含包名。 -->
+    <n-modal
+      v-model:show="showPicker"
+      preset="card"
+      class="modal-responsive"
+      style="width: 560px; max-width: 96vw;"
+      :title="t('acp.pickTitle')"
+    >
+      <div class="acp-pick">
+        <div class="acp-pick-sub">{{ t('acp.pickSubtitle') }}</div>
+        <n-spin v-if="catalogLoading && !catalog" size="small" style="margin: 20px 0;" />
+        <div v-else-if="catalog?.templates?.length" class="acp-pick-list">
+          <div
+            v-for="tpl in catalog.templates"
+            :key="tpl.id"
+            class="acp-pick-card"
+            @click="applyTemplate(tpl)"
+          >
+            <div class="acp-pick-head">
+              <span class="acp-pick-name">{{ tplName(tpl.id) }}</span>
+              <n-tag v-if="tplRuntimeOk(tpl) === true" size="tiny" type="success" :bordered="false">
+                {{ t('acp.runtimeOk') }}
+              </n-tag>
+              <n-tag v-else-if="tplRuntimeOk(tpl) === false" size="tiny" type="warning" :bordered="false">
+                {{ t('acp.runtimeMissing') }}
+              </n-tag>
+            </div>
+            <div class="acp-pick-desc">{{ tplDesc(tpl.id) }}</div>
+            <code class="acp-pick-cmd">{{ [tpl.command, ...(tpl.args || [])].join(' ') }}</code>
+            <div v-if="tpl.env_keys?.length" class="acp-pick-envs">
+              <span class="acp-pick-env-label">{{ t('acp.pickNeedsEnv') }}</span>
+              <n-tag v-for="k in tpl.env_keys" :key="k.name" size="tiny" :bordered="false">
+                {{ k.name }}
+              </n-tag>
+            </div>
+          </div>
+        </div>
+        <n-alert v-else-if="!catalogLoading" type="warning" :bordered="false" style="margin: 12px 0;">
+          {{ t('acp.pickEmpty') }}
+        </n-alert>
+        <div class="acp-pick-footer">
+          <n-button size="small" @click="openManualCreate">{{ t('acp.pickManual') }}</n-button>
+        </div>
+      </div>
+    </n-modal>
+
     <!-- 连接结果：能力协商是"这个 agent 到底能不能看图/收音频"的唯一依据，
          直接摊开给用户看，省得靠猜。 -->
     <n-modal
@@ -315,11 +366,12 @@ import {
   deleteACPAgent,
   disconnectACPAgent,
   listACPAgents,
+  listACPTemplates,
   resetACPAgentSession,
   testACPAgent,
   updateACPAgent,
 } from '@/api/acp'
-import type { ACPAgent, ACPAgentPayload, ACPTestResult } from '@/api/acp'
+import type { ACPAgent, ACPAgentPayload, ACPTestResult, ACPCatalog, ACPTemplate } from '@/api/acp'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -340,6 +392,15 @@ const busy = ref<Record<string, boolean>>({})
 const showEditor = ref(false)
 const editingName = ref('')
 const saving = ref(false)
+
+// 模板选择层：点「添加」先看到内置 agent 模板，选完预填表单，只剩 Key 和目录要补。
+// catalog 加载失败时降级为直接开空白表单——模板是加速器，不是硬依赖。
+const showPicker = ref(false)
+const catalog = ref<ACPCatalog | null>(null)
+const catalogLoading = ref(false)
+const catalogLoaded = ref(false)
+// 当前表单来自哪个模板（仅用于表单顶部提示"已按模板预填"）。
+const activeTplId = ref('')
 
 const showTest = ref(false)
 const testResult = ref<ACPMessageResult | null>(null)
@@ -449,9 +510,69 @@ function resetForm() {
   form.approveAll = false
 }
 
+async function ensureCatalog() {
+  if (catalogLoaded.value || catalogLoading.value) return
+  catalogLoading.value = true
+  try {
+    catalog.value = await listACPTemplates()
+    catalogLoaded.value = true
+  } catch {
+    // 拿不到模板就只显示"手动配置"入口；别让一次失败堵死创建路径。
+    catalog.value = null
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
 function openCreate() {
   resetForm()
   editingName.value = ''
+  activeTplId.value = ''
+  void ensureCatalog()
+  showPicker.value = true
+}
+
+/** 模板声明的依赖是否都在本机 PATH 上。 */
+function tplRuntimeOk(tpl: ACPTemplate): boolean | null {
+  if (!catalog.value || !tpl.needs_runtime.length) return null
+  return tpl.needs_runtime.every((b) =>
+    catalog.value!.runtimes.some((p) => p.binary === b && p.found),
+  )
+}
+
+function tplName(id: string): string {
+  return t(`acp.tpl.${id}.name`)
+}
+
+function tplDesc(id: string): string {
+  return t(`acp.tpl.${id}.desc`)
+}
+
+/**
+ * 应用模板：预填命令/参数/白名单；凭据变量预填 `${VAR}` 引用——
+ * 这是最省事的默认（宿主环境里已有 Key 时直接能跑），用户也能改成字面量。
+ * 工作区留空让用户自己选，其余保持默认（allow_write 关）。
+ */
+function applyTemplate(tpl: ACPTemplate) {
+  resetForm()
+  editingName.value = ''
+  activeTplId.value = tpl.id
+  form.name = tpl.id
+  form.command = tpl.command
+  form.argsStr = (tpl.args || []).join('\n')
+  form.envStr = (tpl.env_keys || [])
+    .map((k) => `${k.name}=\${${k.name}}`)
+    .join('\n')
+  form.autoApprove = (tpl.auto_approve || []).filter((k) => k.toLowerCase() !== 'all')
+  showPicker.value = false
+  showEditor.value = true
+}
+
+function openManualCreate() {
+  resetForm()
+  editingName.value = ''
+  activeTplId.value = ''
+  showPicker.value = false
   showEditor.value = true
 }
 
@@ -845,6 +966,85 @@ onMounted(load)
   font-size: 12px;
 }
 
+/* 模板选择层 */
+.acp-pick-sub {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.acp-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.acp-pick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.acp-pick-card:hover {
+  border-color: #18a058;
+  background: rgba(24, 160, 88, 0.06);
+}
+
+.acp-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.acp-pick-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.acp-pick-desc {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.acp-pick-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #374151;
+  background: rgba(128, 128, 128, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.acp-pick-envs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.acp-pick-env-label {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.acp-pick-footer {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.acp-tpl-note {
+  margin-bottom: 2px;
+}
+
 /* 深色模式：与连接器页一致的取色口径 */
 @media (prefers-color-scheme: dark) {
   .acp-page-subtitle,
@@ -872,6 +1072,17 @@ onMounted(load)
 
   .acp-kv-val {
     color: #d1d5db;
+  }
+
+  .acp-pick-sub,
+  .acp-pick-desc,
+  .acp-pick-env-label {
+    color: #8b93a1;
+  }
+
+  .acp-pick-cmd {
+    color: #d1d5db;
+    background: rgba(255, 255, 255, 0.08);
   }
 }
 </style>

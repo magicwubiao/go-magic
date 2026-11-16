@@ -58,6 +58,40 @@ export interface ACPTestResult {
 /** 保存时提交的载荷（name 与路径不同 = 改名） */
 export type ACPAgentPayload = Omit<ACPAgent, 'connected'>
 
+/** 内置模板要求的凭据变量。 */
+export interface ACPTemplateEnvKey {
+  name: string
+  required: boolean
+  masked: boolean
+}
+
+/** 内置模板：选完只补 API Key 和工作区目录即可保存。 */
+export interface ACPTemplate {
+  id: string
+  command: string
+  args: string[]
+  env_keys: ACPTemplateEnvKey[]
+  auto_approve: string[]
+  needs_runtime: string[]
+}
+
+export interface ACPRuntimeProbe {
+  binary: string
+  found: boolean
+  path?: string
+}
+
+export interface ACPCatalog {
+  templates: ACPTemplate[]
+  runtimes: ACPRuntimeProbe[]
+  platform: string
+}
+
+/** 模板目录（只读）。模板只是预填表单的数据源，创建仍走 createACPAgent。 */
+export async function listACPTemplates(): Promise<ACPCatalog> {
+  return request<ACPCatalog>('/acp/catalog')
+}
+
 export async function listACPAgents(): Promise<ACPAgentList> {
   return request<ACPAgentList>('/acp/agents')
 }

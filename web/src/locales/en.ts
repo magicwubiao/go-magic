@@ -1934,6 +1934,39 @@ export default {
     // Never put an @-prefixed package name here: vue-i18n parses "@..." as a
     // linked-message prefix and throws "Invalid linked format" at render time.
     commandHint: 'A PATH name or an absolute path, e.g. npx; put the ACP adapter package in args below.',
+    // Template onboarding (catalog). Template ids mirror internal/acp/catalog.go;
+    // names/descriptions live here only — literals containing @ (package names)
+    // are rendered straight from API data and never pass through i18n.
+    pickTitle: 'Add ACP Agent',
+    pickSubtitle: 'Pick a template for a quick setup, or configure manually. Credential variables are pre-filled as host environment references; replace them with literal values if you prefer.',
+    pickNeedsEnv: 'Needs:',
+    pickManual: 'Manual setup',
+    pickEmpty: 'No built-in templates yet; configure manually.',
+    runtimeOk: 'Node detected',
+    runtimeMissing: 'npx not found; install Node.js first',
+    tplNote: 'Pre-filled from the "{name}" template — fill in credentials and a workspace, then save.',
+    tpl: {
+      'claude-code': {
+        name: 'Claude Code',
+        desc: "Anthropic's coding agent. The adapter downloads on first run; needs ANTHROPIC_API_KEY.",
+      },
+      gemini: {
+        name: 'Gemini CLI',
+        desc: "Google's coding agent. The adapter downloads on first run; needs GEMINI_API_KEY.",
+      },
+      codex: {
+        name: 'Codex',
+        desc: "OpenAI's coding agent (adapter maintained by Zed). Works with OPENAI_API_KEY or a local ChatGPT login; the key is optional.",
+      },
+      qwen: {
+        name: 'Qwen Code',
+        desc: 'Alibaba Qwen coding agent. Uses the local qwen login (free quota) or DASHSCOPE_API_KEY — either one.',
+      },
+      iflow: {
+        name: 'iFlow CLI',
+        desc: 'Aggregates GLM, Kimi, Qwen and more with free quota. No API key; run iflow once in a terminal to log in first.',
+      },
+    },
     fieldArgs: 'Arguments',
     argsHint: 'One argument per line, passed to the subprocess as argv (no shell involved).',
     fieldDescription: 'Description',

@@ -2,6 +2,7 @@ package server
 
 // ACP（Agent Client Protocol）外部 agent 的 HTTP 管理面。
 //
+//	GET    /api/acp/catalog                     内置模板 + 本机运行时探测（只读）
 //	GET    /api/acp/agents                      列出 acp.json 里的 agent（env 掩码）
 //	POST   /api/acp/agents                      新增（重名 409）
 //	GET    /api/acp/agents/{name}               单个 agent
@@ -110,6 +111,16 @@ type acpAgentList struct {
 	// ToolsAvailable 表示三个 acp_* 工具当前是否对模型可见（没有任何启用的
 	// agent 时为 false）。前端据此提示"加一个 agent 才有工具"。
 	ToolsAvailable bool `json:"tools_available"`
+}
+
+// handleACPCatalog 返回内置模板与运行时探测。只读，无副作用；
+// 模板只是"预填表单的数据源"，创建仍走 POST /api/acp/agents（校验路径只有一条）。
+func (s *Server) handleACPCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	jsonResponse(w, acp.BuildACPCatalog())
 }
 
 func (s *Server) handleACPAgents(w http.ResponseWriter, r *http.Request) {

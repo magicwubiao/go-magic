@@ -1264,6 +1264,11 @@ magic acp reset claude
 
 行为与边界：
 
+- **模板一键接入**：点「添加」先弹出内置模板卡片（Claude Code、Codex、Gemini CLI、Qwen Code、iFlow CLI），
+  自动探测本机 `npx` 是否可用；选中后命令、参数、审批白名单自动预填，凭据变量
+  预填为 `${VAR}` 环境变量引用，只需补工作区目录（或直接用宿主已有变量）即可
+  保存。「手动配置」入口保留完整表单。模板数据来自 `GET /api/acp/catalog`
+  （internal/acp/catalog.go，新模板 = 加条目 + 前端补文案）。
 - **Web 管理页**：左下角「设置 → ACP 智能体」（`/acp`）。列表显示连接状态，
   卡片里可以新建/编辑（命令、参数、工作区、附加目录、env、超时、`allow_write`、
   `auto_approve` 勾选）、测试连接（真的拉一次子进程，回显协议版本、会话 id、

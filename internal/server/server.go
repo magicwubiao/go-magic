@@ -1815,6 +1815,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/cli/catalog/login/", withCORS(requireAuth(s.handleCLILoginByID)))
 
 	// ACP 外部 agent（acp.json 的增删改 + 试用/重置；见 acp.go）
+	mux.HandleFunc("/api/acp/catalog", withCORS(requireAuth(s.handleACPCatalog)))
 	mux.HandleFunc("/api/acp/agents", withCORS(requireAuth(s.handleACPAgents)))
 	mux.HandleFunc("/api/acp/agents/", withCORS(requireAuth(s.handleACPAgentByID)))
 
