@@ -154,7 +154,7 @@ func init() {
 		// 被调用，整个进程生命周期内都会认为"没有视觉后端"。
 		loadProfileEnv()
 
-		// 显式 --profile <name>：把该人格预设应用到活动目录。
+		// 显式 --profile <name>：把该人设应用到活动目录。
 		//
 		// 预设是内容模板，运行期只认 <magicHome>/cortex；应用 = 覆盖 SOUL.md /
 		// 用户画像。不这么做的话 `magic --profile work chat` 会变成"敲了没反应"。

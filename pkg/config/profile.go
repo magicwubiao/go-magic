@@ -8,21 +8,21 @@ import (
 	"unicode"
 )
 
-// DefaultProfileName 是内置的人格预设名。
+// DefaultProfileName 是内置的人设名。
 //
 // 它**没有**单独的目录：default 就是正在运行的这套数据（<magicHome>/cortex）。
 // 面板编辑 default 时改的就是当前生效的 SOUL.md / USER.md，所见即所得。
 const DefaultProfileName = "default"
 
-// ProfileEnvVar 是运行期覆盖"当前人格预设"的环境变量。
+// ProfileEnvVar 是运行期覆盖"当前人设"的环境变量。
 //
-// 语义已随降级调整：人格预设是**内容模板**，`magic --profile work chat` 表示
+// 语义已随降级调整：人设是**内容模板**，`magic --profile work chat` 表示
 // "启动时把 work 预设应用一次"，而不是"换一套目录身份"。之所以仍用环境变量
 // 而不是直接改 cfg.Profile：一次性选择不该被后续任何一次 persistConfig
 // 固化下来。持久化的选择走面板 / `magic config set profile`。
 const ProfileEnvVar = "GO_MAGIC_PROFILE"
 
-// ActiveProfile 返回当前记录的人格预设名（不代表磁盘目录，见 ProfileDir）。
+// ActiveProfile 返回当前记录的人设名（不代表磁盘目录，见 ProfileDir）。
 // 优先级：GO_MAGIC_PROFILE（--profile 翻译而来）> config.json 的 profile > default。
 //
 // 名字非法（手改 config.json 写进 "../.." 之类）时回退 default：这个值仍会
@@ -85,12 +85,12 @@ func ValidProfileName(name string) bool {
 	return !windowsReservedNames[strings.ToLower(name)]
 }
 
-// ProfileDir 返回人格预设目录（模板文件 SOUL.md / USER.md / USER.json 所在地）。
+// ProfileDir 返回人设目录（模板文件 SOUL.md / USER.md / USER.json 所在地）。
 //
 //   - "" 与 "default" → <magicHome>/cortex，即当前正在使用的那份人格本身；
 //   - 其它合法名字   → <magicHome>/profiles/<name>。
 //
-// 注意：运行期**不再**按这个目录读取人设。人格预设只是模板，应用预设时由
+// 注意：运行期**不再**按这个目录读取人设。人设只是模板，应用预设时由
 // server 把内容写进活动 cortex 目录；这个函数只用于面板的读写与克隆。
 //
 // 名字非法时返回 ""：调用方必须把它当成参数错误（400）处理，绝不能拿去

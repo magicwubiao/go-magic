@@ -88,7 +88,7 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 	}
 	defer store.Close()
 
-	// 不再按 profile 过滤：人格预设只是内容模板，会话历史始终是一份。
+	// 不再按 profile 过滤：人设只是内容模板，会话历史始终是一份。
 	sessions, err := store.ListSessions(context.Background(), "")
 	if err != nil {
 		fmt.Printf("Failed to list sessions: %v\n", err)

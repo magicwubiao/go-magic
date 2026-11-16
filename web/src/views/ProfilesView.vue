@@ -106,7 +106,7 @@
       </n-empty>
     </n-spin>
 
-    <!-- 新建预设 -->
+    <!-- 新建人设 -->
     <n-modal
       v-model:show="showCreateModal"
       preset="card"
@@ -169,7 +169,7 @@
       </template>
     </n-modal>
 
-    <!-- 预设详情：概览 / 用户画像 / AI 人格 / 学习偏好 -->
+    <!-- 人设详情：概览 / 用户画像 / 人设内容 / 学习偏好 -->
     <n-modal
       :show="showDetailModal"
       preset="card"
@@ -205,7 +205,7 @@
       </template>
 
       <n-tabs v-model:value="activeTab" type="line" animated>
-        <!-- 概览：把"这个预设落在磁盘哪里、缺什么、是否已应用"讲清楚 -->
+        <!-- 概览：把"这份人设落在磁盘哪里、缺什么、是否已应用"讲清楚 -->
         <n-tab-pane name="overview" :tab="t('profiles.tabs.overview')">
           <n-descriptions :column="1" label-placement="left" size="small" bordered class="overview-desc">
             <n-descriptions-item :label="t('profiles.overview.dir')">
@@ -436,7 +436,7 @@ interface Profile {
   name: string
   path: string
   is_default: boolean
-  // 当前活动人格就是这套预设（应用后内容已抄进 cortex）
+  // 当前生效的就是这份人设（应用后内容已抄进 cortex）
   is_applied: boolean
   has_soul: boolean
   has_user: boolean

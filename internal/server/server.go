@@ -120,7 +120,7 @@ type Server struct {
 
 	skillMgr  *skills.Manager
 	magicHome string
-	// runtimeProfile 是"当前已应用的人格预设名"（default = 不属于任何预设）。
+	// runtimeProfile 是"当前已应用的人设名"（default = 不属于任何预设）。
 	// 应用预设会立刻写入活动 cortex，所以它和配置里的选择是同步的；这个字段
 	// 只是进程内的单一出处。见 Server.activeProfile。
 	runtimeProfile string
@@ -563,7 +563,7 @@ Your working directory is: %s
 			cortexConfig.GEPAEnabled = *cfg.Cortex.GEPAEnabled
 		}
 	}
-	// 人设与画像固定落在 <magicHome>/cortex：人格预设只是模板，应用时由
+	// 人设与画像固定落在 <magicHome>/cortex：人设只是模板，应用时由
 	// applyProfile 把内容写进这里。第三个参数保留但已废弃（见 cortex 侧注释）。
 	activeProfile := appconfig.DefaultProfileName
 	if cfg != nil {

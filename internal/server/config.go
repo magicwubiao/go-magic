@@ -60,7 +60,7 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, schema)
 }
 
-// scanProfiles 列出所有人格预设。
+// scanProfiles 列出所有人设。
 //
 // default 不是磁盘上的一个目录，而是"当前正在使用的那份人格"（<magicHome>/cortex），
 // 所以永远先合成一张卡片。profiles/default 是早期版本建出来的空骨架，
@@ -659,7 +659,7 @@ func (s *Server) writeEnvFile(path string, vars map[string]string) error {
 
 // envFilePath 返回 .env 的路径。
 //
-// 固定 magicHome/.env：人格预设降级为内容模板后，凭据不再跟着预设走。
+// 固定 magicHome/.env：人设降级为内容模板后，凭据不再跟着预设走。
 // 曾经这里是"活动分身目录下的 .env"（切 work 就换一份 key），但那让
 // "换人格"和"换账号"绑在一起，而预设本身又不隔离会话与记忆——半套隔离
 // 比不隔离更容易让人误判。现在一套部署只有一份凭据，切人格不影响它。

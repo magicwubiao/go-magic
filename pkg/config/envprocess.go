@@ -21,7 +21,7 @@ func ProcessEnv() *EnvSet { return &processEnv }
 
 // LoadProfileEnv 加载 <magicHome>/.env 并注入进程环境。
 //
-// 历史包袱：这个函数过去按"活动分身"选文件（profiles/<p>/.env）。人格预设
+// 历史包袱：这个函数过去按"活动分身"选文件（profiles/<p>/.env）。人设
 // 降级为内容模板后，凭据不再跟着预设走 —— 一套部署只有一份凭据，切人格
 // 不该换 key（那会让"换个说话风格"变成"换账号"，语义更混乱）。旧预设目录
 // 里的 .env 原样留在磁盘上，但不再被读取。

@@ -153,7 +153,7 @@ func NewManagerWithProfile(baseDir string, prov provider.Provider, profile strin
 
 // NewManagerWithProfileAndConfig creates a new Cortex manager with profile and custom config
 //
-// profile 参数已废弃：人格预设（profiles/<name>）降级为**内容模板**，应用预设时
+// profile 参数已废弃：人设（profiles/<name>）降级为**内容模板**，应用预设时
 // 由 server 把 SOUL.md / USER.json 写进活动目录，运行期只认 baseDir 这一份。
 // 之前按 profile 换目录的写法要求「换分身必须重启」，且让面板与运行时各读一处；
 // 现在目录恒定，切换语义变成一次内容应用。

@@ -985,7 +985,7 @@
         </div>
       </div>
 
-      <!-- 底部状态栏：紧凑一行 = 当前会话所属分身（只读）+ 工作目录 + 审批策略。
+      <!-- 底部状态栏：紧凑一行 = 当前会话所属人设（只读）+ 工作目录 + 审批策略。
            工作目录在会话创建时（发出第一条消息前）确定一次，之后固定；底栏只在
            "还没发过消息"的会话上提供「设置目录」按钮，其余情况一律只读展示。
            路径可点不是为了切换目录，而是展开"同目录会话 / 按目录分组"面板。 -->
@@ -3113,8 +3113,8 @@ async function handleSessionClick(id: string) {
   if (isMobile.value) mobileSessionExpanded.value = false
 }
 
-// 侧栏会话列表：不再按分身分组，展示一份展平的统一列表（按更新时间/后端返回顺序）。
-// 分身在单条会话的可视化上以会话自身的 profile 标记呈现（见底部栏“当前分身”）。
+// 侧栏会话列表：不再按人设分组，展示一份展平的统一列表（按更新时间/后端返回顺序）。
+// 人设在单条会话的可视化上以会话自身的 profile 标记呈现（见底部栏“当前人设”）。
 const isGatewaySession = computed(() => {
   const session = chatStore.activeSession
   return session && session.source && session.source !== 'web'
@@ -3124,7 +3124,7 @@ const activeSessionSource = computed(() => {
   return chatStore.activeSession?.source || ''
 })
 
-// 底部栏展示的“当前分身”：取当前活动会话归属的 profile，default/空归一为聊天默认名
+// 底部栏展示的“当前人设”：取当前活动会话归属的 profile，default/空归一为聊天默认名
 const activeProfileName = computed(() => {
   const p = chatStore.activeSession?.profile?.trim()
   if (!p || p.toLowerCase() === 'default') return t('chat.default')
@@ -7276,7 +7276,7 @@ onActivated(() => {
 }
 
 /* ========== Work Directory Bar（chat 最下层） ========== */
-/* 底部紧凑状态栏：分身(只读) + 工作目录(只读) + 设置目录/打开文件夹 */
+/* 底部紧凑状态栏：人设(只读) + 工作目录(只读) + 设置目录/打开文件夹 */
 .workdir-bar {
   flex-shrink: 0;
   display: flex;
@@ -7895,7 +7895,7 @@ onActivated(() => {
   /* 右侧边栏拉手：断点已上移到 900px（见上方的窄窗口区块），
      移动端沿用同一份样式，这里不再重复定义。 */
 
-  /* 移动端底部工具栏：压缩审批策略选择器，避免挤压工作目录/分身名 */
+  /* 移动端底部工具栏：压缩审批策略选择器，避免挤压工作目录/人设名 */
   .workdir-bar {
     padding: 0 8px;
   }

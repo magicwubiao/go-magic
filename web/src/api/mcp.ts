@@ -28,7 +28,7 @@ export interface MCPServer {
   protocol?: string
   /** 启动时是否自动连接 */
   enabled?: boolean
-  /** 限定生效的分身；空 = 所有分身 */
+  /** 限定生效的人设；空 = 所有人设 */
   profiles?: string[]
   /** 被屏蔽的工具（不注册给模型） */
   disabled_tools?: string[]

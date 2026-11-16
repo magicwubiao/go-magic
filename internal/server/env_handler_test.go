@@ -152,9 +152,9 @@ func TestHandleEnvRejectsKeyInjection(t *testing.T) {
 	}
 }
 
-// .env 路径固定为 <magicHome>/.env，不随人格预设变化。
+// .env 路径固定为 <magicHome>/.env，不随人设变化。
 //
-// 人格预设降级为内容模板后，凭据与"当前应用了哪套人格"彻底解耦：一套部署
+// 人设降级为内容模板后，凭据与"当前应用了哪套人格"彻底解耦：一套部署
 // 一份 key，切人格不换账号。历史实现按活动分身选文件，切一次就换一份凭据。
 func TestEnvFilePathIsProfileIndependent(t *testing.T) {
 	s, home := newEnvTestServer(t)

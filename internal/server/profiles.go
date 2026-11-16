@@ -15,7 +15,7 @@ import (
 	"github.com/magicwubiao/go-magic/pkg/log"
 )
 
-// 人格预设（profile）的文件约定：
+// 人设（profile）的文件约定：
 //
 //	<magicHome>/cortex/{SOUL.md,USER.md,USER.json}       ← 活动人格（运行时唯一读写的地方）
 //	<magicHome>/profiles/<name>/{SOUL.md,USER.md,USER.json}  ← 预设模板
@@ -87,7 +87,7 @@ func isEmptyTree(root string) (bool, error) {
 	return empty, nil
 }
 
-// activeProfile 返回**当前已应用**的人格预设名（可能是 "default" = 不属于
+// activeProfile 返回**当前已应用**的人设名（可能是 "default" = 不属于
 // 任何预设，就用 cortex 里这份）。
 //
 // 应用预设会立刻写入活动 cortex，所以这里和配置里的选择总是同步的；维护
@@ -278,7 +278,7 @@ func (s *Server) handleProfileByName(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// applyProfile 把人格预设**立刻应用**到活动 cortex。
+// applyProfile 把人设**立刻应用**到活动 cortex。
 //
 // 旧实现（switchProfile）只把人选写进 config.json，人设/记忆要等重启才换，
 // 于是面板必须同时表达"生效中 / 待重启"两种状态，逻辑和 UI 都被这份

@@ -54,7 +54,7 @@ func TestLoadProfileEnvIgnoresProfileSelection(t *testing.T) {
 	processEnv.Clear()
 	t.Cleanup(processEnv.Clear)
 
-	// 凭据不跟人格预设走：即使 --profile work 把预设钉住了，读的仍是
+	// 凭据不跟人设走：即使 --profile work 把预设钉住了，读的仍是
 	// <magicHome>/.env。旧预设目录里的 .env 留作历史，不再生效。
 	writeProfileEnv(t, home, DefaultProfileName, key+"=default-value\n")
 	writeProfileEnv(t, home, "work", key+"=work-value\n")

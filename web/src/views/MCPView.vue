@@ -458,7 +458,7 @@ const formData = reactive({
   envStr: '',
   /** 请求头，一行一个 KEY=value。远程连接器的认证全靠它。 */
   headersStr: '',
-  /** 限定生效的分身，逗号分隔；空 = 所有分身 */
+  /** 限定生效的人设，逗号分隔；空 = 所有人设 */
   profilesStr: '',
   /** 每次调用都要人工确认（给没写 annotations 的 server 兜底） */
   requireApproval: false,

@@ -265,7 +265,7 @@ const menuOptions = computed(() => [
   { label: t('bots.title'), key: '/bots', icon: renderIcon(HardwareChipOutline) },
   { label: t('peers.title'), key: '/peers', icon: renderIcon(ShareSocialOutline) },
   { type: 'divider' as const },
-  // 资源与环境段放在最下面：供应商（模型）、网关、文件、分身 —— 都是"跑一次
+  // 资源与环境段放在最下面：供应商（模型）、网关、文件、人设 —— 都是"跑一次
   // 任务需要配齐的东西"（用哪个模型 / 从哪进来 / 数据放哪 / 以谁的身份），配置
   // 频次低，沉到菜单底部不占视线。
   //
