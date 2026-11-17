@@ -60,6 +60,18 @@ var (
 	failureHideWindow = 12
 )
 
+// failureHideExempt 永不因"近期失败"从模型清单隐藏的核心工具。
+//
+// 实测教训（2026-11-17 翻译批量编辑）：agent 按过期清单整批下发 file_edit，
+// "old_content 已被前序编辑改掉"属于正常业务现象，失败会成批出现并触发
+// 隐藏。此时模型看不到工具 schema，却仍会按对话历史继续调用——只能凭记忆
+// 瞎编参数，失败进一步放大，形成连环回声。对编辑链路主干关闭隐藏机制：
+// 失败照常记录统计与日志，但 schema 始终可见，让模型能带着工具描述自我纠正。
+var failureHideExempt = map[string]bool{
+	"file_edit":  true,
+	"write_file": true,
+}
+
 // Registry 管理工具注册和执行
 type Registry struct {
 	mu       sync.RWMutex
@@ -716,6 +728,10 @@ func (r *Registry) recordStat(name string, result ToolExecutionResult) {
 // 判定完全基于滑动窗口，因此隐藏是自愈的：样本过期或出现成功即恢复。
 // 调用方必须已持有 r.statsMu。
 func (r *Registry) hiddenForRecentFailuresLocked(name string) bool {
+	// 核心编辑工具永不隐藏（见 failureHideExempt 注释）。
+	if failureHideExempt[name] {
+		return false
+	}
 	outcomes := r.outcomes[name]
 	cutoff := time.Now().Add(-failureHideRecency)
 	success, total := 0, 0

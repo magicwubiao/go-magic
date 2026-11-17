@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -96,7 +97,7 @@ func (t *FileEditTool) Schema() map[string]interface{} {
 			},
 			"old_content": map[string]interface{}{
 				"type":        "string",
-				"description": "STRONGLY RECOMMENDED. The existing text in the file to replace. The tool performs tolerant matching: 1) exact match, 2) tab<->space leading whitespace tolerant, 3) trailing whitespace tolerant, 4) leading+trailing combined tolerant, 5) blank-edge tolerant (trim extra leading/trailing blank lines). Include 3+ lines for uniqueness. If multiple matches found, the tool will report all locations and refuse to modify.",
+				"description": "STRONGLY RECOMMENDED. The existing text in the file to replace. The tool performs tolerant matching: 1) exact match, 2) tab<->space leading whitespace tolerant, 3) trailing whitespace tolerant, 4) leading+trailing combined tolerant, 5) blank-edge tolerant (trim extra leading/trailing blank lines). Include 3+ lines for uniqueness. If multiple matches found, the tool will report all locations and refuse to modify. IDEMPOTENT REPLAY: if old_content is no longer in the file but new_content already is, the call returns success with already_applied=true (the edit was applied earlier) — do NOT retry, continue with the next edit.",
 			},
 			"new_content": map[string]interface{}{
 				"type":        "string",
@@ -186,6 +187,23 @@ type matchResult struct {
 	lineEnd     int    // 1-based last line number (inclusive)
 	matchedText string // the actual matched text from the file (preserves original indentation)
 	tier        string // which matching tier found this
+}
+
+// alreadyAppliedError 标记"这条编辑此前已经生效过，本次属于重复下发"。
+// 实测场景：agent 按一份批量清单（中文→英文对照）整批下发 file_edit，
+// 其中一部分在前一轮已经成功改完；重放到这些条目时 old_content 必然
+// 找不到。若直接报错，模型会陷入"重试 → 再失败 → 工具被隐藏 → 凭记忆
+// 瞎编参数"的连环失败（2026-11-17 翻译任务中 6/6 连败触发隐藏即此案）。
+// 判定规则：old_content 在文件中已不存在、且 new_content 原样存在 →
+// 视为已应用，Execute 层捕获后按成功返回（no-op，不写盘）。
+// 已知代价：若模型 old_content 抄错且 new_content 恰好已存在于别处，会
+// 被误判为已应用——但此时报错重试也不会有任何进展，误判是更优结果。
+type alreadyAppliedError struct {
+	line int // new_content 已存在的起始行（1-based），用于诊断信息
+}
+
+func (e *alreadyAppliedError) Error() string {
+	return fmt.Sprintf("edit already applied: old_content no longer exists in the file, but new_content is already present at line %d. This is a duplicate of a previously applied edit — treat it as DONE (nothing was changed), skip it and continue with the remaining edits", e.line)
 }
 
 // Execute runs the edit operation and returns a detailed result including match diagnostics
@@ -298,6 +316,19 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 	}
 
 	if err != nil {
+		// 幂等重复下发（old 不在、new 已在文件中）：不写盘、不计失败，
+		// 按成功返回 already_applied 结果，让模型明确知道这条编辑已完成。
+		var applied *alreadyAppliedError
+		if errors.As(err, &applied) {
+			return map[string]interface{}{
+				"path":            absPath,
+				"operation":       operation,
+				"bytes_written":   0,
+				"original_bytes":  len(content),
+				"total_lines":     totalLines,
+				"already_applied": true,
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -381,6 +412,14 @@ func (t *FileEditTool) replaceContentDetailed(content string, params map[string]
 
 		matches, err := findMatchesMultiTier(normContent, normOld)
 		if err != nil {
+			// 幂等短路：old_content 已不在文件里、但 new_content 原样存在
+			// → 这条编辑此前已成功应用，按"已应用"返回而不是报错。
+			if normNew != "" {
+				if idx := strings.Index(normContent, normNew); idx >= 0 {
+					line := 1 + strings.Count(normContent[:idx], "\n")
+					return "", nil, &alreadyAppliedError{line: line}
+				}
+			}
 			return "", nil, fmt.Errorf("%s", buildMatchDiagnostics(normContent, normOld, totalLines, err))
 		}
 		if len(matches) > 1 {
