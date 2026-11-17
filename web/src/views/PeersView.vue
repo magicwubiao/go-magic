@@ -178,35 +178,50 @@
           </n-space>
         </header>
 
-        <!-- 远端 Bot 选择：全部公开的 Bot 常驻可见，当前目标高亮 -->
+        <!-- 远端 Bot 选择：全部公开的 Bot 常驻可见，当前目标高亮。
+             跨机 Peer 的 Bot 数量不可控（见过十来个的），早期版本让 chip 自动换行，
+             条高就随 Bot 数量一路长上去，把消息区挤掉半屏；改成恒定单行 + 横向滚动：
+             条高永远一行，多的往右滚，两侧遮罩提示「后面还有」。 -->
         <div class="chat-bots">
-          <template v-if="botOptions.length">
-            <button
-              v-for="b in botOptions"
-              :key="b.value"
-              type="button"
-              class="bot-chip"
-              :class="{ active: dmForm.bot === b.value }"
-              @click="dmForm.bot = b.value"
-            >
-              <n-avatar v-if="isImageAvatar(b.avatar)" round :size="24" :src="b.avatar" />
-              <span v-else class="bot-chip-avatar">{{ botInitial(b.value) }}</span>
-              <span class="bot-chip-label">{{ b.label }}</span>
-            </button>
-            <n-text depth="3" class="bots-count">{{ t('peers.botCount', { count: botOptions.length }) }}</n-text>
-          </template>
-          <n-text v-else-if="botsLoading" depth="3" class="bots-hint">{{ t('peers.dmBotLoading') }}</n-text>
-          <template v-else>
-            <n-text type="warning" class="bots-hint">
-              {{ botsError ? t('peers.dmBotLoadFailed') : t('peers.dmBotNone') }}
-            </n-text>
-            <n-input
-              v-model:value="dmForm.bot"
-              size="small"
-              :placeholder="t('peers.dmBotPlaceholder')"
-              class="bots-manual"
-            />
-          </template>
+          <div
+            ref="botsScrollEl"
+            class="bots-scroll"
+            :class="{ 'can-left': botsCanLeft, 'can-right': botsCanRight }"
+            @scroll.passive="updateBotsScroll"
+            @wheel="onBotsWheel"
+          >
+            <template v-if="botOptions.length">
+              <button
+                v-for="b in botOptions"
+                :key="b.value"
+                type="button"
+                class="bot-chip"
+                :class="{ active: dmForm.bot === b.value }"
+                :title="b.label"
+                @click="dmForm.bot = b.value"
+              >
+                <n-avatar v-if="isImageAvatar(b.avatar)" round :size="24" :src="b.avatar" />
+                <span v-else class="bot-chip-avatar">{{ botInitial(b.value) }}</span>
+                <span class="bot-chip-label">{{ b.label }}</span>
+              </button>
+            </template>
+            <n-text v-else-if="botsLoading" depth="3" class="bots-hint">{{ t('peers.dmBotLoading') }}</n-text>
+            <template v-else>
+              <n-text type="warning" class="bots-hint">
+                {{ botsError ? t('peers.dmBotLoadFailed') : t('peers.dmBotNone') }}
+              </n-text>
+              <n-input
+                v-model:value="dmForm.bot"
+                size="small"
+                :placeholder="t('peers.dmBotPlaceholder')"
+                class="bots-manual"
+              />
+            </template>
+          </div>
+          <!-- 计数与「自定义」固定在右侧，不参与横向滚动，也不会被最后一个 chip 挤到下一行 -->
+          <n-text v-if="botOptions.length" depth="3" class="bots-count">
+            {{ t('peers.botCount', { count: botOptions.length }) }}
+          </n-text>
           <n-popover v-model:show="showCustomBot" trigger="click" placement="bottom-start">
             <template #trigger>
               <button type="button" class="bot-chip add">+ {{ t('peers.dmCustomBot') }}</button>
@@ -571,6 +586,69 @@ const botOptions = computed(() =>
 
 const showCustomBot = ref(false)
 const customBot = ref('')
+
+// ===== 远端 Bot 条：恒定单行横向滚动 =====
+// Bot 数量由远端决定，本地无法约束；条高必须与数量无关（否则消息区被挤没）。
+// 滚动条隐藏，改用两侧渐变遮罩提示「这一侧还能滚」。
+const botsScrollEl = ref<HTMLElement | null>(null)
+const botsCanLeft = ref(false)
+const botsCanRight = ref(false)
+
+function updateBotsScroll() {
+  const el = botsScrollEl.value
+  if (!el) return
+  const max = el.scrollWidth - el.clientWidth
+  botsCanLeft.value = max > 1 && el.scrollLeft > 1
+  botsCanRight.value = max > 1 && el.scrollLeft < max - 1
+}
+
+function onBotsWheel(e: WheelEvent) {
+  const el = botsScrollEl.value
+  if (!el) return
+  const max = el.scrollWidth - el.clientWidth
+  // 没溢出、或用户本来就在横向滚（触控板），交回浏览器处理
+  if (max <= 1 || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+  // 已经滚到头了就别拦：让事件继续冒泡，不至于把整页滚动锁死
+  if ((e.deltaY < 0 && el.scrollLeft <= 0) || (e.deltaY > 0 && el.scrollLeft >= max)) return
+  el.scrollLeft += e.deltaY
+  e.preventDefault()
+}
+
+// 当前选中的 Bot 必须可见：切 Peer / 列表加载完成 / 选了自定义名称后都要滚回来。
+// 用 rect 差值而不是 scrollIntoView —— 后者会连带滚动外层可滚祖先。
+function revealActiveBot() {
+  const el = botsScrollEl.value
+  if (!el) return
+  const chip = el.querySelector<HTMLElement>('.bot-chip.active')
+  if (!chip) return
+  const r = chip.getBoundingClientRect()
+  const cr = el.getBoundingClientRect()
+  if (r.left < cr.left) el.scrollLeft -= cr.left - r.left + 8
+  else if (r.right > cr.right) el.scrollLeft += r.right - cr.right + 8
+  updateBotsScroll()
+}
+
+watch([botOptions, () => dmForm.bot], () => {
+  nextTick(() => {
+    updateBotsScroll()
+    revealActiveBot()
+  })
+})
+
+// 容器宽度变化（窗口缩放、侧栏展开/收起）会改变溢出状态，遮罩要跟着更新
+let botsRO: ResizeObserver | null = null
+watch(botsScrollEl, (el) => {
+  botsRO?.disconnect()
+  if (!el) return
+  if (typeof ResizeObserver !== 'undefined') {
+    botsRO = new ResizeObserver(() => updateBotsScroll())
+    botsRO.observe(el)
+  }
+  nextTick(() => {
+    updateBotsScroll()
+    revealActiveBot()
+  })
+})
 
 const isMobile = ref(window.innerWidth <= 768)
 
@@ -1137,6 +1215,8 @@ onActivated(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
+  botsRO?.disconnect()
+  botsRO = null
   if (clock) clearInterval(clock)
 })
 </script>
@@ -1497,21 +1577,59 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-/* ----- 远端 Bot 选择条 ----- */
+/* ----- 远端 Bot 选择条 -----
+   恒定单行：容器只允许横向滚动，chip 用 flex:0 0 auto 保持原宽，
+   否则 flex 收缩会把一个 chip 压成省略号。 */
 .chat-bots {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid #eeeff3;
   flex-shrink: 0;
+  min-width: 0;
+}
+
+.bots-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none;
+  /* 上下各留 2px 再负回去：chip 的 1px 边框和 hover 描边不被 overflow 切掉 */
+  padding: 2px 0;
+  margin: -2px 0;
+}
+
+.bots-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 两侧渐变遮罩：滚动条已隐藏，这是唯一的「这边还有内容」提示 */
+.bots-scroll.can-left {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 24px);
+  mask-image: linear-gradient(to right, transparent 0, #000 24px);
+}
+
+.bots-scroll.can-right {
+  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 24px);
+  mask-image: linear-gradient(to left, transparent 0, #000 24px);
+}
+
+.bots-scroll.can-left.can-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
 }
 
 .bot-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
   max-width: 100%;
   padding: 3px 12px 3px 4px;
   border: 1px solid #e9eaf0;
@@ -1554,15 +1672,19 @@ onUnmounted(() => {
 }
 
 .bot-chip-label {
+  /* 名字 + 角色的完整文案挂在 title 上；条内超长截断，一个 chip 最多占半屏的三分之一 */
+  max-width: 150px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .bot-chip.add {
+  flex-shrink: 0;
   padding: 4px 12px;
   border-style: dashed;
   color: #888;
+  white-space: nowrap;
 }
 
 .bots-count,
@@ -1570,7 +1692,20 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+.bots-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 加载中/加载失败提示也待在单行里，别被压成两行把条高顶起来。
+   只限条内——popover 里的同名提示要保持换行。 */
+.bots-scroll .bots-hint {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .bots-manual {
+  flex-shrink: 0;
   width: 220px;
 }
 
@@ -2035,6 +2170,11 @@ onUnmounted(() => {
 
   .chat-bots {
     padding: 8px 12px;
+  }
+
+  /* 窄屏优先把宽度让给 chip 本身：计数信息可以从列表页统计里看 */
+  .bots-count {
+    display: none;
   }
 
   .chat-body {
