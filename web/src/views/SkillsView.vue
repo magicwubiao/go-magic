@@ -31,14 +31,14 @@
             :custom-request="handleCustomUpload"
           >
             <n-upload-dragger>
-              <div style="padding: 40px 0">
-                <n-icon size="48" :depth="3">
+              <div style="padding: 18px 0">
+                <n-icon size="32" :depth="3">
                   <upload-icon />
                 </n-icon>
-                <n-text depth="3" style="display: block; margin-top: 16px;">
+                <n-text depth="3" style="display: block; margin-top: 10px;">
                   {{ t('skills.dragDropDesc') }}
                 </n-text>
-                <n-text depth="3" style="display: block; font-size: 12px; margin-top: 8px;">
+                <n-text depth="3" style="display: block; font-size: 12px; margin-top: 4px;">
                   {{ t('skills.supportedFormats') }}
                 </n-text>
               </div>
