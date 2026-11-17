@@ -1065,9 +1065,15 @@ export const useChatStore = defineStore('chat', () => {
 
   // currentStreamOffset 返回该会话已收到的事件位点。
   //
+  // 以"实际渲染过"的位点（sessionRenderedSeq）为准：连接自带的 lastEventId
+  // 带着构造时传入的 since 初值（max 语义只进不退），队列被回收重建、seq
+  // 从 0 重新计数后，它会比服务端真实位点大得多——拿着它去重连，服务端
+  // 只能按 resync 处理、整段补发全部跳过，正文出现无法回填的缺口。
   // 优先读活动连接持有的值（最新），连接已不存在时回落到独立记录——被浏览器
   // 直接丢弃的连接不会触发 onerror，只有那份记录还留着位点。
   function currentStreamOffset(sessionId: string): number {
+    const rendered = sessionRenderedSeq.get(sessionId) || 0
+    if (rendered > 0) return rendered
     const es = sessionEventSources.value[sessionId]
     if (es) {
       const n = es.getLastEventId()
@@ -1837,24 +1843,31 @@ export const useChatStore = defineStore('chat', () => {
     let myLocalId = localId || ''
 
     eventSource.onmessage = (event) => {
-        // 位点随每条事件推进（心跳帧不带 id，不会推进它）。这里在连接之外
-        // 另存一份：连接被浏览器直接丢弃时（切后台、锁屏）不会触发任何回调，
-        // 只有这份记录还留着断点，切回前台才能接着续。
+        // 位点随每条带 id 的事件推进（心跳/控制帧不带 id，不会推进它）。这里在
+        // 连接之外另存一份：连接被浏览器直接丢弃时（切后台、锁屏）不会触发
+        // 任何回调，只有这份记录还留着断点，切回前台才能接着续。
+        //
+        // 去重**只对带 id 的帧生效**（event.seq > 0）。曾经这里用
+        // getLastEventId() 取位点——它在无 id 帧上返回的是连接初值（提交时
+        // 带的旧 since），而队列被回收重建后服务端 seq 从 0 重新计数，于是
+        // resync（告知"位点失效请对账"的救命控制帧，不带 id）和 seq=1,2,3…
+        // 的新事件全部被 "n <= rendered" 判成已渲染而逐帧丢弃：服务端把回合
+        // 跑完，界面永远停在"排队中"，直到用户手动打断才通过对账看到结果。
+        // 无 id 帧不可能是重放重复（它们根本不在可续传的事件流里），必须放行。
         {
           sessionLastEventAt.set(sessionId, Date.now())
-          const n = eventSource.getLastEventId()
-          // 重放去重：id <= 已渲染位点的事件必定已经上过屏（handleFrame 在
-          // dispatch 之前就更新了 lastEventId，因此这里的 n 就是本帧的 seq）。
-          // 重连补发时位点若落后于实际渲染位置，服务端重放的旧事件会整段
-          // 再来一遍——工具卡、正文、done 全部翻倍。按 seq 丢弃是唯一可靠
-          // 的幂等手段（事件本身不带可判重的业务键）。
+          const n = event.seq
           if (n > 0) {
+            // 重放去重：id <= 已渲染位点的事件必定已经上过屏。重连补发时位点
+            // 若落后于实际渲染位置，服务端重放的旧事件会整段再来一遍——工具
+            // 卡、正文、done 全部翻倍。按 seq 丢弃是唯一可靠的幂等手段
+            // （事件本身不带可判重的业务键）。
             const rendered = sessionRenderedSeq.get(sessionId) || 0
             if (n <= rendered) return
             sessionRenderedSeq.set(sessionId, n)
-          }
-          if (n > (sessionStreamOffsets.get(sessionId) || 0)) {
-            sessionStreamOffsets.set(sessionId, n)
+            if (n > (sessionStreamOffsets.get(sessionId) || 0)) {
+              sessionStreamOffsets.set(sessionId, n)
+            }
           }
         }
 

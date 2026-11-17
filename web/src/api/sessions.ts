@@ -665,6 +665,16 @@ export async function deleteFilesBatch(
 
 export interface ChatStreamEvent {
   data: string
+  /**
+   * 本帧携带的 SSE id（事件序号）；0 表示本帧没有 id 行。
+   *
+   * 只有带 id 的帧才是事件流的一部分（可断点续传、可判重）；connected /
+   * resync / queued / ping 等控制帧刻意不带 id。消费方**必须**据此区分：
+   * 用连接初值（since）当作无 id 帧的位点去判重，会让 resync 这样的
+   * 救命控制帧被"重放去重"吞掉——队列回收重建后 seq 从 0 重新计数，
+   * 整条流的事件就会被逐帧丢弃，界面永远停在"排队中"。
+   */
+  seq: number
 }
 
 /**
@@ -835,7 +845,10 @@ export class ChatStream {
     }
     if (seq > this.lastEventId) this.lastEventId = seq
     if (dataLines.length) {
-      this.dispatch('message', { data: dataLines.join('\n') })
+      // seq 随事件下发：0 表示本帧没有 id（控制帧），消费方据此决定是否
+      // 参与重放去重。lastEventId 保持 max 语义——它只服务断线重连的
+      // since 位点，初值（构造时传入的 since）必须不能被小序号拉低。
+      this.dispatch('message', { data: dataLines.join('\n'), seq })
     }
   }
 
