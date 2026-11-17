@@ -395,6 +395,47 @@
               </div>
             </n-card>
 
+            <!-- 本机运行时：MCP server（npx）、skill 脚本、Windows 上的 shell
+                 都依赖它们；缺哪个这里显示哪个，点"安装"由服务端代跑内置命令 -->
+            <n-card size="small" class="setting-card">
+              <template #header>
+                <div class="section-head">
+                  <n-icon :component="HardwareChipOutline" :size="18" class="section-icon" />
+                  <div>
+                    <div class="section-title">{{ t('config.runtimeTitle') }}</div>
+                    <div class="hint">{{ t('config.runtimeHint') }}</div>
+                  </div>
+                </div>
+              </template>
+
+              <div v-for="rt in runtimes" :key="rt.id" class="row runtime-row">
+                <div class="runtime-info">
+                  <n-icon :component="runtimeIcon(rt.id)" :size="20" class="runtime-icon" />
+                  <div class="runtime-text">
+                    <span class="row-title">{{ rt.name }}</span>
+                    <span class="hint">{{ t(runtimeDescKey(rt.id)) }}</span>
+                  </div>
+                </div>
+                <div class="control runtime-control">
+                  <n-tag v-if="rt.found" type="success" :bordered="false" size="small">
+                    {{ rt.version || t('config.runtimeReady') }}
+                  </n-tag>
+                  <n-tag v-else type="warning" :bordered="false" size="small">
+                    {{ t('config.runtimeMissing') }}
+                  </n-tag>
+                  <n-button
+                    v-if="!rt.found"
+                    size="small"
+                    type="primary"
+                    secondary
+                    @click="openRuntimeInstall(rt)"
+                  >
+                    {{ t('config.runtimeInstall') }}
+                  </n-button>
+                </div>
+              </div>
+            </n-card>
+
             <!-- 审批设置已移至「审批」页面，这里只留入口，避免双入口改出不一致 -->
             <n-card size="small" class="setting-card">
               <template #header>
@@ -561,6 +602,14 @@
         </n-space>
       </template>
     </n-modal>
+
+    <!-- 运行时安装弹窗：提交任务 + 轮询 + 实时输出（复用 CLI 安装弹窗） -->
+    <CLIInstallDialog
+      v-model:show="runtimeDialogVisible"
+      :runtime-id="runtimeDialogId"
+      :display-name="runtimeDialogName"
+      @done="loadRuntimes"
+    />
   </div>
 </template>
 
@@ -600,14 +649,19 @@ import {
   GlobeOutline,
   HardwareChipOutline,
   ImagesOutline,
+  LogoNodejs,
+  LogoPython,
   OptionsOutline,
   RefreshOutline,
   SaveOutline,
   ServerOutline,
   SettingsOutline,
   ShieldCheckmarkOutline,
+  TerminalOutline,
 } from '@vicons/ionicons5'
 import { listDirs, createDir, listWorkDirHistory } from '@/api/sessions'
+import { listRuntimes, type RuntimeProbe } from '@/api/runtime'
+import CLIInstallDialog from '@/components/CLIInstallDialog.vue'
 
 const { t } = useI18n()
 
@@ -1104,6 +1158,52 @@ function goApproval(): void {
   router.push('/approval')
 }
 
+// ---------------------------------------------------------------- 本机运行时
+// Node.js / Python / Git Bash 的探测与一键安装（后端 /api/runtimes，
+// 安装命令硬编码在 internal/server/runtime.go，前端只传 id）。
+const runtimes = ref<RuntimeProbe[]>([])
+const runtimeDialogVisible = ref(false)
+const runtimeDialogId = ref('')
+const runtimeDialogName = ref('')
+
+// 各运行时的说明文案 key（描述与设置页截图一致，key 保持静态以便检查脚本覆盖）。
+const runtimeDescKeys: Record<string, string> = {
+  node: 'config.runtimeDescNode',
+  python: 'config.runtimeDescPython',
+  gitbash: 'config.runtimeDescGitbash',
+}
+
+function runtimeDescKey(id: string): string {
+  return runtimeDescKeys[id] || 'config.runtimeHint'
+}
+
+function runtimeIcon(id: string) {
+  switch (id) {
+    case 'node':
+      return LogoNodejs
+    case 'python':
+      return LogoPython
+    default:
+      return TerminalOutline
+  }
+}
+
+async function loadRuntimes() {
+  try {
+    const res = await listRuntimes()
+    runtimes.value = res.runtimes
+  } catch {
+    // 探测失败不打断设置页：列表留空，卡片里没有行可展示即可。
+    runtimes.value = []
+  }
+}
+
+function openRuntimeInstall(rt: RuntimeProbe) {
+  runtimeDialogId.value = rt.id
+  runtimeDialogName.value = rt.name
+  runtimeDialogVisible.value = true
+}
+
 // ---------------------------------------------------------------- 原始 JSON
 function formatJson(): void {
   try {
@@ -1327,6 +1427,8 @@ onMounted(async () => {
   await authStore.checkStatus()
   authConfigured.value = authStore.configured
   await loadRaw()
+  // 运行时探测不阻塞首屏：几个 --version 子进程，慢也只影响安全分区那一张卡。
+  void loadRuntimes()
 })
 </script>
 
@@ -1571,6 +1673,35 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   flex: none;
+}
+
+/* ---------- 本机运行时卡片 ---------- */
+.runtime-row {
+  align-items: center;
+}
+
+.runtime-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.runtime-icon {
+  flex: none;
+  color: #475467;
+}
+
+.runtime-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runtime-control {
+  gap: 8px;
 }
 
 .unit {

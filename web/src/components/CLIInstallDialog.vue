@@ -60,6 +60,7 @@ import {
   startCLIInstall,
   type CLIInstallJob,
 } from '@/api/agentplugins'
+import { startRuntimeInstall } from '@/api/runtime'
 
 /**
  * CLI 一键安装弹窗：提交任务 + 轮询状态 + 实时输出。
@@ -67,7 +68,8 @@ import {
  * 为什么单独抽组件：插件详情里的"命令未安装"与目录卡的"缺命令"是同一个动作，
  * 两处各写一份轮询迟早不一致（一边不清理定时器、一边忘了刷新列表）。
  *
- * 传参二选一：plugin（已安装插件，后端反查目录条目）或 catalogId（还没装）。
+ * 传参三选一：plugin（已安装插件，后端反查目录条目）、catalogId（还没装）、
+ * runtimeId（本机运行时：node / python / gitbash，安装清单在 internal/server/runtime.go）。
  */
 const props = defineProps<{
   show: boolean
@@ -75,6 +77,8 @@ const props = defineProps<{
   plugin?: string
   /** 目录条目 id：安装前从目录卡直接装命令 */
   catalogId?: string
+  /** 本机运行时 id（node / python / gitbash） */
+  runtimeId?: string
   /** 弹窗标题里显示的名字 */
   displayName?: string
 }>()
@@ -90,7 +94,7 @@ const message = useMessage()
 
 const job = ref<CLIInstallJob | null>(null)
 const phase = computed<'running' | 'done' | 'failed'>(() => job.value?.state ?? 'running')
-const displayName = computed(() => props.displayName || props.catalogId || props.plugin || '')
+const displayName = computed(() => props.displayName || props.runtimeId || props.catalogId || props.plugin || '')
 
 let timer: number | undefined
 
@@ -139,7 +143,9 @@ async function start() {
   job.value = null
   stopTimer()
   try {
-    const res = await startCLIInstall(props.plugin ? { plugin: props.plugin } : { id: props.catalogId })
+    const res = props.runtimeId
+      ? await startRuntimeInstall(props.runtimeId)
+      : await startCLIInstall(props.plugin ? { plugin: props.plugin } : { id: props.catalogId })
     job.value = res.job
     if (res.reused) message.info(t('agentplugins.cliInstallReused'))
     if (res.job.state === 'running') {

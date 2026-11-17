@@ -1812,6 +1812,11 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/cli/catalog/login", withCORS(requireAuth(s.handleCLILoginStart)))
 	mux.HandleFunc("/api/cli/catalog/login/", withCORS(requireAuth(s.handleCLILoginByID)))
 
+	// 本机运行时（Node.js / Python / Git Bash）探测与一键安装（见 runtime.go）；
+	// 安装任务复用 cli_install.go 的任务表，轮询走上面的 /api/plugins/cli/install/{id}。
+	mux.HandleFunc("/api/runtimes", withCORS(requireAuth(s.handleRuntimeList)))
+	mux.HandleFunc("/api/runtimes/install", withCORS(requireAuth(s.handleRuntimeInstall)))
+
 	// ACP 外部 agent（acp.json 的增删改 + 试用/重置；见 acp.go）
 	mux.HandleFunc("/api/acp/catalog", withCORS(requireAuth(s.handleACPCatalog)))
 	mux.HandleFunc("/api/acp/agents", withCORS(requireAuth(s.handleACPAgents)))
