@@ -944,7 +944,7 @@ export default {
     runtimeInstall: 'Install',
     runtimeDescNode: 'JavaScript runtime built on Chrome\u2019s V8 engine for server-side development.',
     runtimeDescPython: 'General-purpose programming language for scripting, automation and data processing.',
-    runtimeDescGitbash: 'Provides a Unix-like command-line environment with Git and Bash Shell on Windows.',
+    runtimeDescGitbash: 'Git version control tool with a bundled Bash shell for running command-line tasks.',
     generalSaved: 'General config saved',
     agentSaved: 'Agent config saved',
     memorySaved: 'Memory config saved',

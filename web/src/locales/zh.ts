@@ -948,7 +948,7 @@ export default {
     runtimeInstall: '安装',
     runtimeDescNode: '基于 Chrome V8 引擎的 JavaScript 运行时，用于服务端开发。',
     runtimeDescPython: '通用编程语言，适用于脚本编写、自动化和数据处理。',
-    runtimeDescGitbash: '在 Windows 上提供 Git 和 Bash Shell 的类 Unix 命令行环境。',
+    runtimeDescGitbash: 'Git 版本控制工具，附带 Bash shell，用于运行各类命令行任务。',
     generalSaved: '通用配置已保存',
     agentSaved: '代理配置已保存',
     memorySaved: '记忆配置已保存',
