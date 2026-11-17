@@ -1078,7 +1078,15 @@ function onProviderChange(section: Section, next: string) {
   // zh-CN → Xiaoxiao）：预填进输入框就把音色钉死在这一刻的语言上了，用户
   // 之后改 language，音色还是上一门语言的（Azure 拿英文音色读中文会带口音）。
   // 这类厂商只给占位提示，输入框留空=跟随 language。
-  if (!info.voice_follows_language && shouldPrefill(voiceForm.voice, prev?.default_voice)) {
+  // 反向同样要收口：从 ElevenLabs 这类有固定音色的厂商切过来时，输入框里
+  // 还留着上一家的 voice ID（21m00...），不清理就会原样发进 Azure 的 SSML
+  // / Google 的 name（必然失败）。判据复用 shouldPrefill：等于上一家默认值
+  // = 自动填的，可以清；用户手写的不动。
+  if (info.voice_follows_language) {
+    if (shouldPrefill(voiceForm.voice, prev?.default_voice)) {
+      voiceForm.voice = ''
+    }
+  } else if (shouldPrefill(voiceForm.voice, prev?.default_voice)) {
     voiceForm.voice = info.default_voice || ''
   }
 }
