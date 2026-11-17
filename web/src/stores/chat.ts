@@ -1256,31 +1256,123 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // probeQueuedStall 排队态兜底探测：!streaming 但排队气泡长时间没有动静。
+  //
+  // 这是此前所有自愈路径共同够不到的盲区：
+  //   - 全局停滞看门狗只盯 st.streaming 的会话（排队态直接 continue）；
+  //   - 队列看门狗只在 done 事件之后才挂上（done 到不了就永远不挂）；
+  //   - onerror 恢复依赖浏览器报错，而桌面 WebView 的半死连接恰恰不报错。
+  // 于是"消息已提交、连接却静默失联"时没人兜底：服务端把回合完整跑完并
+  // 落库，界面却永远停在"排队中"也不渲染，直到用户手动打断/关闭才通过对账
+  // 看到结果。
+  //
+  // 探测逻辑与 probeStreamStall 同源：问一次 /running，据答案分流——
+  //   a) 服务端正在跑（往往就是本地挂着的这条"排队中"）：把这条排队项就地
+  //      切入流式渲染，再挂一条附着流按位点补发 stream_started/delta；
+  //   b) 服务端还有活但没在跑：挂附着流等 worker 认领后的广播；
+  //   c) 服务端已排空：排队项其实已被执行完——拉一次会话消息就地并入，
+  //      效果等同于"自动对账收尾"，不用再等用户手动打断。
+  async function probeQueuedStall(sessionId: string, es: sessionsApi.ChatStream | null): Promise<void> {
+    if (sessionStallProbing.has(sessionId)) return
+    // 队列看门狗正在兜底时让位：它做的是同一件事，两套并行动作会互相拆台。
+    if (sessionQueueWatchdogs.value[sessionId]) return
+    sessionStallProbing.add(sessionId)
+    try {
+      const st = sessionStates.value[sessionId]
+      if (!st || st.streaming) return
+
+      // 连接存在且仍静默：先拆掉（半死连接不会再推 stream_started，留着
+      // 只会让下面的附着判断误以为"已有连接"）。检查与探测之间若恰好恢复
+      // 了事件流动，静默检查会拦住我们，交给下一轮再看。
+      if (es && sessionEventSources.value[sessionId] === es) {
+        const last = sessionLastEventAt.get(sessionId) || 0
+        if (Date.now() - last < STREAM_STALL_INTERVAL) return
+        const resumeFrom = es.getLastEventId()
+        if (resumeFrom > 0) sessionStreamOffsets.set(sessionId, resumeFrom)
+        es.close()
+        sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: null }
+      }
+
+      const running = await sessionsApi.getSessionRunning(sessionId)
+      const cur = sessionStates.value[sessionId]
+      if (!cur || cur.streaming) return // 往返期间已被流事件/其他路径接管
+
+      const activeId = String(running.active_id || '')
+      const mine = activeId ? cur.queued.find(q => q.turnId === activeId) : undefined
+      if (mine) {
+        // 服务端正在执行的就是本地这条"排队中"：直接切流式渲染——用户气泡
+        // 从排队项固化（用本地完整内容，而不是 stream_started 的 120 字预览）。
+        // 随后附着流补发的 stream_started 走"无匹配项"分支，幂等不重复。
+        startStreamingFromQueued(sessionId, mine)
+        if (!cur.activeTurnStartedAt && running.active_started_at > 0) {
+          cur.activeTurnStartedAt = running.active_started_at
+        }
+      }
+      syncQueuedFromServer(sessionId, running.queued, activeId, running.active_started_at)
+
+      if (running.running || running.queue_depth > 0 || cur.queued.length > 0) {
+        // 服务端还有活：挂一条附着流把事件接回来。位点之前的缺口由服务端
+        // 按序补发；此后的 stream_started/delta 正常推送，界面继续实时渲染。
+        if (!sessionEventSources.value[sessionId]) {
+          const att = sessionsApi.attachStream(sessionId, currentStreamOffset(sessionId))
+          sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: att }
+          attachStreamHandlers(sessionId, att)
+        }
+        return
+      }
+
+      // 服务端已排空：排队项已被执行完（或被清掉）。拉一次会话消息就地并入，
+      // 不整表替换——与停止后的对账收尾同一套语义，只是没人按停止键。
+      const res = await sessionsApi.getSession(sessionId)
+      const latest = sessionStates.value[sessionId]
+      if (!latest || latest.streaming) return
+      if (res.messages) mergeServerMessages(latest, res.messages)
+      refreshSessionEntry(sessionId)
+    } catch {
+      // 网络暂不可达：下一轮停滞窗口再试
+    } finally {
+      sessionStallProbing.delete(sessionId)
+    }
+  }
+
   if (typeof window !== 'undefined') {
     setInterval(() => {
       const now = Date.now()
       for (const sessionId of Object.keys(sessionStates.value)) {
         const st = sessionStates.value[sessionId]
-        if (!st || !st.streaming) continue
+        if (!st) continue
         // 用户刚点过停止：不要插手拆连接。
         if (stopSuppressed(sessionId)) continue
         const es = sessionEventSources.value[sessionId]
-        if (!es) continue // 无连接的会话已由轮询恢复（startStreamRecovery）接管
-        const last = sessionLastEventAt.get(sessionId) || 0
-        if (now - last < STREAM_STALL_INTERVAL) {
-          sessionStallStrikes.delete(sessionId) // 事件流动正常，清空停滞计数
+
+        if (st.streaming) {
+          if (!es) continue // 无连接的会话已由轮询恢复（startStreamRecovery）接管
+          const last = sessionLastEventAt.get(sessionId) || 0
+          if (now - last < STREAM_STALL_INTERVAL) {
+            sessionStallStrikes.delete(sessionId) // 事件流动正常，清空停滞计数
+            continue
+          }
+
+          // 停滞窗口累计：只有连续多个窗口都毫无动静才按"连接已死"处理。
+          //
+          // 计数由**静默时长**直接推导（而不是每轮 +1）：服务端在回合期间每 5s
+          // 发一次心跳，静默时长本身就是最可靠的判据。写成"每轮 +1"时，任何
+          // 一处推后了 sessionLastEventAt 的代码都会让计数在半途归零——那正是
+          // "正文输出到一半就再也不动、刷新后才看到已经完成"的根因。
+          const strikes = Math.floor((now - last) / STREAM_STALL_INTERVAL)
+          sessionStallStrikes.set(sessionId, strikes)
+          void probeStreamStall(sessionId, es, strikes)
           continue
         }
 
-        // 停滞窗口累计：只有连续多个窗口都毫无动静才按"连接已死"处理。
-        //
-        // 计数由**静默时长**直接推导（而不是每轮 +1）：服务端在回合期间每 5s
-        // 发一次心跳，静默时长本身就是最可靠的判据。写成"每轮 +1"时，任何
-        // 一处推后了 sessionLastEventAt 的代码都会让计数在半途归零——那正是
-        // "正文输出到一半就再也不动、刷新后才看到已经完成"的根因。
-        const strikes = Math.floor((now - last) / STREAM_STALL_INTERVAL)
-        sessionStallStrikes.set(sessionId, strikes)
-        void probeStreamStall(sessionId, es, strikes)
+        // 排队态兜底：!streaming 但还有排队气泡。正常情况下服务端 worker 认领
+        // 后立刻广播 stream_started，排队等待期在亚秒级；连接静默超过阈值
+        // 只有两种解释——半死连接（不再推事件也不触发 onerror），或事件早已
+        // 在服务端走完而本端没人接。两者都需要探测对账，见 probeQueuedStall。
+        if (st.queued.length === 0) continue
+        const last = sessionLastEventAt.get(sessionId) || 0
+        if (es && now - last < STREAM_STALL_INTERVAL) continue
+        void probeQueuedStall(sessionId, es)
       }
     }, STREAM_STALL_CHECK_EVERY)
   }
