@@ -920,6 +920,14 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 
 	sseW := newSSEWriter(w, flusher)
 	writeSSE := sseW.Write
+	// Close 的 defer 必须紧跟创建点注册：附着模式（attach=1）的所有 return
+	// 都在下面很靠前的位置，曾经把 defer 写在普通模式分支里，附着模式一断开
+	// （用户点停止/切后台掐掉连接）就直接 return，run() goroutine 永远收不到
+	// close(ch)，泄漏着已返回请求的 http.ResponseWriter。连接被 net/http
+	// 回收复用后，泄漏 goroutine 再对旧 response 写/Flush 就是 nil 指针
+	// panic——直接杀死整个后端进程（桌面壳重启并重载窗口，用户看到
+	// "打断后再完成，整个界面刷新、当前会话切到空白页"）。
+	defer sseW.Close()
 
 	// ------------------------------------------------------------------
 	// 附着模式（?attach=1）：不发送任何新消息，只是把当前 SSE 连接挂到该
@@ -981,7 +989,6 @@ func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request, ses
 		writeSSE("data: " + sseErrorPayload(fmt.Errorf("content or media required")) + "\n\n")
 		return
 	}
-	defer sseW.Close()
 
 	// 重发（retry）：这一条是某条排队消息被用户点「重新发送」后再提交的，
 	// 服务端在入队前先把原条目摘掉。

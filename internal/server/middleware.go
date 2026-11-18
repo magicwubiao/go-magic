@@ -29,12 +29,23 @@ func expandDotKeys(data map[string]interface{}) map[string]interface{} {
 }
 
 func (sw *sseWriter) Close() {
-	close(sw.ch)
+	// 幂等：attach/普通两条路径的 defer 注册时机不同，防止双重 close panic。
+	sw.closeOnce.Do(func() { close(sw.ch) })
 	<-sw.done
 }
 
 func (sw *sseWriter) run(w http.ResponseWriter, flusher http.Flusher) {
 	defer close(sw.done)
+	// run 是独立 goroutine，写路径上的任何 panic（对端断开瞬间底层连接状态
+	// 竞争、response 已被连接复用回收等）都会直接杀死整个进程——桌面壳的
+	// supervisor 会重启后端并重载窗口，用户看到的就是"对话完成时整个页面
+	// 刷新了一下、当前会话被切到空白页"。这里兜底降级：panic 只视为该条
+	// SSE 流已死（setErr 置 clientGone），绝不允许它逃出 goroutine。
+	defer func() {
+		if r := recover(); r != nil {
+			sw.setErr(fmt.Errorf("sse writer panic: %v", r))
+		}
+	}()
 
 	// ResponseController-backed per-write deadline refresh.
 	// We used to rely on the stream handler calling rc.SetWriteDeadline
@@ -113,6 +124,7 @@ func maskAPIKey(key string) string {
 type sseWriter struct {
 	ch           chan string
 	done         chan struct{}
+	closeOnce    sync.Once
 	err          error
 	mu           sync.Mutex
 	clientGone   bool
@@ -127,13 +139,23 @@ func (sw *sseWriter) setErr(err error) {
 	sw.mu.Unlock()
 }
 
-func (sw *sseWriter) Write(data string) bool {
+func (sw *sseWriter) Write(data string) (ok bool) {
 	sw.mu.Lock()
 	if sw.clientGone || sw.err != nil {
 		sw.mu.Unlock()
 		return false
 	}
 	sw.mu.Unlock()
+
+	// send-on-closed 兜底：Write 与 Close 并发（客户端断开瞬间心跳/事件恰好
+	// 在写）时，往已关闭的 channel 发送会 panic 并杀死整个进程。recover 后按
+	// "客户端已走"处理，与 Fprint 失败同一语义。
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+			sw.setClientGone()
+		}
+	}()
 
 	// flushTimeout previously 5s, now 30s. The old 5s window was too
 	// easy to miss when a single flush contained >256KB of tool output
