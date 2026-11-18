@@ -341,6 +341,10 @@ func (s *Server) runCLIInstall(job *cliInstallJob) {
 	}
 
 	// 安装完成立刻失效缓存：否则前端刷新时还会读到"命令不存在"。
+	// 先从注册表刷新 PATH（Windows 安装器改的是注册表，运行中进程的 PATH
+	// 还是启动时的快照），再失效缓存，两步顺序不能反——缓存失效后
+	// CommandAvailable 探测的正是刷新过的 PATH。
+	refreshProcessPath()
 	agentplugin.InvalidateCommandCache()
 	found := agentplugin.CommandAvailable(job.binary)
 

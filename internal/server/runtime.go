@@ -152,14 +152,33 @@ func runtimeVersion(binPath string) string {
 // handleRuntimeList 列出全部内置运行时的本机状态。
 //
 //	GET /api/runtimes
+//
+// 有未就绪项时先从注册表刷新一次 PATH 再重探（Windows 安装器改的是注册表，
+// 运行中进程的 PATH 是启动快照）：覆盖"用户刚装完回来点刷新"以及"在
+// 外部终端自己装的"两种场景，省掉一次重启。
 func (s *Server) handleRuntimeList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	items := make([]runtimeProbeResult, 0, len(runtimeSpecs))
-	for _, spec := range runtimeSpecs {
-		items = append(items, probeRuntime(spec))
+	probeAll := func() []runtimeProbeResult {
+		items := make([]runtimeProbeResult, 0, len(runtimeSpecs))
+		for _, spec := range runtimeSpecs {
+			items = append(items, probeRuntime(spec))
+		}
+		return items
+	}
+	items := probeAll()
+	missing := false
+	for _, it := range items {
+		if !it.Found {
+			missing = true
+			break
+		}
+	}
+	if missing {
+		refreshProcessPath()
+		items = probeAll()
 	}
 	jsonResponse(w, map[string]any{
 		"ok":       true,
