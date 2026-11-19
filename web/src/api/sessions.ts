@@ -215,7 +215,7 @@ export interface DirEntry {
   is_dir: boolean
 }
 
-export async function listDirs(path?: string): Promise<{ current: string; dirs: DirEntry[] }> {
+export async function listDirs(path?: string): Promise<{ current: string; dirs: DirEntry[]; error?: string }> {
   const query = path ? `?path=${encodeURIComponent(path)}` : ''
   return request(`/fs/dirs${query}`)
 }

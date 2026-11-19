@@ -1325,6 +1325,10 @@ async function loadDirs(path?: string) {
   dirLoading.value = true
   try {
     const res = await listDirs(path)
+    // 服务端兜底失败才会带 error（此时 current 为空）；明确提示，别让弹窗静默空白。
+    if (res.error) {
+      message.warning(res.error)
+    }
     dirCurrentPath.value = res.current
     dirEntries.value = res.dirs || []
   } catch (e) {
@@ -1337,7 +1341,11 @@ async function loadDirs(path?: string) {
 
 function openDirPicker(target: DirPickerTarget = 'working') {
   dirPickerTarget.value = target
-  loadDirs(pickedDirValue() || undefined)
+  // browser 目标且字段为空（全新安装 / 刚切到自定义模式）时，以默认 profile 目录
+  // 为起点而不是传空：传空会让服务端退回进程 CWD（可能是安装器临时目录等，
+  // 不存在时列表整个空白）。`~` 由服务端展开，目录不存在时服务端兜底到主目录。
+  const initial = pickedDirValue() || (target === 'browser' ? browserProfileDefaultDir : '')
+  loadDirs(initial || undefined)
   loadWorkDirHistory()
   showDirPicker.value = true
 }

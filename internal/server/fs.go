@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	appconfig "github.com/magicwubiao/go-magic/pkg/config"
 )
 
 func (s *Server) handleFSDelete(w http.ResponseWriter, r *http.Request) {
@@ -123,22 +125,59 @@ func (s *Server) getSessionWorkDir(sessionID string, sessionName string) string 
 	return filepath.Join(baseDir, fmt.Sprintf("%s-%s", safeName, shortID))
 }
 
+// homeDirFallback 返回用户主目录，拿不到时返回空串（调用方跳过该候选）。
+func homeDirFallback() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return home
+}
+
+// cwdFallback 返回进程当前工作目录，拿不到时返回空串。
+func cwdFallback() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
 func (s *Server) handleListDirs(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		path, _ = os.Getwd()
 	}
+	// 前端可能把表单里未展开的 `~` 开头路径原样传上来（如 `~/.magic/browser-profile`）。
+	// 不展开的话 filepath.Abs 会按 CWD 相对路径解析出一个不存在的字面量 `~` 目录，
+	// ReadDir 必然失败，目录选择弹窗一片空白。
+	path = appconfig.ExpandHome(path)
 
-	// Security: resolve to absolute path and prevent traversal above root
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"dirs": []string{}, "error": "invalid path"})
-		return
+	// 逐级兜底：请求路径 → 用户主目录 → 进程 CWD。初始路径不存在或不可读时
+	// （典型场景：全新安装后第一次打开"登录态目录"选择器，配置里的默认
+	// profile 目录还没被创建过；或安装器临时目录作为 CWD 已被删除），
+	// 必须落到一个真实可读的目录上，否则返回的 dirs 为空且没有 current，
+	// 前端弹窗显示空白、"上一级"按钮也不可用，用户只能关掉重开。
+	// 修过一次才正常的现象（保存出有效路径后再开选择器就好了）即源于此。
+	var absPath string
+	var entries []os.DirEntry
+	for _, candidate := range []string{path, homeDirFallback(), cwdFallback()} {
+		if candidate == "" {
+			continue
+		}
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		ents, err := os.ReadDir(abs)
+		if err != nil {
+			continue
+		}
+		absPath, entries = abs, ents
+		break
 	}
-
-	entries, err := os.ReadDir(absPath)
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"dirs": []string{}, "error": "cannot read directory"})
+	if absPath == "" {
+		jsonResponse(w, map[string]interface{}{"dirs": []interface{}{}, "error": "cannot read directory"})
 		return
 	}
 
