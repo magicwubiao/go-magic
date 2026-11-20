@@ -19,10 +19,14 @@ package server
 // PATH，排在前面即胜出）。
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -49,6 +53,57 @@ func readRegistryPath(root registry.Key, key string) []string {
 		return nil
 	}
 	return filepath.SplitList(v)
+}
+
+// addUserPathEntry 把 dir 插到 HKCU\Environment 的 Path **最前面**（已存在
+// 则不动，返回 nil）。
+//
+// 为什么插前面而不是追加：用户 PATH 里的 WindowsApps 有商店 python stub，
+// 追加会让 stub 抢先（LookPath 顺序在 PATH 前面）。我们管理的 runtimes 目录
+// 排前面，探测才能稳定命中真 Python。
+//
+// 用 registry API 而不是 reg.exe：读改写一气呵成，还躲开了 reg add 对
+// REG_EXPAND_SZ 的引号转义问题。回写统一用 REG_EXPAND_SZ，保住 Path 里
+// 已有的 %VAR% 条目。
+func addUserPathEntry(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return errors.New("empty path entry")
+	}
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Environment`,
+		registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("open HKCU Environment: %w", err)
+	}
+	defer k.Close()
+	v, _, err := k.GetStringValue("Path")
+	if err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return fmt.Errorf("read user Path: %w", err)
+	}
+	entries := filepath.SplitList(v)
+	for _, e := range entries {
+		if strings.EqualFold(strings.TrimSpace(e), dir) {
+			return nil // 已经在了
+		}
+	}
+	out := append([]string{dir}, entries...)
+	return k.SetExpandStringValue("Path", strings.Join(out, ";"))
+}
+
+// notifyEnvChanged 广播 WM_SETTINGCHANGE，让资源管理器刷新环境变量，
+// 之后新开的终端才能看到我们写入的 PATH。失败静默：广播只是锦上添花，
+// 应用自身与子进程的 PATH 我们已经通过 refreshProcessPath 解决了。
+func notifyEnvChanged() {
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	proc := user32.NewProc("SendMessageTimeoutW")
+	name, err := windows.UTF16PtrFromString("Environment")
+	if err != nil {
+		return
+	}
+	var res uintptr
+	// HWND_BROADCAST(0xFFFF) + WM_SETTINGCHANGE(0x001A) + SMTO_ABORTIFHUNG(0x0002)
+	proc.Call(0xFFFF, 0x001A, 0, uintptr(unsafe.Pointer(name)), 0x0002, 2000,
+		uintptr(unsafe.Pointer(&res)))
 }
 
 // mergePathList 把三段 PATH 条目按顺序做并集（大小写不敏感去重，Windows

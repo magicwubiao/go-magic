@@ -47,11 +47,11 @@ const (
 
 // 失败归因（error_kind，给前端做可读提示）。
 const (
-	installErrKindPmMissing   = "pm-missing"   // 包管理器本身不存在（winget 缺失最常见）
-	installErrKindNetwork     = "network"      // 下载源不通或超时，国内直连官方源的典型失败
-	installErrKindPermission  = "permission"   // 需要管理员权限/UAC 被拒
-	installErrKindTimeout     = "timeout"      // 整条链路撞了 10 分钟硬上限
-	installErrKindGeneric     = "generic"      // 归不了类的都算这个
+	installErrKindPmMissing  = "pm-missing" // 包管理器本身不存在（winget 缺失最常见）
+	installErrKindNetwork    = "network"    // 下载源不通或超时，国内直连官方源的典型失败
+	installErrKindPermission = "permission" // 需要管理员权限/UAC 被拒
+	installErrKindTimeout    = "timeout"    // 整条链路撞了 10 分钟硬上限
+	installErrKindGeneric    = "generic"    // 归不了类的都算这个
 )
 
 // cliInstallJob 是一次安装任务。
@@ -70,8 +70,12 @@ type cliInstallJob struct {
 	binaryFound bool
 	errText     string
 	errKind     string
-	startedAt   time.Time
-	finishedAt  time.Time
+	// stage/percent 是安装进度：stage 是英文阶段枚举（前端映射文案），
+	// percent 是 0-100 的整数，-1 表示未知（包管理器安装拿不到进度）。
+	stage      string
+	percent    int
+	startedAt  time.Time
+	finishedAt time.Time
 }
 
 // snapshot 生成给前端的状态视图。
@@ -97,6 +101,12 @@ func (j *cliInstallJob) snapshot() map[string]any {
 	if j.errKind != "" {
 		out["error_kind"] = j.errKind
 	}
+	if j.stage != "" {
+		out["stage"] = j.stage
+	}
+	if j.percent >= 0 {
+		out["percent"] = j.percent
+	}
 	if !j.finishedAt.IsZero() {
 		out["finished_at"] = j.finishedAt.Format(time.RFC3339)
 	}
@@ -104,6 +114,14 @@ func (j *cliInstallJob) snapshot() map[string]any {
 		out["truncated"] = true
 	}
 	return out
+}
+
+// setProgress 更新安装进度（stage + percent），轮询接口并发读，走锁。
+func (j *cliInstallJob) setProgress(stage string, percent int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.stage = stage
+	j.percent = percent
 }
 
 // appendOutput 追加子进程输出，超过上限后只置截断标记。
@@ -271,6 +289,7 @@ func (s *Server) handleCLIInstallStart(w http.ResponseWriter, r *http.Request) {
 		commands:  commands,
 		state:     cliInstallRunning,
 		binary:    entry.Connector.Command,
+		percent:   -1,
 		startedAt: time.Now(),
 	}
 	s.addInstallJob(job)
@@ -395,11 +414,34 @@ func preflightInstallCommands(commands []string) string {
 	return ""
 }
 
-// runCLIInstall 顺序执行安装命令，第一条成功即停。
+// runCLIInstall CLI 目录安装入口：包管理器一条路走到底。
 func (s *Server) runCLIInstall(job *cliInstallJob) {
+	s.runInstallJob(job)
+}
+
+// runRuntimeInstall 运行时安装入口：便携包优先（国内镜像、免管理员权限），
+// 失败回退包管理器（winget/brew/apt）。
+func (s *Server) runRuntimeInstall(job *cliInstallJob, spec runtimeSpec) {
+	if ps := spec.PortableWindows; ps != nil {
+		err := installPortable(spec, ps, job)
+		if err == nil {
+			s.finalizeInstall(job, true, nil, nil)
+			return
+		}
+		// 回退的输出里带上便携包失败原因：归因分类（classifyInstallError）
+		// 吃的是整段输出，这些行让 network/timeout 的关键词有机会命中。
+		job.appendOutput([]byte(fmt.Sprintf("[mirror] portable install failed: %v\n", err)))
+		job.appendOutput([]byte("[mirror] falling back to the system package manager\n"))
+	}
+	s.runInstallJob(job)
+}
+
+// runInstallJob 顺序执行安装命令，第一条成功即停。
+func (s *Server) runInstallJob(job *cliInstallJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), cliInstallTimeout)
 	defer cancel()
 
+	job.setProgress(stagePackageManager, -1)
 	okAny := false
 	var lastErr error
 	for _, command := range job.commands {
@@ -413,10 +455,16 @@ func (s *Server) runCLIInstall(job *cliInstallJob) {
 		job.appendOutput([]byte(fmt.Sprintf("\n[exit] %v\n", err)))
 	}
 
-	// 安装完成立刻失效缓存：否则前端刷新时还会读到"命令不存在"。
-	// 先从注册表刷新 PATH（Windows 安装器改的是注册表，运行中进程的 PATH
-	// 还是启动时的快照），再失效缓存，两步顺序不能反——缓存失效后
-	// CommandAvailable 探测的正是刷新过的 PATH。
+	s.finalizeInstall(job, okAny, lastErr, ctx.Err())
+}
+
+// finalizeInstall 安装收尾：刷 PATH、探测 binary、落终态。
+//
+// 安装完成立刻失效缓存：否则前端刷新时还会读到"命令不存在"。
+// 先从注册表刷新 PATH（Windows 安装器改的是注册表，运行中进程的 PATH
+// 还是启动时的快照），再失效缓存，两步顺序不能反——缓存失效后
+// CommandAvailable 探测的正是刷新过的 PATH。
+func (s *Server) finalizeInstall(job *cliInstallJob, okAny bool, lastErr error, ctxErr error) {
 	refreshProcessPath()
 	agentplugin.InvalidateCommandCache()
 	found := agentplugin.CommandAvailable(job.binary)
@@ -435,7 +483,7 @@ func (s *Server) runCLIInstall(job *cliInstallJob) {
 	case lastErr != nil:
 		job.state = cliInstallFailed
 		job.errText = lastErr.Error()
-		job.errKind = classifyInstallError(ctx.Err(), job.output.String())
+		job.errKind = classifyInstallError(ctxErr, job.output.String())
 	default:
 		job.state = cliInstallFailed
 		job.errText = "no install command was executed"

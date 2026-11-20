@@ -403,6 +403,10 @@ export interface CLIInstallJob {
   error?: string
   /** 失败归因(pm-missing/network/permission/timeout/generic),前端按类给可读提示 */
   error_kind?: string
+  /** 当前安装阶段(download/extract/path/verify/package-manager),前端映射文案 */
+  stage?: string
+  /** 安装进度 0-100;缺省或负值表示未知(包管理器安装拿不到进度) */
+  percent?: number
   truncated?: boolean
 }
 

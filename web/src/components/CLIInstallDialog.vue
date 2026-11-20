@@ -31,7 +31,19 @@
       </n-tag>
     </div>
 
-    <!-- 跑得慢时提前打预防针：多半是下载源在境外，别让用户干等 -->
+    <!-- 安装进度：下载/解压阶段给真实百分比，包管理器阶段只有文案 -->
+    <div v-if="stageText" class="ci-stage">
+      <n-progress
+        v-if="percent !== null"
+        type="line"
+        :percentage="percent"
+        :height="8"
+        :show-indicator="false"
+      />
+      <n-text depth="3" style="font-size: 12px;">{{ stageText }}</n-text>
+    </div>
+
+    <!-- 跑得慢时提前打预防针：多半是网络较慢，别让用户干等 -->
     <n-alert v-if="slowInstall" type="info" :bordered="false" class="ci-alert">
       {{ t('agentplugins.cliInstallSlowHint') }}
     </n-alert>
@@ -73,7 +85,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NAlert, NButton, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
+import { NAlert, NButton, NModal, NProgress, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   getCLIInstallJob,
@@ -147,6 +159,25 @@ const failReason = computed(() => {
   return key ? t(key) : ''
 })
 const mirror = computed(() => props.mirror || '')
+
+// ---- 安装进度：便携包直装有真实百分比（下载 0-70、解压 70-98、
+// 验证 98-100）；包管理器阶段拿不到进度，percent 缺省只显示阶段文案。 ----
+const stageKeys: Record<string, string> = {
+  download: 'agentplugins.cliStageDownload',
+  extract: 'agentplugins.cliStageExtract',
+  path: 'agentplugins.cliStagePath',
+  verify: 'agentplugins.cliStageVerify',
+  'package-manager': 'agentplugins.cliStagePackageManager',
+}
+const stageText = computed(() => {
+  if (phase.value !== 'running') return ''
+  const key = stageKeys[job.value?.stage || '']
+  return key ? t(key) : ''
+})
+const percent = computed(() => {
+  const p = job.value?.percent
+  return phase.value === 'running' && typeof p === 'number' && p >= 0 ? p : null
+})
 
 function openMirror() {
   if (mirror.value) openExternal(mirror.value)
@@ -251,6 +282,12 @@ onBeforeUnmount(stopTimer)
   margin-top: 12px;
 }
 .ci-alert {
+  margin-top: 10px;
+}
+.ci-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 10px;
 }
 .ci-mirror {

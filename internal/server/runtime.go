@@ -47,6 +47,24 @@ type runtimeSpec struct {
 	// Mirror 是国内可达的手动下载页：自动安装失败/太慢时，前端把它
 	// 当成兜底出口展示（装完回来点刷新即可探测到，无需重启）。
 	Mirror string
+	// PortableWindows 是 Windows 便携包直装定义（nil = 该运行时没有）：
+	// 从国内镜像下载 zip 解压到应用管理的目录并写用户级 PATH，免管理员
+	// 权限。安装顺序是便携包优先、失败回退包管理器（winget）。
+	PortableWindows *portableSpec
+}
+
+// portableSpec 描述一个可直接解压使用的便携包。
+type portableSpec struct {
+	// URL 是钉住版本的镜像直链。必须钉版本：镜像列表页结构不稳定，
+	// "最新版"跳转会引入不可控的解析逻辑。
+	URL string
+	// SizeHint 是预期的 zip 字节数（验证期实测得到的），只在输出里给
+	// 用户一个预期，不作为校验依据。
+	SizeHint int64
+	// PathSub 是解压根下需要加入 PATH 的子目录（"" 表示根目录本身）。
+	PathSub string
+	// CheckFile 是解压后必须存在的文件（相对解压根），存在才算解压成功。
+	CheckFile string
 }
 
 // 内置运行时清单。新增条目只改这里——接口侧依旧只认 id。
@@ -57,6 +75,13 @@ var runtimeSpecs = []runtimeSpec{
 		Binary: "node",
 		Probe:  []string{"node"},
 		Mirror: "https://npmmirror.com/mirrors/node/",
+		PortableWindows: &portableSpec{
+			// zip 解压后是单层 node-v22.14.0-win-x64/ 目录（extractZip
+			// 会剥掉这层），node.exe/npm.cmd/npx.cmd 都在解压根。
+			URL:       "https://npmmirror.com/mirrors/node/v22.14.0/node-v22.14.0-win-x64.zip",
+			SizeHint:  34906389,
+			CheckFile: "node.exe",
+		},
 		Install: map[string][]string{
 			"windows": {"winget install --id OpenJS.NodeJS.LTS -e"},
 			"darwin":  {"brew install node"},
@@ -69,6 +94,14 @@ var runtimeSpecs = []runtimeSpec{
 		Binary: "python",
 		Probe:  []string{"python3", "python"},
 		Mirror: "https://mirrors.huaweicloud.com/python/",
+		PortableWindows: &portableSpec{
+			// embeddable 包解压根就有 python.exe；它不带 pip，作为
+			// 兜底运行时够用（跑脚本、起 MCP server），重依赖场景
+			// 仍建议用户走 winget/官方安装器。
+			URL:       "https://mirrors.huaweicloud.com/python/3.12.8/python-3.12.8-embed-amd64.zip",
+			SizeHint:  11094114,
+			CheckFile: "python.exe",
+		},
 		Install: map[string][]string{
 			"windows": {"winget install --id Python.Python.3.12 -e"},
 			"darwin":  {"brew install python3"},
@@ -83,6 +116,14 @@ var runtimeSpecs = []runtimeSpec{
 		Binary: "git",
 		Probe:  []string{"git"},
 		Mirror: "https://npmmirror.com/mirrors/git-for-windows/",
+		PortableWindows: &portableSpec{
+			// MinGit 是 git-for-windows 的精简发行（纯 zip，多顶层目录，
+			// 不剥层），git.exe 在 cmd/ 下；GUI 和大部分翻译文件都裁掉了。
+			URL:       "https://npmmirror.com/mirrors/git-for-windows/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip",
+			SizeHint:  47241394,
+			PathSub:   "cmd",
+			CheckFile: "cmd/git.exe",
+		},
 		Install: map[string][]string{
 			"windows": {"winget install --id Git.Git -e"},
 			"darwin":  {"brew install git"},
@@ -231,9 +272,13 @@ func (s *Server) handleRuntimeInstall(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("runtime %q has no install command for %s", spec.ID, runtime.GOOS))
 		return
 	}
-	if msg := preflightInstallCommands(commands); msg != "" {
-		jsonError(w, http.StatusBadRequest, msg)
-		return
+	// 便携包直装绕过包管理器：winget 缺失不构成失败理由，只在"没有
+	// 便携包可走"时才做预检快速失败。
+	if spec.PortableWindows == nil {
+		if msg := preflightInstallCommands(commands); msg != "" {
+			jsonError(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 
 	job := &cliInstallJob{
@@ -242,10 +287,11 @@ func (s *Server) handleRuntimeInstall(w http.ResponseWriter, r *http.Request) {
 		commands:  commands,
 		state:     cliInstallRunning,
 		binary:    spec.Binary,
+		percent:   -1,
 		startedAt: time.Now(),
 	}
 	s.addInstallJob(job)
-	go s.runCLIInstall(job)
+	go s.runRuntimeInstall(job, spec)
 
 	jsonResponse(w, map[string]any{"ok": true, "job": job.snapshot()})
 }
