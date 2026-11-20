@@ -13,6 +13,8 @@ export interface RuntimeProbe {
   found: boolean
   path?: string
   version?: string
+  /** 国内可达的手动下载页,自动安装失败/太慢时兜底用 */
+  mirror?: string
 }
 
 export interface RuntimeListResult {

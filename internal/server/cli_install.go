@@ -45,6 +45,15 @@ const (
 	cliInstallFailed  = "failed"
 )
 
+// 失败归因（error_kind，给前端做可读提示）。
+const (
+	installErrKindPmMissing   = "pm-missing"   // 包管理器本身不存在（winget 缺失最常见）
+	installErrKindNetwork     = "network"      // 下载源不通或超时，国内直连官方源的典型失败
+	installErrKindPermission  = "permission"   // 需要管理员权限/UAC 被拒
+	installErrKindTimeout     = "timeout"      // 整条链路撞了 10 分钟硬上限
+	installErrKindGeneric     = "generic"      // 归不了类的都算这个
+)
+
 // cliInstallJob 是一次安装任务。
 //
 // 字段全部走 j.mu 保护：输出是子进程边跑边追加的，轮询接口并发读。
@@ -60,6 +69,7 @@ type cliInstallJob struct {
 	binary      string
 	binaryFound bool
 	errText     string
+	errKind     string
 	startedAt   time.Time
 	finishedAt  time.Time
 }
@@ -83,6 +93,9 @@ func (j *cliInstallJob) snapshot() map[string]any {
 	}
 	if j.errText != "" {
 		out["error"] = j.errText
+	}
+	if j.errKind != "" {
+		out["error_kind"] = j.errKind
 	}
 	if !j.finishedAt.IsZero() {
 		out["finished_at"] = j.finishedAt.Format(time.RFC3339)
@@ -246,6 +259,10 @@ func (s *Server) handleCLIInstallStart(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("catalog entry %q has no install command for %s", entry.ID, runtime.GOOS))
 		return
 	}
+	if msg := preflightInstallCommands(commands); msg != "" {
+		jsonError(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	job := &cliInstallJob{
 		id:        newInstallJobID(),
@@ -322,6 +339,62 @@ func unattendedCommand(command string) string {
 	return command + " --accept-package-agreements --accept-source-agreements"
 }
 
+// classifyInstallError 从退出错误与子进程输出里归因失败原因。
+//
+// 包管理器的输出里 failures 混在几百行进度文本中，前端只拿到一句
+// "exit status 1" 毫无价值；这里用关键词粗分四类，让用户至少知道该
+// 换网络、补权限还是直接走手动安装。宁可归成 generic 也不强猜。
+func classifyInstallError(ctxErr error, output string) string {
+	if ctxErr == context.DeadlineExceeded {
+		return installErrKindTimeout
+	}
+	low := strings.ToLower(output)
+	switch {
+	case strings.Contains(low, "winget") && strings.Contains(low, "is not recognized"),
+		strings.Contains(low, "winget: command not found"),
+		strings.Contains(low, "brew: command not found"),
+		strings.Contains(low, "apt-get: command not found"):
+		return installErrKindPmMissing
+	case strings.Contains(low, "timed out"),
+		strings.Contains(low, "timeout"),
+		strings.Contains(low, "connection refused"),
+		strings.Contains(low, "no such host"),
+		strings.Contains(low, "unreachable"),
+		strings.Contains(low, "reset by peer"),
+		strings.Contains(low, "network"),
+		strings.Contains(low, "curl: (7)"),
+		strings.Contains(low, "curl: (28)"):
+		return installErrKindNetwork
+	case strings.Contains(low, "access denied"),
+		strings.Contains(low, "permission denied"),
+		strings.Contains(low, "administrator"),
+		strings.Contains(low, "elevation"),
+		strings.Contains(low, "requires admin"):
+		return installErrKindPermission
+	}
+	return installErrKindGeneric
+}
+
+// preflightInstallCommands 在拉起子进程前先确认包管理器在不在。
+//
+// winget 缺失（精简系统/企业镜像被组策略禁掉 App Installer）时，命令会
+// "跑完"并留下 10 分钟的模糊失败；提前 LookPath 一次就能秒失败并给出
+// 可读原因。返回空串表示预检通过。
+func preflightInstallCommands(commands []string) string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	for _, c := range commands {
+		if !strings.HasPrefix(c, "winget ") {
+			continue
+		}
+		if _, err := exec.LookPath("winget"); err != nil {
+			return "winget is not available on this machine; enable App Installer or install the runtime manually"
+		}
+	}
+	return ""
+}
+
 // runCLIInstall 顺序执行安装命令，第一条成功即停。
 func (s *Server) runCLIInstall(job *cliInstallJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), cliInstallTimeout)
@@ -362,6 +435,7 @@ func (s *Server) runCLIInstall(job *cliInstallJob) {
 	case lastErr != nil:
 		job.state = cliInstallFailed
 		job.errText = lastErr.Error()
+		job.errKind = classifyInstallError(ctx.Err(), job.output.String())
 	default:
 		job.state = cliInstallFailed
 		job.errText = "no install command was executed"

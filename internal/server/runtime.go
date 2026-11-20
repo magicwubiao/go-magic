@@ -44,6 +44,9 @@ type runtimeSpec struct {
 	Probe []string
 	// Install 按 GOOS 给安装命令（按顺序试，第一条成功即停）。
 	Install map[string][]string
+	// Mirror 是国内可达的手动下载页：自动安装失败/太慢时，前端把它
+	// 当成兜底出口展示（装完回来点刷新即可探测到，无需重启）。
+	Mirror string
 }
 
 // 内置运行时清单。新增条目只改这里——接口侧依旧只认 id。
@@ -53,6 +56,7 @@ var runtimeSpecs = []runtimeSpec{
 		Name:   "Node.js",
 		Binary: "node",
 		Probe:  []string{"node"},
+		Mirror: "https://npmmirror.com/mirrors/node/",
 		Install: map[string][]string{
 			"windows": {"winget install --id OpenJS.NodeJS.LTS -e"},
 			"darwin":  {"brew install node"},
@@ -64,6 +68,7 @@ var runtimeSpecs = []runtimeSpec{
 		Name:   "Python",
 		Binary: "python",
 		Probe:  []string{"python3", "python"},
+		Mirror: "https://mirrors.huaweicloud.com/python/",
 		Install: map[string][]string{
 			"windows": {"winget install --id Python.Python.3.12 -e"},
 			"darwin":  {"brew install python3"},
@@ -77,6 +82,7 @@ var runtimeSpecs = []runtimeSpec{
 		Name:   "Git Bash",
 		Binary: "git",
 		Probe:  []string{"git"},
+		Mirror: "https://npmmirror.com/mirrors/git-for-windows/",
 		Install: map[string][]string{
 			"windows": {"winget install --id Git.Git -e"},
 			"darwin":  {"brew install git"},
@@ -103,6 +109,7 @@ type runtimeProbeResult struct {
 	Found   bool   `json:"found"`
 	Path    string `json:"path,omitempty"`
 	Version string `json:"version,omitempty"`
+	Mirror  string `json:"mirror,omitempty"`
 }
 
 // probeRuntime 对候选可执行文件逐个探测：LookPath + 跑一次 --version。
@@ -110,7 +117,7 @@ type runtimeProbeResult struct {
 // 只喂硬编码的 argv（与 cliconn.Probe 同一纪律），不掺任何用户输入。
 // 版本输出取第一行（如 v20.11.0 / Python 3.12.4 / git version 2.45.1）。
 func probeRuntime(spec runtimeSpec) runtimeProbeResult {
-	out := runtimeProbeResult{ID: spec.ID, Name: spec.Name, Binary: spec.Binary}
+	out := runtimeProbeResult{ID: spec.ID, Name: spec.Name, Binary: spec.Binary, Mirror: spec.Mirror}
 	for _, bin := range spec.Probe {
 		path, err := exec.LookPath(bin)
 		if err != nil {
@@ -222,6 +229,10 @@ func (s *Server) handleRuntimeInstall(w http.ResponseWriter, r *http.Request) {
 	if len(commands) == 0 {
 		jsonError(w, http.StatusBadRequest,
 			fmt.Sprintf("runtime %q has no install command for %s", spec.ID, runtime.GOOS))
+		return
+	}
+	if msg := preflightInstallCommands(commands); msg != "" {
+		jsonError(w, http.StatusBadRequest, msg)
 		return
 	}
 

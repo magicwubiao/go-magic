@@ -31,6 +31,26 @@
       </n-tag>
     </div>
 
+    <!-- 跑得慢时提前打预防针：多半是下载源在境外，别让用户干等 -->
+    <n-alert v-if="slowInstall" type="info" :bordered="false" class="ci-alert">
+      {{ t('agentplugins.cliInstallSlowHint') }}
+    </n-alert>
+
+    <!-- 失败归因：按后端 error_kind 给"下一步怎么办"，比一句失败有用 -->
+    <n-alert v-if="failReason" type="warning" :bordered="false" class="ci-alert">
+      {{ failReason }}
+    </n-alert>
+
+    <!-- 镜像兜底：自动安装失败/太慢时，国内镜像手动下载（装完点刷新即可） -->
+    <div v-if="phase === 'failed' && mirror" class="ci-mirror">
+      <n-button size="small" @click="openMirror">
+        {{ t('agentplugins.cliInstallMirror') }}
+      </n-button>
+      <n-text depth="3" style="font-size: 12px;">
+        {{ t('agentplugins.cliInstallMirrorHint') }}
+      </n-text>
+    </div>
+
     <div v-if="job && job.output" class="ci-out-wrap">
       <div class="ci-out-label">{{ t('agentplugins.cliInstallOutput') }}</div>
       <pre class="ci-out">{{ job.output }}</pre>
@@ -53,13 +73,14 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { NButton, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
+import { NAlert, NButton, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
   getCLIInstallJob,
   startCLIInstall,
   type CLIInstallJob,
 } from '@/api/agentplugins'
+import { openExternal } from '@/utils/external'
 import { startRuntimeInstall } from '@/api/runtime'
 
 /**
@@ -81,6 +102,8 @@ const props = defineProps<{
   runtimeId?: string
   /** 弹窗标题里显示的名字 */
   displayName?: string
+  /** 国内可达的手动下载页（运行时安装时传入），失败兜底用 */
+  mirror?: string
 }>()
 
 const emit = defineEmits<{
@@ -95,6 +118,39 @@ const message = useMessage()
 const job = ref<CLIInstallJob | null>(null)
 const phase = computed<'running' | 'done' | 'failed'>(() => job.value?.state ?? 'running')
 const displayName = computed(() => props.displayName || props.runtimeId || props.catalogId || props.plugin || '')
+
+// ---- 慢网提示：running 超过一分钟就打预防针，避免用户在转圈里干等 ----
+const elapsedSec = ref(0)
+const startedTick = ref(0)
+const slowInstall = computed(() => phase.value === 'running' && elapsedSec.value >= 60)
+
+function tickElapsed() {
+  const j = job.value
+  if (!j || j.state !== 'running') return
+  // 优先用服务端的 started_at（复用在途任务时本地 tick 会从零起算）。
+  const started = j.started_at ? Date.parse(j.started_at) : startedTick.value
+  if (Number.isFinite(started)) {
+    elapsedSec.value = Math.max(0, Math.round((Date.now() - started) / 1000))
+  }
+}
+
+// ---- 失败归因：后端 error_kind 粗分四类，给一句"下一步怎么办" ----
+const failReasonKeys: Record<string, string> = {
+  'pm-missing': 'agentplugins.cliInstallFailPmMissing',
+  network: 'agentplugins.cliInstallFailNetwork',
+  permission: 'agentplugins.cliInstallFailPermission',
+  timeout: 'agentplugins.cliInstallFailTimeout',
+}
+const failReason = computed(() => {
+  if (phase.value !== 'failed') return ''
+  const key = failReasonKeys[job.value?.error_kind || 'generic']
+  return key ? t(key) : ''
+})
+const mirror = computed(() => props.mirror || '')
+
+function openMirror() {
+  if (mirror.value) openExternal(mirror.value)
+}
 
 let timer: number | undefined
 
@@ -115,6 +171,7 @@ async function poll(id: string) {
   try {
     const res = await getCLIInstallJob(id)
     job.value = res.job
+    tickElapsed()
     if (res.job.state !== 'running') {
       stopTimer()
       finish(res.job)
@@ -142,6 +199,8 @@ function finish(done: CLIInstallJob) {
 async function start() {
   job.value = null
   stopTimer()
+  startedTick.value = Date.now()
+  elapsedSec.value = 0
   try {
     const res = props.runtimeId
       ? await startRuntimeInstall(props.runtimeId)
@@ -190,6 +249,15 @@ onBeforeUnmount(stopTimer)
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+.ci-alert {
+  margin-top: 10px;
+}
+.ci-mirror {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
 }
 .ci-out-wrap {
   margin-top: 12px;

@@ -399,7 +399,10 @@ export interface CLIInstallJob {
   output: string
   binary: string
   binary_found: boolean
+  started_at?: string
   error?: string
+  /** 失败归因(pm-missing/network/permission/timeout/generic),前端按类给可读提示 */
+  error_kind?: string
   truncated?: boolean
 }
 

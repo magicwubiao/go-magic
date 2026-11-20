@@ -608,6 +608,7 @@
       v-model:show="runtimeDialogVisible"
       :runtime-id="runtimeDialogId"
       :display-name="runtimeDialogName"
+      :mirror="runtimeDialogMirror"
       @done="loadRuntimes"
     />
   </div>
@@ -1165,6 +1166,7 @@ const runtimes = ref<RuntimeProbe[]>([])
 const runtimeDialogVisible = ref(false)
 const runtimeDialogId = ref('')
 const runtimeDialogName = ref('')
+const runtimeDialogMirror = ref('')
 
 // 各运行时的说明文案 key（描述与设置页截图一致，key 保持静态以便检查脚本覆盖）。
 const runtimeDescKeys: Record<string, string> = {
@@ -1201,6 +1203,7 @@ async function loadRuntimes() {
 function openRuntimeInstall(rt: RuntimeProbe) {
   runtimeDialogId.value = rt.id
   runtimeDialogName.value = rt.name
+  runtimeDialogMirror.value = rt.mirror || ''
   runtimeDialogVisible.value = true
 }
 
