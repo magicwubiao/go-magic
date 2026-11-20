@@ -436,6 +436,7 @@ import {
 } from '@vicons/ionicons5'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
+import { cjkSafeUrlTokenizer } from '@/utils/markdown'
 import {
   addPeer, deletePeer, getPeers, listPeerBots, pingPeer, sendPeerDM, updatePeer,
   type PeerBotInfo, type PeerInfo,
@@ -1147,7 +1148,7 @@ const groupedMessages = computed(() => {
   return groups
 })
 
-marked.use({ breaks: true, gfm: true })
+marked.use({ tokenizer: cjkSafeUrlTokenizer, breaks: true, gfm: true })
 function renderMd(content: string): string {
   if (!content) return ''
   try {

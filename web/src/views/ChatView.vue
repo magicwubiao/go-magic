@@ -1378,6 +1378,7 @@ import { useI18n } from 'vue-i18n'
 import { useMessage, useDialog, NIcon } from 'naive-ui'
 import { NAlert, NButton, NCheckbox, NDropdown, NInput, NModal, NPopover, NProgress, NSelect, NSpace, NSpin, NSwitch, NTag, NText, NTooltip, NUpload } from 'naive-ui'
 import { marked } from 'marked'
+import { cjkSafeUrlTokenizer } from '@/utils/markdown'
 import { stripZeroWidth } from '@/utils/text'
 import {
   allWebSessions,
@@ -2394,7 +2395,7 @@ const codeRenderer = (code: string, lang?: string): string => {
 
 // ReasoningContent 已改用独立 Marked 实例，不再往全局单例上叠加配置；
 // 这里显式声明 breaks/gfm，保持正文渲染行为与之前（配置被叠加后）一致。
-marked.use({ renderer: { code: codeRenderer }, breaks: true, gfm: true })
+marked.use({ renderer: { code: codeRenderer }, tokenizer: cjkSafeUrlTokenizer, breaks: true, gfm: true })
 
 // 处理代码块按钮点击（事件委托替代 inline onclick，避免 v-html + inline handler XSS 风险）
 function handleCodeBlockClick(e: MouseEvent) {

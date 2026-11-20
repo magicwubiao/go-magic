@@ -1145,6 +1145,7 @@ import type { RoomMessage, RoomSendResult, RoomAttachment, RoomSendPayload, Room
 import * as sessionsApi from '@/api/sessions'
 import { request } from '@/api/client'
 import { marked } from 'marked'
+import { cjkSafeUrlTokenizer } from '@/utils/markdown'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import ReasoningContent from '@/components/ReasoningContent.vue'
@@ -2621,6 +2622,7 @@ const codeRenderer = (code: string, lang?: string): string => {
 
 marked.use({
   renderer: { code: codeRenderer },
+  tokenizer: cjkSafeUrlTokenizer,
   breaks: true,
   gfm: true,
 })

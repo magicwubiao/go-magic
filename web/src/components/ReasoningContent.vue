@@ -45,6 +45,7 @@ import { NCollapseTransition, NIcon } from 'naive-ui'
 import { Marked } from 'marked'
 import ReasoningBody from './ReasoningBody.vue'
 import { stripZeroWidth } from '@/utils/text'
+import { cjkSafeUrlTokenizer } from '@/utils/markdown'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -188,6 +189,7 @@ const codeRenderer = (code: string, lang?: string): string => {
 const marked = new Marked()
 marked.use({
   renderer: { code: codeRenderer },
+  tokenizer: cjkSafeUrlTokenizer,
   breaks: true,
   gfm: true,
 })
