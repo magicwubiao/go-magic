@@ -1074,7 +1074,7 @@ func NewFormatTool() *FormatTool {
 	return &FormatTool{
 		BaseTool: NewBaseTool(
 			"format_code",
-			"Format code files using language-specific formatters",
+			"Format code files using language-specific formatters: go (gofmt, ships with Go), rust (rustfmt/cargo fmt), python (black — auto-installed via pip if missing; falls back to autopep8), javascript/typescript (prettier — must exist in the project's node_modules or PATH)",
 			schema,
 		),
 	}
@@ -1164,20 +1164,8 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 			return nil, fmt.Errorf("rustfmt failed: %w", err)
 		}
 	case "python":
-		if _, err := exec.LookPath("black"); err == nil {
-			cmd := exec.CommandContext(ctx, "black", absPath)
-			err := cmd.Run()
-			if err != nil {
-				return nil, fmt.Errorf("black failed: %w", err)
-			}
-		} else if _, err := exec.LookPath("autopep8"); err == nil {
-			cmd := exec.CommandContext(ctx, "autopep8", "--in-place", "--aggressive", absPath)
-			err := cmd.Run()
-			if err != nil {
-				return nil, fmt.Errorf("autopep8 failed: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("no Python formatter found (install black or autopep8)")
+		if err := formatPython(ctx, absPath); err != nil {
+			return nil, err
 		}
 	case "javascript", "typescript":
 		// node_modules lives at the project root, not next to the source file and
@@ -1209,4 +1197,68 @@ func (t *FormatTool) Execute(ctx context.Context, params map[string]interface{})
 		"path":     absPath,
 		"language": language,
 	}, nil
+}
+
+// formatPython 用 black（首选）或 autopep8 格式化 Python 文件。
+//
+// 此前只查 PATH 上的 black.exe/autopep8.exe：Windows 上 `pip install black`
+// 把可执行文件装进 %APPDATA%\Python\Scripts，该目录经常不在 PATH，导致
+// "no Python formatter found"，但 `python -m black` 明明可用。查找顺序：
+//  1. PATH 上的 black → python -m black
+//  2. PATH 上的 autopep8 → python -m autopep8
+//  3. 都没有时自动 `python -m pip install --user black` 再跑（一次性代价，
+//     之后 python -m black 总可用）；安装失败给出手动安装命令。
+func formatPython(ctx context.Context, path string) error {
+	if bin, prefix, ok := resolvePythonFormatter(ctx, "black"); ok {
+		cmd := exec.CommandContext(ctx, bin, append(prefix, path)...)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("black failed: %w", err)
+		}
+		return nil
+	}
+	if bin, prefix, ok := resolvePythonFormatter(ctx, "autopep8"); ok {
+		cmd := exec.CommandContext(ctx, bin, append(prefix, "--in-place", "--aggressive", path)...)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("autopep8 failed: %w", err)
+		}
+		return nil
+	}
+
+	// 自动安装 black。pip install 需要网络且可能耗时数十秒；失败时如实报错，
+	// 不吞掉也不假装成功。
+	if bin, prefix, ok := ResolvePythonCommand(); ok {
+		installArgs := append(append([]string{}, prefix...),
+			"-m", "pip", "install", "--user", "--quiet", "black")
+		installCmd := exec.CommandContext(ctx, bin, installArgs...)
+		if err := installCmd.Run(); err != nil {
+			return fmt.Errorf(
+				"no Python formatter found; auto-install failed (%w) — run 'python -m pip install --user black' manually and retry", err)
+		}
+		runArgs := append(append([]string{}, prefix...), "-m", "black", path)
+		cmd := exec.CommandContext(ctx, bin, runArgs...)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("black failed: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("no Python formatter found and no Python interpreter available (install black or autopep8)")
+}
+
+// resolvePythonFormatter 找到一个可用的 Python 格式化器入口：
+// 优先 PATH 上的同名可执行文件，退回 `python -m <name>`（用 --version 快速
+// 探测模块是否已安装）。返回可执行文件、模块模式的前缀参数和是否找到。
+func resolvePythonFormatter(ctx context.Context, name string) (string, []string, bool) {
+	if _, err := exec.LookPath(name); err == nil {
+		return name, nil, true
+	}
+	bin, prefix, ok := ResolvePythonCommand()
+	if !ok {
+		return "", nil, false
+	}
+	checkArgs := append(append([]string{}, prefix...), "-m", name, "--version")
+	checkCmd := exec.CommandContext(ctx, bin, checkArgs...)
+	if err := checkCmd.Run(); err != nil {
+		return "", nil, false
+	}
+	return bin, append(append([]string{}, prefix...), "-m", name), true
 }

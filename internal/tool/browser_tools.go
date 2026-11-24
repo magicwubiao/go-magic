@@ -62,7 +62,7 @@ func (t *BrowserNavigateTool) Schema() map[string]interface{} {
 			},
 			"wait_for": map[string]interface{}{
 				"type":        "string",
-				"description": "CSS selector to wait for after the page loads (optional, up to 10s)",
+				"description": "CSS selector to wait for after navigation (optional, up to 10s). If the element is not found in time, the result reports success:false with the reason in error.",
 			},
 		},
 		"required": []string{"url"},
@@ -146,15 +146,21 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 	// Browser automation first
 	title, text, err := t.tryBrowserAutomation(tabID, urlStr)
 	if err == nil {
+		// wait_for 是调用方明确的等待意图：没等到元素时 success 必须为 false
+		// 并带 error。此前 success 恒为 true、只把失败塞进 wait_for 字符串，
+		// "页面打开了（success:true）"与"元素没等到"混在一个信号里，
+		// 模型很容易据 success:true 误判元素存在。
 		waitStatus := "not_requested"
+		waitOK := true
 		if waitFor != "" {
 			if werr := GetBrowserManager().WaitForElement(tabID, waitFor, 10*time.Second); werr != nil {
 				waitStatus = fmt.Sprintf("element not found within 10s: %v", werr)
+				waitOK = false
 			} else {
 				waitStatus = "found"
 			}
 		}
-		return map[string]interface{}{
+		res := map[string]interface{}{
 			"url":      urlStr,
 			"title":    title,
 			"tab_id":   tabID,
@@ -162,7 +168,12 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]inter
 			"success":  true,
 			"method":   "browser",
 			"wait_for": waitStatus,
-		}, nil
+		}
+		if !waitOK {
+			res["success"] = false
+			res["error"] = waitStatus
+		}
+		return res, nil
 	}
 
 	// Fallback to HTTP fetch if browser automation fails

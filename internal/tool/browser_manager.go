@@ -1054,19 +1054,41 @@ func (bm *BrowserManager) Refresh(tabID string) error {
 	return nil
 }
 
-// WaitForElement waits for an element to appear on the page
+// WaitForElement 等待元素出现在页面 DOM 中。
+//
+// 旧实现用 chromedp.WaitReady(ByQuery)：它依赖 CDP 的节点跟踪，跨文档导航
+// 完成的窗口期节点状态可能与 DOM 实际内容脱节，明明存在的元素（example.com
+// 的 h1）也会误报 "not found"，而同一次调用的内容提取却是成功的——信号自相
+// 矛盾。改为轮询 document.querySelectorAll，简单可靠，还能报出命中数量。
 func (bm *BrowserManager) WaitForElement(tabID string, selector string, timeout time.Duration) error {
 	tab, ok := bm.GetTab(tabID)
 	if !ok {
 		return fmt.Errorf("tab not found: %s", tabID)
 	}
 
-	ctx, cancel := context.WithTimeout(tab.Ctx, timeout)
-	defer cancel()
+	// selector 拼进 JS 字符串字面量，转义反斜杠和双引号。
+	jsSelector := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(selector)
+	probe := fmt.Sprintf(
+		`(function(sel){try{return document.querySelectorAll(sel).length}catch(e){return -1}})("%s")`,
+		jsSelector)
 
-	return chromedp.Run(ctx,
-		chromedp.WaitReady(selector, chromedp.ByQuery),
-	)
+	deadline := time.Now().Add(timeout)
+	for {
+		var count int
+		ctx, cancel := context.WithTimeout(tab.Ctx, 10*time.Second)
+		err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(probe, &count))
+		cancel()
+		if err == nil && count > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("element probe for %q failed: %w", selector, err)
+			}
+			return fmt.Errorf("element %q not found within %s", selector, timeout)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // WaitForLoad waits until document.readyState is "complete" (a plain body
