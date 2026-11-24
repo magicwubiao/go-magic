@@ -167,6 +167,15 @@
             <template #icon><n-icon :component="DownloadOutline" /></template>
           </n-button>
           <n-button
+            v-if="fsPath"
+            size="tiny"
+            quaternary
+            :title="t('chat.referenceToChat')"
+            @click="referenceToChat"
+          >
+            <template #icon><n-icon :component="ChatbubblesOutline" /></template>
+          </n-button>
+          <n-button
             size="tiny"
             quaternary
             :title="fullscreen ? t('chat.exitFullscreen') : t('chat.fullscreen')"
@@ -336,6 +345,7 @@ import { useMessage } from 'naive-ui'
 import { NButton, NDropdown, NIcon, NSpin, NTag, NText } from 'naive-ui'
 import {
   AddOutline,
+  ChatbubblesOutline,
   ChevronDownOutline,
   CloseOutline,
   CodeSlashOutline,
@@ -353,6 +363,7 @@ import {
 } from '@vicons/ionicons5'
 import { marked } from 'marked'
 import * as sessionsApi from '@/api/sessions'
+import { useChatStore } from '@/stores/chat'
 
 // Office 文档预览（Flyfish 渲染器）按需加载：体积不小，只有真的预览到
 // docx/xlsx/pptx 等格式时才拉取这一块代码。
@@ -436,6 +447,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const message = useMessage()
+const chatStore = useChatStore()
 
 // 面板根节点：滚轮隔离监听挂在这里（覆盖工具栏 + 正文，两种承载方式共用）
 const panelRoot = ref<HTMLElement | null>(null)
@@ -1160,6 +1172,21 @@ function download() {
   link.click()
   document.body.removeChild(link)
   message.success(t('common.downloadStarted'))
+}
+
+// 引用到对话：把当前预览的工作区文件写进 chatStore.pendingFileRefs，
+// ChatView 输入框会消费成引用胶囊（详见 store 里的注释）。只在 fsPath 模式
+// （工作区文件）下出现——uploads 附件已经在对话里了，不需要再引用。
+function referenceToChat() {
+  if (!props.fsPath) return
+  const sessionId = props.sessionId || chatStore.activeSessionId
+  if (!sessionId) return
+  chatStore.addFileRef({
+    sessionId,
+    name: props.name || props.fsPath.split(/[\\/]/).pop() || props.fsPath,
+    path: props.fsPath,
+  })
+  message.success(t('chat.referencedToChat'))
 }
 
 // 工具栏上的关闭按钮

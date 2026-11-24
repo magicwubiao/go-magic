@@ -51,10 +51,12 @@ interface Chip {
   /**
    * 胶囊种类：directive = 斜杠指令（发送时序列化成指令行）；
    * file = 上传的文件附件（发送时在原位置留下 [[att:file:<id>]] 占位标记，
-   * 由 ChatView.send 改写成最终下标——文件本体仍走 files/images 通道）。
+   * 由 ChatView.send 改写成最终下标——文件本体仍走 files/images 通道）；
+   * fsref = 工作区文件引用（发送时在原位置留下 [[fsref:<id>]] 占位标记，
+   * 由 ChatView.send 摘掉——引用清单走请求体 references 字段，不上传内容）。
    * 缺省按 directive 处理。
    */
-  kind?: 'directive' | 'file'
+  kind?: 'directive' | 'file' | 'fsref'
   /** 文件胶囊附带的大小文案（如 "1.2 MB"），只用于展示与 title */
   sizeLabel?: string
 }
@@ -132,8 +134,8 @@ function createChipEl(chip: Chip): HTMLElement {
   el.contentEditable = 'false'
   el.dataset.chipId = chip.id
   el.dataset.chipKind = chip.kind || 'directive'
-  // 指令胶囊才带 directive 序列化文本；文件胶囊不进 getPayload（见下）。
-  if (chip.kind !== 'file') el.dataset.directive = chip.text
+  // 指令胶囊才带 directive 序列化文本；文件/引用胶囊不进 getPayload（见下）。
+  if (chip.kind !== 'file' && chip.kind !== 'fsref') el.dataset.directive = chip.text
   el.title = chip.sizeLabel ? `${chip.name} (${chip.sizeLabel})` : chip.text
 
   const avatar = document.createElement('span')
@@ -432,6 +434,13 @@ function getPayload(): string {
         out += `[[att:${el.dataset.chipId}]]`
         return
       }
+      // 工作区引用胶囊：只在原位置留下占位标记，发送端（ChatView.send）会把
+      // 它整段摘掉——引用清单走请求体 references 字段，由后端注入提示词，
+      // 正文里不需要保留位置信息。
+      if (el.dataset.chipKind === 'fsref') {
+        out += `[[fsref:${el.dataset.chipId}]]`
+        return
+      }
       const directive = el.dataset.directive || ''
       if (!directive) return
       if (out && !out.endsWith('\n')) out += '\n'
@@ -561,6 +570,13 @@ onMounted(() => {
   color: #b45309;
 }
 
+/* 工作区引用胶囊：绿色调，与上传附件（琥珀）区分——语义不同：一个是"文件
+   在服务器 uploads 里"，一个是"文件在工作区里，AI 直接读" */
+.composer-editor :deep(.composer-chip-avatar.av-fsrefs) {
+  background: #dcfce7;
+  color: #15803d;
+}
+
 .composer-editor :deep(.composer-chip-size) {
   font-size: 11px;
   color: #9ca3af;
@@ -621,6 +637,10 @@ onMounted(() => {
   .composer-editor :deep(.composer-chip-avatar.av-files) {
     background: #453a1f;
     color: #fcd34d;
+  }
+  .composer-editor :deep(.composer-chip-avatar.av-fsrefs) {
+    background: #1d3a26;
+    color: #86efac;
   }
   .composer-editor :deep(.composer-chip-size) {
     color: #6b7280;

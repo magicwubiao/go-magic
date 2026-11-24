@@ -434,6 +434,8 @@ export default {
     downloadZip: 'Download as ZIP',
     showHidden: 'Toggle dot-prefixed (hidden) files',
     download: 'Download',
+    referenceToChat: 'Reference in chat',
+    referencedToChat: 'Added to chat input as a reference',
     refresh: 'Refresh',
     goParent: 'Go to parent',
     goRoot: 'Root',

@@ -635,7 +635,24 @@ type chatPayload struct {
 		URL      string `json:"url"`
 		Data     string `json:"data"` // legacy base64 data URL — kept for back-compat only
 	} `json:"files"`
+	// References 是「引用到对话」的工作区文件清单（可空）。与 Files 的本质
+	// 区别：这些文件本来就在会话工作区里，不经过 uploads，也不需要读取或
+	// 复制内容——只把路径注入提示词，模型用文件工具（沙箱在工作目录内）
+	// 直接读取。Path 为工作区内文件的路径（通常来自 /api/fs/list 的 entry）。
+	References []chatFileRef `json:"references"`
 }
+
+// chatFileRef 是一条工作区文件引用（「引用到对话」）。fsRefMime 用于把这类
+// 引用在落库附件里与真实上传附件区分开：url 字段存的是文件系统路径，
+// 前端预览时据此走 fsPath 通道而不是 uploads 票据通道。
+type chatFileRef struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// fsRefMime 标记「工作区文件引用」伪附件的 MIME；与前端 sessions.ts 的
+// FSREF_MIME 保持一致，改任一侧都必须同步另一侧。
+const fsRefMime = "application/x-fsref"
 
 // parsedChatPayload 是 chatPayload 解析后的结果：模型可见的 content parts、
 // 落库用的引用、以及需要在执行前物化到工作目录的附件。
@@ -852,6 +869,45 @@ func (s *Server) parseChatPayload(r *http.Request, sessionID string) (*parsedCha
 				},
 			})
 		}
+	}
+
+	// 引用工作区文件（「引用到对话」）：注入两类部件，均追加在末尾（不参与
+	// 图片/文件的既有下标对齐——stripInlineMediaParts 与 persistedContentParts
+	// 的 imgIdx 只按顺序数 image 部件，追加在尾部是安全的）：
+	//   1. 伪 file 部件（mime = fsRefMime，只带名字与路径，无内容）：
+	//      落库后回放时 convertDBMessagesToAPI 会把它带回 msg.files，
+	//      前端渲染成可点击的文件 chip，预览走 fsPath 通道。
+	//   2. 路径清单摘要 text 部件：明确告诉模型这些文件在哪个路径、
+	//      用文件工具直接读取。回放时 text 部件不会渲染进用户气泡。
+	refs := make([]chatFileRef, 0, len(payload.References))
+	for _, ref := range payload.References {
+		if ref.Path == "" {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	if len(refs) > 0 {
+		for _, ref := range refs {
+			out.contentParts = append(out.contentParts, types.ContentPart{
+				Type: "file",
+				File: &types.FileInfo{
+					Name:     ref.Name,
+					MimeType: fsRefMime,
+					URL:      ref.Path,
+				},
+			})
+		}
+		lines := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			lines = append(lines, fmt.Sprintf("- %s → %s", ref.Name, ref.Path))
+		}
+		// String literals in English (project convention), model-facing only.
+		out.contentParts = append(out.contentParts, types.ContentPart{
+			Type: "text",
+			Text: "The user referenced the following workspace files in this message. " +
+				"They already exist in the session working directory — read/process them " +
+				"directly with your file tools when needed:\n" + strings.Join(lines, "\n"),
+		})
 	}
 
 	return out, ""

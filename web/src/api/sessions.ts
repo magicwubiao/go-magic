@@ -721,6 +721,8 @@ export class ChatStream {
     // 能在缩略图旁边显示用户认得出的名字，而不是一串 uuid。
     imageNames?: string[]
     files?: Array<Pick<UploadedFile, 'name' | 'filename' | 'url'>>
+    // 「引用到对话」的工作区文件引用：只传路径不传内容，后端注入提示词。
+    references?: ChatFileRef[]
     // 「重新发送」的原排队项 id。带上它 = 这是一次重发：服务端先摘掉原条目
     // 再入队，避免同内容消息被查重合并成一条（点了重发却毫无变化）。
     retry_of?: string
@@ -875,6 +877,19 @@ export class ChatStream {
   }
 }
 
+/**
+ * 「引用到对话」的工作区文件引用。与上传附件（files 通道）的本质区别：
+ * 这些文件本来就在会话工作区里，只传路径不传内容——后端把路径清单注入
+ * 提示词，模型用文件工具直接读取，前端不重复上传。
+ */
+export interface ChatFileRef {
+  name: string
+  path: string
+}
+
+/** 工作区引用伪附件的标记 MIME：落库回放时 url 存的是 fs 路径，预览要走 fsPath 通道。 */
+export const FSREF_MIME = 'application/x-fsref'
+
 // 非流式提交：把消息放进服务端会话队列后立即返回（不等结果）。
 // 用于"当前回合进行中再发一条"的场景——此时已有 SSE 连接在推当前回合的
 // 输出，再开一条流会打断渲染，因此复用现有连接提交、由它回传 queued 事件。
@@ -886,6 +901,7 @@ export async function submitMessage(
   imageUrls?: string[],
   imageNames?: string[],
   retryOf?: string,
+  references?: ChatFileRef[],
 ): Promise<{ id: string; queued: boolean; duplicate: boolean }> {
   const slimFiles = files?.map(f => ({ name: f.name, filename: f.filename, url: f.url }))
   return request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -896,6 +912,7 @@ export async function submitMessage(
       imageUrls,
       imageNames,
       files: slimFiles,
+      references,
       retry_of: retryOf || undefined,
     }),
   })
@@ -1112,7 +1129,7 @@ export async function updateQueuedTurn(
   return { updated: !!res.updated, started: !!res.started }
 }
 
-export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[], retryOf?: string, attach = false, since = 0): ChatStream {  // The server now resolves file content from the uploads directory by
+export function streamChat(sessionId: string, content: string, images?: string[], files?: UploadedFile[], imageUrls?: string[], imageNames?: string[], retryOf?: string, attach = false, since = 0, references?: ChatFileRef[]): ChatStream {  // The server now resolves file content from the uploads directory by
   // filename; we only need to ship the file metadata (name, filename, url),
   // never the base64 contents.
   const slimFiles = files?.map(f => ({
@@ -1126,6 +1143,7 @@ export function streamChat(sessionId: string, content: string, images?: string[]
     imageUrls,
     imageNames,
     files: slimFiles,
+    references,
     // 重发：告诉服务端先摘掉原排队项，否则两条同内容消息会被查重合并，
     // 表现为"点了重发但队列没变化"。见 handleSessionStream。
     retry_of: retryOf || undefined,

@@ -1389,7 +1389,14 @@ async function downloadZip() {
 
 function getFileActions(entry: sessionsApi.FSEntry): any[] {
   const actions: any[] = []
-  
+
+  // 引用到对话：把该条目作为引用 chip 插入输入框，让 AI 明确知道要处理哪个文件
+  actions.push({
+    label: t('chat.referenceToChat'),
+    key: 'reference',
+    icon: () => h(NIcon, { size: 14 }, { default: () => h(ChatbubblesOutline) }),
+  })
+
   if (!entry.is_dir) {
     actions.push({
       label: t('chat.download'),
@@ -1415,7 +1422,17 @@ function getFileActions(entry: sessionsApi.FSEntry): any[] {
 }
 
 async function handleFileAction(key: string, entry: sessionsApi.FSEntry) {
-  if (key === 'download') {
+  if (key === 'reference') {
+    // 引用到对话：写入共享 store，ChatView 输入框消费后转成引用 chip。
+    // 只传路径不传内容——文件本来就在工作区里，模型用文件工具即可读取。
+    if (!chatStore.activeSessionId) return
+    chatStore.addFileRef({
+      sessionId: chatStore.activeSessionId,
+      name: entry.name,
+      path: entry.path,
+    })
+    message.success(t('chat.referencedToChat'))
+  } else if (key === 'download') {
     try {
       const url = await sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)
       downloadFile(url, entry.name)

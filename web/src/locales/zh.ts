@@ -438,6 +438,8 @@ export default {
     downloadZip: '打包下载',
     showHidden: '显示/隐藏 点前缀文件',
     download: '下载',
+    referenceToChat: '引用到对话',
+    referencedToChat: '已引用到对话输入框',
     refresh: '刷新',
     goParent: '返回上级',
     goRoot: '根目录',

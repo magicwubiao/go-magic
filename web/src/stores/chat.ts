@@ -268,6 +268,32 @@ export const useChatStore = defineStore('chat', () => {
   
   let toolCallIdCounter = 0
 
+  // 待插入输入框的「工作区文件引用」（Files Tab / 预览面板的「引用到对话」
+  // 入口写入，ChatView 输入框消费后清空）。与聊天上传附件（/api/upload 落
+  // uploads 目录）不同：path 指向会话工作区里已有的文件，发送时只传路径清单，
+  // 由后端把路径注入提示词、模型用文件工具直接读取，不重复上传内容。
+  // 带 sessionId：跨会话切换时只消费属于当前会话的引用，避免引用到别的会话
+  // 工作区里的文件。
+  interface PendingFileRef {
+    sessionId: string
+    name: string
+    path: string
+  }
+  const pendingFileRefs = ref<PendingFileRef[]>([])
+  function addFileRef(item: PendingFileRef) {
+    pendingFileRefs.value.push(item)
+  }
+  function removeFileRef(sessionId: string, path: string) {
+    pendingFileRefs.value = pendingFileRefs.value.filter(
+      r => !(r.sessionId === sessionId && r.path === path),
+    )
+  }
+  function clearFileRefs(sessionId?: string) {
+    pendingFileRefs.value = sessionId
+      ? pendingFileRefs.value.filter(r => r.sessionId !== sessionId)
+      : []
+  }
+
   const STREAM_FLUSH_INTERVAL = 80
 
   const activeSession = computed(() =>
@@ -1677,7 +1703,7 @@ export const useChatStore = defineStore('chat', () => {
 
   // retryOf 可空：非空表示这是一次「重新发送」，值是原排队项 id，服务端会
   // 在入队前先摘掉它（见 handleSessionStream 里的 retry_of 处理）。
-  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[], imageNames?: string[], attachments?: sessionsApi.UploadedFile[], retryOf?: string): Promise<void> {
+  async function sendMessage(content: string, images?: string[], files?: sessionsApi.UploadedFile[], imageUrls?: string[], imageNames?: string[], attachments?: sessionsApi.UploadedFile[], retryOf?: string, references?: sessionsApi.ChatFileRef[]): Promise<void> {
     if (!activeSessionId.value) {
       const session = await createSession()
       if (!session) return
@@ -1737,7 +1763,7 @@ export const useChatStore = defineStore('chat', () => {
         // 注意 /messages 是"入队即返回"的 JSON 接口，不会像 /stream 那样在
         // 这条流上回 queued 事件——因此必须用返回的 id 手动替换本地占位，
         // 否则 local_* 占位永远变不回真实 turnId，留下"幽灵排队气泡"。
-        const resp = await sessionsApi.submitMessage(sessionId, content, images, files, imageUrls, imageNames, retryOf)
+        const resp = await sessionsApi.submitMessage(sessionId, content, images, files, imageUrls, imageNames, retryOf, references)
         if (resp.duplicate) {
           // 服务端判定与队列中某条重复：本次提交并入已有项，未新插入。
           // 已有项若是本地排队气泡（弱网重试场景），撤掉刚 push 的占位即可；
@@ -1760,7 +1786,7 @@ export const useChatStore = defineStore('chat', () => {
         // 产生的事件会按位点补发回来，正文不会凭空缺一段。
         const eventSource = sessionsApi.streamChat(
           sessionId, content, images, files, imageUrls, imageNames, retryOf, false,
-          currentStreamOffset(sessionId),
+          currentStreamOffset(sessionId), references,
         )
         sessionEventSources.value = { ...sessionEventSources.value, [sessionId]: eventSource }
         attachStreamHandlers(sessionId, eventSource, localId)
@@ -3036,6 +3062,10 @@ export const useChatStore = defineStore('chat', () => {
     streamContent,
     error,
     activeSession,
+    pendingFileRefs,
+    addFileRef,
+    removeFileRef,
+    clearFileRefs,
     currentWorkDir,
     currentWorkDirUserSet,
     currentWorkDirChosen,

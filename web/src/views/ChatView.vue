@@ -3397,16 +3397,41 @@ const fileChips = computed(() =>
   }),
 )
 
-// 输入框胶囊总表 = 指令胶囊 + 文件胶囊。顺序无关紧要（胶囊按各自被插入的
-// DOM 位置渲染），编辑器只按 id 做增量对账。
-const composerChips = computed(() => [...pendingDirectives.value, ...fileChips.value])
+// ---- 工作区文件引用胶囊（fsref chips）----
+//
+// 右栏 Files Tab「引用到对话」/ 预览面板入口把 {sessionId, name, path} 写进
+// chatStore.pendingFileRefs（跨组件共享的唯一通道），这里按当前会话过滤消费。
+// 与上传附件（file 胶囊）不同：文件本来就在工作区里，发送时只透传路径清单
+// （references 字段），不上传内容；模型用文件工具直接读取。
+const fsRefChips = computed(() =>
+  chatStore.pendingFileRefs
+    .filter(r => r.sessionId === chatStore.activeSessionId)
+    .map(r => ({
+      id: `fsref:${r.path}`,
+      text: r.path,
+      name: r.name,
+      group: 'fsrefs',
+      avatar: '📎',
+      kind: 'fsref' as const,
+    })),
+)
 
-// 胶囊被摘掉：文件胶囊删掉 selectedFiles 里的对应条目，指令胶囊走原逻辑。
+// 输入框胶囊总表 = 指令胶囊 + 文件胶囊 + 工作区引用胶囊。顺序无关紧要（胶囊按
+// 各自被插入的 DOM 位置渲染），编辑器只按 id 做增量对账。
+const composerChips = computed(() => [...pendingDirectives.value, ...fileChips.value, ...fsRefChips.value])
+
+// 胶囊被摘掉：文件胶囊删掉 selectedFiles 里的对应条目，引用胶囊删掉 store 里的
+// 对应条目，指令胶囊走原逻辑。
 function onComposerChipRemove(id: string) {
   if (id.startsWith('file:')) {
     const uid = id.slice('file:'.length)
     const idx = selectedFiles.value.findIndex((f) => (f as { _uid?: string })._uid === uid)
     if (idx >= 0) selectedFiles.value.splice(idx, 1)
+    return
+  }
+  if (id.startsWith('fsref:')) {
+    const path = id.slice('fsref:'.length)
+    if (chatStore.activeSessionId) chatStore.removeFileRef(chatStore.activeSessionId, path)
     return
   }
   removePendingDirective(id)
@@ -3843,6 +3868,18 @@ function attachmentLabel(file: Partial<sessionsApi.UploadedFile>): string {
 // 保证同一时刻只有一个预览面板。
 function openAttachmentPreview(file: Partial<sessionsApi.UploadedFile>) {
   if (!file.url) return
+  // 工作区引用（FSREF_MIME 伪附件）：url 字段存的是文件系统路径而不是
+  // uploads 地址，必须走 fsPath 通道让预览面板读会话工作区里的文件。
+  const mime = ((file as { mime?: string }).mime || '').toLowerCase()
+  if (mime === sessionsApi.FSREF_MIME) {
+    previewStore.open({
+      name: attachmentLabel(file),
+      typeName: file.name || file.filename || '',
+      fsPath: file.url,
+      sessionId: chatStore.activeSessionId || undefined,
+    })
+    return
+  }
   previewStore.open({
     name: attachmentLabel(file),
     typeName: file.name || file.filename || '',
@@ -4480,7 +4517,9 @@ async function send() {
   // 排队功能：回合进行中不再拦截发送——消息会进入服务端队列依次执行。
   // 只有真正空内容才忽略（提交失败会由 store 回滚本地占位并报错）。
   // 指令胶囊单独算"有东西可发"：只挂指令不打字也允许发（等价于裸指令）。
-  if (!content && !selectedFiles.value.length && !pendingDirectives.value.length) return
+  // 工作区引用胶囊同理：只引用文件不打字也允许发（后端会把路径清单注入提示词）。
+  const hasFsRefs = chatStore.pendingFileRefs.some(r => r.sessionId === chatStore.activeSessionId)
+  if (!content && !selectedFiles.value.length && !pendingDirectives.value.length && !hasFsRefs) return
 
   // 指令胶囊按输入框里的实际顺序还原成 `/skill x`、`/mcp srv tool` 指令行，
   // 正文接在后面（由编辑器按 DOM 顺序拼）。服务端逐行展开这些指令，
@@ -4596,12 +4635,21 @@ async function send() {
     nonImageFiles.push(file)
   }
 
+  // 工作区文件引用：fsref 胶囊在编辑器原位置留下的 [[fsref:<id>]] 占位标记
+  // 整段摘掉——引用不走正文（气泡渲染与落库都不需要位置信息，回放时以伪附件
+  // 形态显示在附件块里），清单通过请求体 references 字段透传，后端注入提示词。
+  // 展示用伪附件条目并进 orderedFiles 尾部：排队区与气泡的附件块渲染、以及
+  // 刷新后的历史回放都走同一套「图标 + 文件名」chip，点击用 fsPath 打开预览。
+  // 注意必须放在 [[att:n]] 改写之后：att 下标只对齐真实上传附件（images+files），
+  // 伪附件没有 uid，混进映射表可能与按名字兜底的条目撞 key。
+  let payloadContent = finalContent
+  payloadContent = payloadContent.replace(/\[\[fsref:[^\]\n]*\]\]/g, '')
+
   // 编辑器在文件胶囊原位置留下的 `[[att:file:<uid>]]` 占位标记，这里改写成
   // `[[att:<n>]]`：n 是该附件在最终附件列表（图片在前、非图片在后）里的下标。
   // 标记随正文一起落库，渲染端（含刷新后的历史回放）据此把附件胶囊画回
   // 文字流原位置——否则"文字A 图片 文字B"会退化成"附件块 + 文字A 文字B"。
   const orderedFiles = [...imageFileEntries, ...nonImageFiles]
-  let payloadContent = finalContent
   if (payloadContent.includes('[[att:file:')) {
     const orderedIndexByChipId = new Map<string, number>()
     orderedFiles.forEach((f, i) => {
@@ -4617,9 +4665,25 @@ async function send() {
 
   // Drop references to uploaded files so the GC can reclaim the base64
   // data and uploaded URL closures as soon as the store has its own copy.
+  const chatFileRefs: sessionsApi.ChatFileRef[] = chatStore.pendingFileRefs
+    .filter(r => r.sessionId === chatStore.activeSessionId)
+    .map(r => ({ name: r.name, path: r.path }))
+  if (chatFileRefs.length) {
+    // 伪附件条目（mime 标记 FSREF_MIME、url=工作区路径）并进展示列表尾部：
+    // 排队区缩略图、气泡附件块、刷新后的历史回放都走同一套渲染，点击预览
+    // 时按 mime 识别走 fsPath 通道。
+    orderedFiles.push(...chatFileRefs.map(r => ({
+      name: r.name,
+      url: r.path,
+      mime: sessionsApi.FSREF_MIME,
+    } as sessionsApi.UploadedFile)))
+  }
   composerRef.value?.clear()
   inputValue.value = ''
   selectedFiles.value = []
+  // 引用胶囊的数据源在 store 里，不清掉的话 chips watch 会把它们重新插回刚
+  // clear 的编辑器（reconcileChips 按 composerChips 对账）。
+  if (chatStore.activeSessionId) chatStore.clearFileRefs(chatStore.activeSessionId)
   commandSuggestions.value = []
   await chatStore.sendMessage(
     payloadContent,
@@ -4628,6 +4692,8 @@ async function send() {
     imageUrlRefs.length ? imageUrlRefs : undefined,
     imageNames.length ? imageNames : undefined,
     orderedFiles.length ? orderedFiles : undefined,
+    undefined,
+    chatFileRefs.length ? chatFileRefs : undefined,
   )
 }
 
