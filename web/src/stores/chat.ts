@@ -245,6 +245,17 @@ export const useChatStore = defineStore('chat', () => {
   // 会话同时提交，渲染串了"）。渲染前按 seq 过滤一条即可让重放幂等，
   // 覆盖所有事件类型。与位点同刻意不用 ref（理由同上）。
   const sessionRenderedSeq = new Map<string, number>()
+  // 每个会话内"回合的已知执行先后"：turnId → 自增序号。
+  //
+  // 为什么需要它：同一个会话的 SSE 事件在**一条连接上**是有序的，但重连/
+  // 多连接并存时并不保证——旧连接补发的 done（上一个回合的收尾）完全可能
+  // 晚于新连接推来的 stream_started（下一个回合已被认领）。若回答一律
+  // push 到末尾，晚到的 done 就会把上一个回合的回答排到下一回合的用户消息
+  // **之后**，界面上看就是"两条用户消息浮到最上面、回复都挤在下面"，
+  // 刷新后按服务端落库顺序重建又恢复正常（2026-11-24 实测截图）。
+  // 有了序号，回答落位时可以"插到第一个更晚回合的消息之前"，与到达顺序解耦。
+  const sessionTurnSeq = new Map<string, Map<string, number>>()
+  let turnSeqCounter = 0
   // 每个会话上次尝试实时续传的时刻，用于退避。服务端不可达时若在 onerror
   // 里无条件立刻重连，会形成"建流→立刻失败→再建流"的忙循环，反而拖慢恢复。
   const sessionLastResumeAt = new Map<string, number>()
@@ -829,6 +840,9 @@ export const useChatStore = defineStore('chat', () => {
       try {
         const res = await sessionsApi.getSession(id)
         state.messages = res.messages || []
+        // 整表按服务端顺序重建：本地记的回合序号已经失去参照（那些 turnId
+        // 不再是"屏幕上的相邻关系"），清掉避免后续插位被旧序号带偏。
+        sessionTurnSeq.delete(id)
         state.messagesLoaded = true
       } catch (e) {
         console.error('Failed to load session messages:', e)
@@ -1634,7 +1648,12 @@ export const useChatStore = defineStore('chat', () => {
 
     dedupeQueued(state)
 
-    if (activeId) state.activeTurnId = activeId
+    if (activeId) {
+      state.activeTurnId = activeId
+      // 正在执行的回合一定是"目前最后开始的"一个：登记序号，让随后晚到的
+      // 上一个回合的 done 知道该插在它（及其用户消息）之前。
+      noteTurnSeq(sessionId, activeId)
+    }
   }
 
   // dedupeQueued 清掉同一 turnId 的重复排队项。
@@ -2024,6 +2043,9 @@ export const useChatStore = defineStore('chat', () => {
               startStreamingFromQueued(sessionId, mine)
             } else {
               state.activeTurnId = turnId
+              // 登记本回合的执行先后：即使拿不到 content（没有可固化的用户
+              // 气泡），done 落位时也要知道它前面还压着更晚的回合。
+              noteTurnSeq(sessionId, turnId)
               state.streaming = true
               // 附着/重连到已在执行的回合：本地没有排队项可迁移（刷新后队列
               // 已清空），但服务端在 stream_started 里带了内容，据它补一条
@@ -2245,7 +2267,7 @@ export const useChatStore = defineStore('chat', () => {
               }
               const errId = state.activeTurnId ? `assistant_${state.activeTurnId}` : `assistant_err_${Date.now()}`
               if (!state.messages.some(m => m.id === errId)) {
-                state.messages.push({
+                pushAssistantInTurnOrder(state, sessionId, state.activeTurnId, {
                   id: errId,
                   role: 'assistant' as const,
                   content: msgContent,
@@ -2379,7 +2401,7 @@ export const useChatStore = defineStore('chat', () => {
               existingAssistant.file_ops = finalFileOps
               if (turnElapsedMS > 0) existingAssistant.turn_elapsed_ms = turnElapsedMS
             } else if (finalContent || finalToolCalls.length > 0) {
-              state.messages.push({
+              pushAssistantInTurnOrder(state, sessionId, doneTurnId, {
                 id: assistantId,
                 role: 'assistant' as const,
                 content: finalContent,
@@ -2457,6 +2479,80 @@ export const useChatStore = defineStore('chat', () => {
     promoteQueuedToMessage(state, sessionId, item)
   }
 
+  // noteTurnSeq 给回合登记"已知执行先后"。只在本地第一次见到该回合时分配，
+  // 重复调用（重连重放 / 多连接同时推同一条）保持原序号不变。
+  function noteTurnSeq(sessionId: string, turnId: string): void {
+    if (!turnId) return
+    let seqs = sessionTurnSeq.get(sessionId)
+    if (!seqs) {
+      seqs = new Map()
+      sessionTurnSeq.set(sessionId, seqs)
+    }
+    if (!seqs.has(turnId)) seqs.set(turnId, ++turnSeqCounter)
+  }
+
+  function turnSeqOf(sessionId: string, turnId: string): number {
+    if (!turnId) return 0
+    return sessionTurnSeq.get(sessionId)?.get(turnId) || 0
+  }
+
+  // messageTurnId 从消息 id 反解出回合 id。
+  //
+  // 三种形态并存：本地固化的用户气泡是 `user_<turnId>`，服务端落库的用户消息
+  // 直接用裸 `<turnId>` 作 id（assistant 则统一是 `assistant_<turnId>`），
+  // 因此裸 id 要原样返回。引导消息（`user_<guideId>`）、中断提示等不在回合
+  // 表里，查到序号就是 0——它们由所属回合消费，不参与"更晚回合"的比较。
+  function messageTurnId(id: string): string {
+    if (id.startsWith('user_')) return id.slice('user_'.length)
+    if (id.startsWith('assistant_')) return id.slice('assistant_'.length)
+    return id
+  }
+
+  // pushAssistantInTurnOrder 把回答按**回合先后**放入 messages，而不是无脑 push。
+  //
+  // 典型场景（2026-11-24）：回合 A 还在跑时用户又发了 B（B 入队）。若 B 的
+  // stream_started 先被本端处理、A 的 done 后到（跨连接 / 重连补发），
+  // 直接 push 会得到 [userA, userB, replyA]，看上去就是"两条用户消息浮到最
+  // 上面、回答对不上号"。按序号判断后 replyA 会被插到 userB 之前，
+  // 任何到达顺序都能得到 [userA, replyA, userB]。
+  function pushAssistantInTurnOrder(
+    state: SessionState,
+    sessionId: string,
+    turnId: string,
+    msg: sessionsApi.Message,
+  ): void {
+    const seq = turnSeqOf(sessionId, turnId)
+    if (seq > 0) {
+      for (let i = 0; i < state.messages.length; i++) {
+        const other = turnSeqOf(sessionId, messageTurnId(state.messages[i].id))
+        if (other > seq) {
+          state.messages.splice(i, 0, msg)
+          return
+        }
+      }
+      state.messages.push(msg)
+      return
+    }
+    // 序号未知（没看到过本回合的 stream_started，例如 done 由一条早已作废的
+    // 连接补发）：退化为"紧跟在本回合用户消息之后、但在更晚回合的消息之前"。
+    // 找不到自己的用户消息时保持原行为追加到末尾。
+    const ownIdx = state.messages.findIndex(m => messageTurnId(m.id) === turnId)
+    if (ownIdx >= 0) {
+      let insertAt = -1
+      for (let i = ownIdx + 1; i < state.messages.length; i++) {
+        if (turnSeqOf(sessionId, messageTurnId(state.messages[i].id)) > 0) {
+          insertAt = i
+          break
+        }
+      }
+      if (insertAt > ownIdx) {
+        state.messages.splice(insertAt, 0, msg)
+        return
+      }
+    }
+    state.messages.push(msg)
+  }
+
   // promoteQueuedToMessage 把一条排队项转成 messages 里的正式用户消息。
   //
   // 去重依据是 turnId 生成的稳定消息 id：同一条排队项只会被固化一次
@@ -2467,6 +2563,8 @@ export const useChatStore = defineStore('chat', () => {
   // 就已按原始 id 落库，页面刷新后 messages 由服务端历史重建（键是原始 id），
   // 若只比对 `user_<id>` 就会把同一句话再补一个气泡——用户看到"引导发了两次"。
   function promoteQueuedToMessage(state: SessionState, sessionId: string, item: QueuedMessage): void {
+    // 回合在这里首次"上屏"，登记序号供后续回答落位使用（重复到达幂等）。
+    noteTurnSeq(sessionId, item.turnId)
     const msgId = `user_${item.turnId}`
     if (indexOfMessage(state.messages, item.turnId) >= 0) return
     const files = queuedAttachments.get(item.turnId)
@@ -2743,7 +2841,7 @@ export const useChatStore = defineStore('chat', () => {
       stubId = stoppedTurnId ? `assistant_${stoppedTurnId}` : `assistant_${Date.now()}`
       const stoppedToolCalls = [...state.toolCalls]
       const stoppedTimeline = [...state.streamingSegments]
-      state.messages.push({
+      pushAssistantInTurnOrder(state, sessionId, stoppedTurnId, {
         id: stubId,
         role: 'assistant',
         content: state.streamContent || '',
