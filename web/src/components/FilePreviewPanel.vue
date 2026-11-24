@@ -1181,12 +1181,13 @@ function referenceToChat() {
   if (!props.fsPath) return
   const sessionId = props.sessionId || chatStore.activeSessionId
   if (!sessionId) return
-  chatStore.addFileRef({
+  const added = chatStore.addFileRef({
     sessionId,
     name: props.name || props.fsPath.split(/[\\/]/).pop() || props.fsPath,
     path: props.fsPath,
   })
-  message.success(t('chat.referencedToChat'))
+  if (added) message.success(t('chat.referencedToChat'))
+  else message.info(t('chat.alreadyReferenced'))
 }
 
 // 工具栏上的关闭按钮

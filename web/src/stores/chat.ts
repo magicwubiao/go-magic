@@ -280,8 +280,16 @@ export const useChatStore = defineStore('chat', () => {
     path: string
   }
   const pendingFileRefs = ref<PendingFileRef[]>([])
-  function addFileRef(item: PendingFileRef) {
+  // 去重：同一会话同一文件只收一份。胶囊 id 就是 fsref:<path>，重复 push 的话
+  // 编辑器对账不出新 DOM，界面毫无变化——用户视角就是"点了没反应"。
+  // 返回是否真的新增，调用方据此决定给 success 还是 info 提示。
+  function addFileRef(item: PendingFileRef): boolean {
+    const dup = pendingFileRefs.value.some(
+      r => r.sessionId === item.sessionId && r.path === item.path,
+    )
+    if (dup) return false
     pendingFileRefs.value.push(item)
+    return true
   }
   function removeFileRef(sessionId: string, path: string) {
     pendingFileRefs.value = pendingFileRefs.value.filter(

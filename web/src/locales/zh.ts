@@ -440,6 +440,7 @@ export default {
     download: '下载',
     referenceToChat: '引用到对话',
     referencedToChat: '已引用到对话输入框',
+    alreadyReferenced: '该文件已在引用列表中',
     refresh: '刷新',
     goParent: '返回上级',
     goRoot: '根目录',

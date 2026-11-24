@@ -446,6 +446,7 @@
               class="file-tree-item"
               :class="{ 'is-dir': entry.is_dir, 'is-hidden': entry.hidden }"
               @click="handleFileClick(entry)"
+              @contextmenu.prevent="openFileContextMenu($event, entry)"
             >
               <n-icon size="16" :color="entry.is_dir ? '#18a058' : '#666'">
                 <component :is="entry.is_dir ? FolderOutline : DocumentTextOutline" />
@@ -477,6 +478,22 @@
           style="display: none;"
           @change="handleUploadChange"
         />
+        <!-- 右键上下文菜单：滚轮滚动时行在鼠标下方移动，hover 出现的行尾「…」
+             小按钮点不准（mousedown/mouseup 落到不同行上，click 被吞）。右键
+             整行任意位置不依赖 hover、不需要瞄准小目标。trigger=manual + x/y
+             手动定位，选项复用 getFileActions，与行尾下拉完全一致。 -->
+        <n-dropdown
+          trigger="manual"
+          placement="bottom-start"
+          :show="ctxMenuShow"
+          :x="ctxMenuX"
+          :y="ctxMenuY"
+          :options="ctxOptions"
+          @select="onCtxSelect"
+          @clickoutside="ctxMenuShow = false"
+        >
+          <span style="display: none;"></span>
+        </n-dropdown>
       </div>
     </div>
 
@@ -1234,7 +1251,10 @@ function formatTime(timestamp: number): string {
 
 // File manager functions
 async function loadFiles(path?: string) {
-  filesLoading.value = true
+  // 只在首屏（还没有列表数据）时才占位 spinner；其余刷新一律后台原地换数据。
+  // spinner 走 v-if 会把整棵列表连同打开中的下拉菜单一起卸载——用户正点向
+  // 「引用到对话」时菜单被拆掉，点击被吞，表现就是"点了没反应"。
+  if (!fsEntries.value.length) filesLoading.value = true
   try {
     const res = await sessionsApi.listFSEntries(path, chatStore.activeSessionId || undefined, showHiddenFiles.value)
     dirCurrentPath.value = res.current
@@ -1387,6 +1407,27 @@ async function downloadZip() {
   }
 }
 
+// ---- 右键上下文菜单 ----
+// 与行尾「…」下拉共用同一组动作（getFileActions），只是触发方式不同：
+// 右键不受滚轮滚动后的 hover 漂移影响，也不需要瞄准小按钮。
+const ctxMenuShow = ref(false)
+const ctxMenuX = ref(0)
+const ctxMenuY = ref(0)
+const ctxEntry = ref<sessionsApi.FSEntry | null>(null)
+const ctxOptions = computed(() => (ctxEntry.value ? getFileActions(ctxEntry.value) : []))
+
+function openFileContextMenu(e: MouseEvent, entry: sessionsApi.FSEntry) {
+  ctxEntry.value = entry
+  ctxMenuX.value = e.clientX
+  ctxMenuY.value = e.clientY
+  ctxMenuShow.value = true
+}
+
+function onCtxSelect(key: string) {
+  ctxMenuShow.value = false
+  if (ctxEntry.value) void handleFileAction(key, ctxEntry.value)
+}
+
 function getFileActions(entry: sessionsApi.FSEntry): any[] {
   const actions: any[] = []
 
@@ -1426,12 +1467,14 @@ async function handleFileAction(key: string, entry: sessionsApi.FSEntry) {
     // 引用到对话：写入共享 store，ChatView 输入框消费后转成引用 chip。
     // 只传路径不传内容——文件本来就在工作区里，模型用文件工具即可读取。
     if (!chatStore.activeSessionId) return
-    chatStore.addFileRef({
+    const added = chatStore.addFileRef({
       sessionId: chatStore.activeSessionId,
       name: entry.name,
       path: entry.path,
     })
-    message.success(t('chat.referencedToChat'))
+    // 重复引用也要有反馈：胶囊不会新增（同 path 同 id），静默会被当成"没反应"
+    if (added) message.success(t('chat.referencedToChat'))
+    else message.info(t('chat.alreadyReferenced'))
   } else if (key === 'download') {
     try {
       const url = await sessionsApi.getFSDownloadUrl(entry.path, chatStore.activeSessionId || undefined)

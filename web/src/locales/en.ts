@@ -436,6 +436,7 @@ export default {
     download: 'Download',
     referenceToChat: 'Reference in chat',
     referencedToChat: 'Added to chat input as a reference',
+    alreadyReferenced: 'This file is already referenced',
     refresh: 'Refresh',
     goParent: 'Go to parent',
     goRoot: 'Root',
