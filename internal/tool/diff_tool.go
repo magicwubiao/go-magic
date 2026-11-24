@@ -34,9 +34,13 @@ func (t *DiffPatchTool) Schema() map[string]interface{} {
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
-				"type":        "string",
-				"enum":        []interface{}{"show_diff", "apply_patch", "show_changes", "create_backup"},
-				"description": "The diff/patch operation to perform",
+				"type": "string",
+				"enum": []interface{}{"show_diff", "apply_patch", "show_changes", "create_backup"},
+				"description": "The diff/patch operation to perform. " +
+					"show_diff: diff the file at `path` against proposed `new_content` text (NOT two files). " +
+					"show_changes: diff two existing files via `file_a` and `file_b`. " +
+					"apply_patch: apply search-and-replace `patches` to the file at `path`. " +
+					"create_backup: back up the file at `path`.",
 			},
 			"path": map[string]interface{}{
 				"type":        "string",
@@ -44,7 +48,7 @@ func (t *DiffPatchTool) Schema() map[string]interface{} {
 			},
 			"new_content": map[string]interface{}{
 				"type":        "string",
-				"description": "Proposed new content (for show_diff)",
+				"description": "Proposed new file content to diff against (for show_diff). This is the full new text, not a file path — to compare two files, use show_changes with file_a/file_b.",
 			},
 			"patches": map[string]interface{}{
 				"type":        "array",
@@ -104,6 +108,11 @@ func (t *DiffPatchTool) showDiff(ctx context.Context, params map[string]interfac
 	newContent, _ := params["new_content"].(string)
 
 	if path == "" {
+		// 常见误用：把"对比两个文件"的 file_a/file_b 传给了 show_diff。
+		// 与其在 path/new_content 语义里让模型反复试错，直接指路 show_changes。
+		if fa, ok := params["file_a"].(string); ok && fa != "" {
+			return nil, fmt.Errorf("show_diff compares a file against proposed new content (params: path, new_content); to diff two existing files, use action \"show_changes\" with file_a/file_b (got file_a=%q)", fa)
+		}
 		return nil, fmt.Errorf("path is required for show_diff")
 	}
 	if newContent == "" {

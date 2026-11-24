@@ -220,8 +220,9 @@ func (t *ExecuteCommandTool) Schema() map[string]interface{} {
 		"type": "object",
 		"properties": map[string]interface{}{
 			"command": map[string]interface{}{
-				"type":        "string",
-				"description": "The command to execute (must be in whitelist)",
+				"type": "string",
+				"description": "The command to execute (must be in whitelist). " +
+					"Shell selection is automatic: Windows runs it via PowerShell (use ';' to chain commands — '&' is not a command separator there), Unix via bash.",
 			},
 			"workdir": map[string]interface{}{
 				"type":        "string",
@@ -363,8 +364,9 @@ func (t *ExecuteCommandTool) Execute(ctx context.Context, args map[string]interf
 
 	output, err := cmd.CombinedOutput()
 
-	// Truncate output if too long
-	outputStr := string(output)
+	// 中文 Windows 控制台代码页是 GBK：先按"合法 UTF-8 / GB18030 回退"解码，
+	// 否则系统命令的中文输出会变成一串替换字符，模型据乱码误判结果。
+	outputStr := decodeConsoleOutput(output)
 	if len(outputStr) > t.maxOutput {
 		outputStr = utils.TruncateDetailed(outputStr, t.maxOutput)
 	}

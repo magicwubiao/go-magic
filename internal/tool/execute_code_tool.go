@@ -91,9 +91,14 @@ func (t *ExecuteCodeTool) SetCodingMode(enabled bool) {
 func (t *ExecuteCodeTool) Name() string { return "execute_code" }
 
 func (t *ExecuteCodeTool) Description() string {
-	return `Execute code in multiple programming languages with optional tool access and package management.
-Supports reading files, running commands, and using registered tools.
+	return `Execute code in multiple programming languages.
 Code runs in an isolated subprocess with timeout and memory limits.
+
+IMPORTANT: code cannot call back into agent tools in the current build —
+the subprocess is isolated and no tool bridge is wired up. The wrapper's
+tool()/read_file()/terminal() helpers exist but always return an
+"Unknown tool" error. Use execute_command, read_file etc. as separate
+tool calls instead.
 
 Supported languages:
 - python, python3: Python 3.x (supports pip packages)
@@ -142,11 +147,11 @@ func (t *ExecuteCodeTool) Schema() map[string]interface{} {
 			"tools": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "Tool names to make available in code (default: all)",
+				"description": "Reserved. Tool names intended for use inside code; the tool bridge is not wired up in the current build, so this has no effect.",
 			},
 			"tools_output": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Include tool call outputs in result",
+				"description": "Reserved. Intended to include tool call outputs in the result; the tool bridge is not wired up in the current build, so this has no effect.",
 			},
 			"args": map[string]interface{}{
 				"type":        "array",
@@ -890,10 +895,6 @@ def print_results():
     """Print all tool results collected so far."""
     for r in _TOOL_RESULTS:
         print(f"[{r['tool']}] {json.dumps(r['result'], indent=2)}")
-
-# Banner
-print("Available tools:", list(_TOOLS.keys()))
-print("-" * 40)
 `)
 	return buf.String()
 }
@@ -960,10 +961,6 @@ function print_results() {
         console.log("[" + r.tool + "] " + JSON.stringify(r.result, null, 2));
     });
 }
-
-// Banner
-console.log("Available tools:", Object.keys(_TOOLS));
-console.log("-".repeat(40));
 `)
 
 	return buf.String()
