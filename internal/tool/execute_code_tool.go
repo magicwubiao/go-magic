@@ -778,4 +778,3 @@ func (t *ExecuteCodeTool) runCommand(ctx context.Context, cmd *exec.Cmd, timeout
 
 	return result, nil
 }
-
