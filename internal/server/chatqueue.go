@@ -1547,13 +1547,17 @@ func (s *Server) tryInjectGuide(sessionID string, parsed *parsedChatPayload) map
 	// 一份：落库按 id 幂等（persistUserMessage），前端按 user_<id> 去重
 	// （web/src/stores/chat.ts 的 guide_added / promoteQueuedToMessage）。
 	id := uuid.NewString()
+	// 本回合 assistant 回复的 checkpoint 消息 id（可能尚未落库——头 3 秒内
+	// checkpoint 还没跑过）。引导必须排在它之前：checkpoint 每 3 秒 upsert
+	// 一次，先于注入发生时它已占住数组尾位，直接 append 会让引导落到回复
+	// 后面，刷新后对话顺序错乱（2026-11-24 用户截图）。
+	beforeID := "assistant_" + q.activeID
 	a.InjectGuide(id, content)
 	q.mu.Unlock()
 
 	// 引导在采集后即已被消费（"停止"只会丢弃尚未消费的收件箱残留），直接落库
-	// 为普通 user 消息即可，历史顺序天然正确：本回合输入 < 引导 < 本回合
-	// assistant 回复。
-	s.persistGuideMessage(sessionID, id, content)
+	// 为普通 user 消息即可。插入位置见 persistGuideMessage。
+	s.persistGuideMessage(sessionID, beforeID, id, content)
 
 	ev, _ := json.Marshal(map[string]interface{}{
 		"type":    "guide_added",
@@ -1581,7 +1585,7 @@ func (s *Server) tryInjectGuide(sessionID string, parsed *parsedChatPayload) map
 // applyGuides 并入 agent history 时加前缀并不冲突：落库给用户看（所见即
 // 所输），history 前缀给模型看（提示这是回合中追加的补充指示）。二者语义
 // 目标不同，落库形态是正确的，勿误判为不一致。
-func (s *Server) persistGuideMessage(sessionID, id, content string) {
+func (s *Server) persistGuideMessage(sessionID, beforeID, id, content string) {
 	if s.sessionStore == nil {
 		return
 	}
@@ -1590,6 +1594,18 @@ func (s *Server) persistGuideMessage(sessionID, id, content string) {
 		Role:      "user",
 		Content:   content,
 		Timestamp: time.Now(),
+	}
+	// 插到本回合 assistant checkpoint 消息之前（见 InsertSessionMessageBefore
+	// 的注释：checkpoint 先占住尾位时 append 会把引导排到回复后面）。
+	// 目标消息不在历史里（本回合还没有 checkpoint）或会话行不存在时，回落
+	// 到增量追加：append 之后首次 checkpoint 会排在引导之后，顺序同样正确。
+	if beforeID != "" {
+		ok, err := s.sessionStore.InsertSessionMessageBefore(context.Background(), sessionID, beforeID, msg)
+		if err != nil {
+			log.Warnf("[CHATQ] persistGuideMessage insert-before failed session=%s: %v", sessionID, err)
+		} else if ok {
+			return
+		}
 	}
 	// 增量追加：不 LoadSession 回读全量 messages（几百轮会话里那是每条消息
 	// 一次几 MB 的 JSON 读回+重写）。行不存在时兜底全量 SaveSession 补建。

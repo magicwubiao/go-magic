@@ -129,6 +129,119 @@ func (s *Store) AppendSessionMessages(ctx context.Context, id string, msgs ...ty
 	return true, nil
 }
 
+// InsertSessionMessageBefore 把一条消息插到会话历史中指定 id 的消息**之前**，
+// 并轻量更新派生 meta（msg_count/preview/updated_at，语义与 Append 一致）。
+//
+// 为什么需要它：回合中的 assistant 回复有 3 秒一次的 checkpoint
+// （UpsertSessionMessage upsert assistant_<turnId>），它先于注入发生时已
+// 占住数组尾位；此后落库的引导（guide）若走 AppendSessionMessages 只能排
+// 到回复后面——刷新后对话顺序错乱（2026-11-24：引导在对话里浮在回答上方，
+// 刷新后却掉到回答下面）。引导在语义上属于"本回合的输入"，必须排在本回合
+// 回复之前。
+//
+// 实现：SQLite 的 json_insert 在已占用的数组下标上是 no-op（只会在"越界
+// 下标"处追加，2026-11-24 实测），没法原地插位；这里用 json_group_array
+// 按"前段 + 新消息 + 后段"重建数组。引导注入是用户触发、极低频的事件，
+// 这个重建成本可以接受；回合 delta 走的 Append/Upsert 路径不受影响。
+//
+// 返回 (false, nil) 表示会话行不存在**或 beforeID 未找到**——调用方应回落
+// AppendSessionMessages。典型回落场景：本回合还没有 checkpoint 落库（头
+// 3 秒），append 之后首次 checkpoint 会排在引导之后，顺序同样正确。
+// err 非 nil 时行未被修改。
+func (s *Store) InsertSessionMessageBefore(ctx context.Context, id, beforeID string, msg types.Message) (bool, error) {
+	if id == "" || beforeID == "" {
+		return false, fmt.Errorf("session/before id is empty")
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return false, fmt.Errorf("marshal message: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var idx int
+	err = tx.QueryRowContext(ctx,
+		`SELECT je.key FROM sessions, json_each(sessions.messages) je
+		 WHERE sessions.id = ? AND json_extract(je.value, '$.id') = ? LIMIT 1`,
+		id, beforeID).Scan(&idx)
+	if err == sql.ErrNoRows {
+		// 目标消息不在历史里（本回合还没有 checkpoint / id 打错）。
+		return false, nil
+	}
+	if err != nil {
+		// 行不存在时 json_each(NULL) 扫描报错 —— 同样回落 append。
+		return false, nil
+	}
+
+	// 探针自检：json_group_array 认 JSON subtype（json() 的返回值按 JSON 值
+	// 而不是字符串入组）是 SQLite 3.45.0 起的行为。老版本会把每个元素双重
+	// 编码成字符串，整段 messages 就写坏了——那种环境宁可回落 append
+	// （顺序差一点，数据不能坏）。探针是纯内存表达式，每事务一次成本可忽略。
+	var probe string
+	err = tx.QueryRowContext(ctx,
+		`SELECT json_type(json_group_array(json(value)), '$[0].a')
+		 FROM (SELECT json('{"a":1}') AS value)`).Scan(&probe)
+	if err != nil || probe != "integer" {
+		return false, nil
+	}
+
+	// meta 增量与 AppendSessionMessages 保持同一口径。
+	previewTail := ""
+	if msg.Role == "user" || msg.Role == "assistant" {
+		previewTail = msg.Content + " "
+	}
+	title := ""
+	if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
+		title = metaTitleForRunes(msg.Content, maxMetaTitleLen)
+	}
+
+	// 三段重建：key < idx 的原样保留，新消息插在 idx 位，key >= idx 的右移。
+	// json_each 对 NULL/非数组根不产出任何行，json_group_array 返回 NULL，
+	// COALESCE 兜住保持原值（虽然能走到这里 messages 必是数组，防御性保留）。
+	// 聚合时逐元素套 json()：UNION 子查询会丢掉 JSON subtype 标记，不补的话
+	// json_group_array 把元素当字符串入组（双重编码），见上面的探针自检。
+	update := `UPDATE sessions SET
+		messages = COALESCE((
+			SELECT json_group_array(json(seg.value)) FROM (
+				SELECT je1.value AS value, 0 AS seg, je1.key AS ord
+				  FROM json_each((SELECT messages FROM sessions WHERE id = ?)) je1
+				  WHERE je1.key < ?
+				UNION ALL
+				SELECT json(?), 1, ?
+				UNION ALL
+				SELECT je1.value, 2, je1.key
+				  FROM json_each((SELECT messages FROM sessions WHERE id = ?)) je1
+				  WHERE je1.key >= ?
+			) seg
+		), messages),
+		msg_count = msg_count + 1,
+		preview = substr(COALESCE(preview, '') || ?, 1, ?),
+		title = CASE WHEN title IS NULL OR title = '' THEN substr(?, 1, ?) ELSE title END,
+		updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`
+
+	args := []interface{}{id, idx, string(b), idx, id, idx, previewTail, maxMetaPreviewLen, title, maxMetaTitleLen, id}
+	res, err := tx.ExecContext(ctx, update, args...)
+	if err != nil {
+		return false, fmt.Errorf("insert session message before: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // SessionMessageIDExists 判断会话历史里是否已存在指定 id 的消息（persistUserMessage
 // 的幂等判重用）。json_each 在 SQLite 内部扫描，不把 messages 大字段传回 Go
 // 内存——比 LoadSession 全量读回便宜一个数量级。
