@@ -109,7 +109,7 @@ func (b *LocalBackend) Execute(ctx context.Context, cmd string, workDir string, 
 
 	result := &ExecutionResult{
 		Command:   cmd,
-		Output:    string(output),
+		Output:    decodeConsoleOutput(output),
 		Duration:  time.Since(start),
 		Backend:   "local",
 		Timestamp: start,
@@ -250,7 +250,7 @@ func (b *DockerBackend) Execute(ctx context.Context, cmd string, workDir string,
 
 	result := &ExecutionResult{
 		Command:   cmd,
-		Output:    string(output),
+		Output:    decodeConsoleOutput(output),
 		Duration:  time.Since(start),
 		Backend:   "docker",
 		Timestamp: start,
@@ -348,7 +348,7 @@ func (b *SSHBackend) Execute(ctx context.Context, cmd string, workDir string, ti
 
 	result := &ExecutionResult{
 		Command:   cmd,
-		Output:    string(output),
+		Output:    decodeConsoleOutput(output),
 		Duration:  time.Since(start),
 		Backend:   "ssh",
 		Timestamp: start,
@@ -595,7 +595,7 @@ func (b *DaytonaBackend) Execute(ctx context.Context, cmd string, workDir string
 
 	result := &ExecutionResult{
 		Command:   cmd,
-		Output:    string(output),
+		Output:    decodeConsoleOutput(output),
 		Duration:  time.Since(start),
 		Backend:   "daytona",
 		Timestamp: start,
@@ -690,7 +690,7 @@ func (b *SingularityBackend) Execute(ctx context.Context, cmd string, workDir st
 
 	result := &ExecutionResult{
 		Command:   cmd,
-		Output:    string(output),
+		Output:    decodeConsoleOutput(output),
 		Duration:  time.Since(start),
 		Backend:   "singularity",
 		Timestamp: start,
@@ -786,7 +786,7 @@ func (b *ModalBackend) Execute(ctx context.Context, cmd string, workDir string, 
 
 	result := &ExecutionResult{
 		Command:   cmd,
-		Output:    string(output),
+		Output:    decodeConsoleOutput(output),
 		Duration:  time.Since(start),
 		Backend:   "modal",
 		Timestamp: start,
@@ -846,7 +846,9 @@ func indexByte(b []byte, c byte) int {
 func (b *procLogBuf) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return string(b.buf)
+	// 读时整体解码：后台进程（多为 PowerShell/cmd 子进程）在中文 Windows 上
+	// 输出 GBK；增量解码会在多字节字符中间截断，整段读完再解才安全。
+	return decodeConsoleOutput(b.buf)
 }
 
 type ProcessInfo struct {

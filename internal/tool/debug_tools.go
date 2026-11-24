@@ -112,23 +112,25 @@ func detectLanguageFromError(errorMsg string) string {
 		return "python"
 	}
 
-	// JavaScript/Node.js patterns
-	if strings.Contains(errorMsg, "at ") && strings.Contains(errorMsg, "(") ||
-		strings.Contains(errorMsg, "TypeError:") ||
-		strings.Contains(errorMsg, "ReferenceError:") {
-		return "javascript"
-	}
-
 	// Rust patterns
 	if strings.Contains(errorMsg, "thread 'main' panicked") ||
 		strings.Contains(errorMsg, "error[Exxxx]:") {
 		return "rust"
 	}
 
-	// Java patterns
+	// Java patterns —— 必须在 JavaScript 之前：Java 的堆栈行
+	// "at pkg.Class(File.java:42)" 同样包含 "at " 和 "("，宽泛的 JS
+	// 条件会把 Java 输入误判成 JavaScript（反之 JS 不会带 ".java:"）。
 	if strings.Contains(errorMsg, "Exception in thread") ||
-		strings.Contains(errorMsg, "at ") && strings.Contains(errorMsg, "(") && strings.Contains(errorMsg, ".java:") {
+		strings.Contains(errorMsg, ".java:") {
 		return "java"
+	}
+
+	// JavaScript/Node.js patterns
+	if strings.Contains(errorMsg, "at ") && strings.Contains(errorMsg, "(") ||
+		strings.Contains(errorMsg, "TypeError:") ||
+		strings.Contains(errorMsg, "ReferenceError:") {
+		return "javascript"
 	}
 
 	return "unknown"
@@ -156,6 +158,21 @@ func analyzeError(errorMsg, language string) *ErrorAnalysis {
 		analyzeJavaError(analysis, errorMsg)
 	default:
 		analyzeGenericError(analysis, errorMsg)
+	}
+
+	// 兜底：规则没命中任何已知模式时不能返回空数组——空 causes/suggestions
+	// 意味着"没有分析"，对调用方毫无价值。至少给出通用排查方向。
+	if len(analysis.Causes) == 0 {
+		analysis.Causes = append(analysis.Causes,
+			"No known pattern matched; the cause cannot be determined from the message alone",
+			"Check the full error text and surrounding log lines for the actual failure point",
+		)
+	}
+	if len(analysis.Suggestions) == 0 {
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Re-run with more context (the failing code section and recent log output), then retry the analysis",
+			Confidence:  "low",
+		})
 	}
 
 	return analysis
@@ -195,6 +212,17 @@ func analyzeGoError(analysis *ErrorAnalysis, errorMsg string) {
 					Code:        "if idx < len(slice) {\n    value := slice[idx]\n}",
 					Confidence:  "high",
 				})
+			} else {
+				// panic 文本千差万别（自定义错误、断言失败……），给不出精确
+				// 分支时也要有方向，不能让 causes 留空等兜底。
+				analysis.Causes = append(analysis.Causes,
+					"A runtime condition the code did not handle (see panic message above)",
+					"An unchecked error or unexpected state reached a fatal operation",
+				)
+				analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+					Description: "Locate the panic site in the stack trace and handle the failing condition (or add a recover in the goroutine)",
+					Confidence:  "medium",
+				})
 			}
 		}
 	}
@@ -217,6 +245,10 @@ func analyzeGoError(analysis *ErrorAnalysis, errorMsg string) {
 			"Missing import",
 			"Typo in identifier name",
 		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Declare the identifier, fix the typo, or add the missing import",
+			Confidence:  "high",
+		})
 	}
 
 	if strings.Contains(errorMsg, "cannot use") && strings.Contains(errorMsg, "as type") {
@@ -226,6 +258,36 @@ func analyzeGoError(analysis *ErrorAnalysis, errorMsg string) {
 			"Missing type conversion",
 			"Interface implementation mismatch",
 		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Add an explicit conversion (e.g. string(v), int64(n)) or fix the value's type at its source",
+			Confidence:  "high",
+		})
+	}
+
+	// 依赖缺失（go build / go run 最常见的一类，此前无规则覆盖）
+	if strings.Contains(errorMsg, "no required module provides package") ||
+		strings.Contains(errorMsg, "cannot find package") {
+		analysis.ErrorType = "Missing Dependency"
+		analysis.Causes = append(analysis.Causes,
+			"Imported package not present in go.mod",
+			"Wrong import path (typo or moved module)",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Run 'go mod tidy' (or go get <package>) to fetch the missing module, and verify the import path",
+			Code:        "go mod tidy",
+			Confidence:  "high",
+		})
+	}
+
+	if strings.Contains(errorMsg, "declared and not used") {
+		analysis.ErrorType = "Unused Variable"
+		analysis.Causes = append(analysis.Causes,
+			"Variable assigned but never read",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Use the variable or replace the declaration with _",
+			Confidence:  "high",
+		})
 	}
 }
 
@@ -328,6 +390,49 @@ func analyzePythonError(analysis *ErrorAnalysis, errorMsg string) {
 			Code:        "if divisor != 0:\n    result = dividend / divisor\nelse:\n    result = 0  # or handle appropriately",
 			Confidence:  "high",
 		})
+	case "AttributeError":
+		analysis.Causes = append(analysis.Causes,
+			"Attribute or method name misspelled",
+			"Object is of an unexpected type (e.g. None, or a different class)",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Print/inspect the object's type and available attributes (dir(obj)) at the failure line",
+			Confidence:  "medium",
+		})
+	case "ImportError", "ModuleNotFoundError":
+		analysis.Causes = append(analysis.Causes,
+			"Module not installed in the current environment",
+			"Wrong sys.path / virtualenv in use",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Install the missing module into the active interpreter (python -m pip install <module>) and confirm the right venv is active",
+			Code:        "python -m pip install <module>",
+			Confidence:  "high",
+		})
+	case "FileNotFoundError":
+		analysis.Causes = append(analysis.Causes,
+			"Path does not exist (typo or relative path resolved against an unexpected CWD)",
+			"File removed or never created before use",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Verify the path exists (os.path.exists) and use absolute paths where the CWD is uncertain",
+			Code:        "import os\nos.path.exists(path)",
+			Confidence:  "high",
+		})
+	case "PermissionError":
+		analysis.Causes = append(analysis.Causes,
+			"File/dir owned by another user or opened by another process",
+			"Trying to write to a read-only location",
+		)
+	case "ValueError":
+		analysis.Causes = append(analysis.Causes,
+			"Invalid value passed to a conversion or function (e.g. int('abc'))",
+			"Malformed input data",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Validate/normalize the input value before conversion (try/except or pre-check the format)",
+			Confidence:  "medium",
+		})
 	}
 }
 
@@ -395,7 +500,21 @@ func analyzeJavaScriptError(analysis *ErrorAnalysis, errorMsg string) {
 			analysis.Causes = append(analysis.Causes,
 				"Calling non-function as function",
 				"Variable reassigned to non-function",
+				"Wrong import shape (default vs named export mismatch)",
 			)
+			analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+				Description: "Log the value (console.log(typeof fn, fn)) and check the import/export declaration matches how it is called",
+				Confidence:  "medium",
+			})
+		} else if strings.Contains(errorMsg, "Cannot set properties") {
+			analysis.Causes = append(analysis.Causes,
+				"Assignment to a property of undefined/null",
+				"Object not initialized before use",
+			)
+			analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+				Description: "Initialize the object before assigning (or use optional chaining on the read side)",
+				Confidence:  "high",
+			})
 		}
 	case "ReferenceError":
 		analysis.Causes = append(analysis.Causes,
@@ -409,6 +528,34 @@ func analyzeJavaScriptError(analysis *ErrorAnalysis, errorMsg string) {
 			"Missing bracket or parenthesis",
 		)
 		analysis.Severity = "high"
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Run the file through a linter/formatter (prettier/eslint) to pinpoint the syntax error",
+			Confidence:  "medium",
+		})
+	}
+
+	// Node.js 系统级错误（errno）：不走 \w+Error 正则，单独识别
+	if strings.Contains(errorMsg, "ENOENT") {
+		analysis.ErrorType = "File Not Found (ENOENT)"
+		analysis.Causes = append(analysis.Causes,
+			"Referenced file or module path does not exist",
+			"Relative path resolved against an unexpected working directory",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Verify the path exists and prefer absolute paths (path.resolve/__dirname) where CWD is uncertain",
+			Confidence:  "high",
+		})
+	}
+	if strings.Contains(errorMsg, "ECONNREFUSED") {
+		analysis.ErrorType = "Connection Refused (ECONNREFUSED)"
+		analysis.Causes = append(analysis.Causes,
+			"Target service not running or wrong port",
+			"Firewall/proxy blocking the connection",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Confirm the service is up and listening on the expected host:port (netstat/curl), then retry",
+			Confidence:  "high",
+		})
 	}
 }
 
@@ -476,6 +623,34 @@ func analyzeRustError(analysis *ErrorAnalysis, errorMsg string) {
 			"Multiple mutable borrows",
 			"Borrow checker violation",
 		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Serialize the borrows (end the first &mut before taking the next) or use RefCell/interior mutability",
+			Confidence:  "medium",
+		})
+	}
+
+	if strings.Contains(errorMsg, "cannot find value") || strings.Contains(errorMsg, "unresolved") {
+		analysis.ErrorType = "Unresolved Name"
+		analysis.Causes = append(analysis.Causes,
+			"Identifier not declared or not in scope",
+			"Missing use/import of the module or trait",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Add the missing use declaration or fix the identifier spelling",
+			Confidence:  "high",
+		})
+	}
+
+	if strings.Contains(errorMsg, "expected") && strings.Contains(errorMsg, "found") {
+		analysis.ErrorType = "Type/Syntax Mismatch"
+		analysis.Causes = append(analysis.Causes,
+			"Compiler expected a different token or type at this position",
+			"Missing bracket, comma, or type annotation",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Look at the --> location and the expected-vs-found tokens; fix the surrounding syntax or add the annotation",
+			Confidence:  "medium",
+		})
 	}
 }
 
@@ -507,6 +682,32 @@ func analyzeJavaError(analysis *ErrorAnalysis, errorMsg string) {
 		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
 			Description: "Add null check before method call",
 			Code:        "if (obj != null) {\n    obj.method();\n}",
+			Confidence:  "high",
+		})
+	}
+
+	if strings.Contains(analysis.ErrorType, "ArrayIndexOutOfBoundsException") {
+		analysis.Causes = append(analysis.Causes,
+			"Index beyond array length",
+			"Off-by-one in loop bound",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Check the index against array.length before access (or use enhanced for)",
+			Confidence:  "high",
+		})
+	}
+	if strings.Contains(analysis.ErrorType, "NumberFormatException") {
+		analysis.Causes = append(analysis.Causes,
+			"Non-numeric string passed to Integer.parseInt/Long.parseLong etc.",
+			"Input contains whitespace, sign, or separators not accepted by the parser",
+		)
+	}
+	if strings.Contains(analysis.ErrorType, "ClassCastException") {
+		analysis.Causes = append(analysis.Causes,
+			"Object's runtime type is not compatible with the target cast",
+		)
+		analysis.Suggestions = append(analysis.Suggestions, FixSuggestion{
+			Description: "Check getClass()/instanceof before casting",
 			Confidence:  "high",
 		})
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ============================================================================
@@ -101,47 +103,96 @@ func (t *JSONTool) format(data string, indent int) (string, error) {
 	return string(jsonBytes), nil
 }
 
+// jsonPathTokens 把 JSONPath 拆成 token 序列。
+// 支持写法：$.key.sub、$.key[0]、$[0].key、$.key[0][1]、$.key[*]。
+// 实现思路：把 "[" 前面补一个 "." 再按 "." 分段，"[0]" 段即为索引 token。
+func jsonPathTokens(path string) ([]string, error) {
+	if !strings.HasPrefix(path, "$") {
+		return nil, fmt.Errorf("path must start with '$'")
+	}
+	normalized := strings.ReplaceAll(path[1:], "[", ".[")
+	tokens := strings.Split(normalized, ".")
+	var out []string
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		if strings.HasPrefix(tok, "[") {
+			if !strings.HasSuffix(tok, "]") {
+				return nil, fmt.Errorf("invalid path segment: %s", tok)
+			}
+			inner := tok[1 : len(tok)-1]
+			if inner != "*" {
+				var idx int
+				if _, err := fmt.Sscanf(inner, "%d", &idx); err != nil || fmt.Sprintf("%d", idx) != inner {
+					return nil, fmt.Errorf("invalid array index: %s", inner)
+				}
+			}
+		}
+		out = append(out, tok)
+	}
+	return out, nil
+}
+
 func (t *JSONTool) query(data, path string) (any, error) {
 	var result any
 	if err := json.Unmarshal([]byte(data), &result); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	// 简单的 JSONPath 查询实现
-	// 支持格式: $.key.subkey 或 $[0].key
-	path = strings.TrimPrefix(path, "$")
-	parts := strings.Split(path, ".")
+	tokens, err := jsonPathTokens(path)
+	if err != nil {
+		return nil, err
+	}
 
-	current := result
-	for _, part := range parts {
-		part = strings.TrimPrefix(part, ".")
-		if part == "" {
+	// current 是当前游标；wildcards 收集 [*] 产生的多结果
+	currents := []any{result}
+	for _, tok := range tokens {
+		if !strings.HasPrefix(tok, "[") {
+			// key 段：对每个游标取字段
+			next := make([]any, 0, len(currents))
+			for _, cur := range currents {
+				m, ok := cur.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("cannot access key '%s' on non-object", tok)
+				}
+				v, exists := m[tok]
+				if !exists {
+					return nil, fmt.Errorf("path not found: %s", tok)
+				}
+				next = append(next, v)
+			}
+			currents = next
 			continue
 		}
 
-		switch c := current.(type) {
-		case map[string]any:
-			current = c[part]
-		case []any:
-			// 支持数组索引
-			if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
-				idxStr := strings.TrimSuffix(strings.TrimPrefix(part, "["), "]")
-				idx := 0
-				fmt.Sscanf(idxStr, "%d", &idx)
-				if idx >= 0 && idx < len(c) {
-					current = c[idx]
-				} else {
-					return nil, fmt.Errorf("index out of range: %d", idx)
-				}
-			} else {
-				return nil, fmt.Errorf("cannot access key '%s' on array", part)
+		inner := tok[1 : len(tok)-1]
+		next := make([]any, 0, len(currents))
+		for _, cur := range currents {
+			arr, ok := cur.([]any)
+			if !ok {
+				return nil, fmt.Errorf("cannot index non-array with '%s'", tok)
 			}
-		default:
-			return nil, fmt.Errorf("path not found: %s", part)
+			if inner == "*" {
+				next = append(next, arr...)
+				continue
+			}
+			var idx int
+			fmt.Sscanf(inner, "%d", &idx)
+			if idx < 0 || idx >= len(arr) {
+				return nil, fmt.Errorf("index out of range: %d (array length %d)", idx, len(arr))
+			}
+			next = append(next, arr[idx])
 		}
+		currents = next
 	}
 
-	return current, nil
+	// 单结果直接返回值；[*] 多结果包装成数组
+	if len(currents) == 1 {
+		return currents[0], nil
+	}
+	return currents, nil
 }
 
 func (t *JSONTool) transform(data string) (map[string]any, error) {
@@ -230,26 +281,12 @@ func (t *YAMLTool) Execute(ctx context.Context, args map[string]any) (any, error
 	}
 }
 
-func (t *YAMLTool) parse(data string) (map[string]any, error) {
-	// 简单 YAML 解析
-	result := make(map[string]any)
-	lines := strings.Split(data, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		if strings.Contains(line, ":") {
-			parts := strings.SplitN(line, ":", 2)
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			value = strings.Trim(value, "\"")
-			result[key] = value
-		}
+func (t *YAMLTool) parse(data string) (any, error) {
+	// 真正的 YAML 解析（yaml.v3），列表/嵌套 map/多行字符串均正确映射
+	var result any
+	if err := yaml.Unmarshal([]byte(data), &result); err != nil {
+		return nil, fmt.Errorf("invalid YAML: %w", err)
 	}
-
 	return result, nil
 }
 
@@ -259,12 +296,11 @@ func (t *YAMLTool) format(data string) (string, error) {
 		return "", err
 	}
 
-	// 简单格式化输出
-	var buf strings.Builder
-	for k, v := range parsed {
-		buf.WriteString(fmt.Sprintf("%s: %v\n", k, v))
+	out, err := yaml.Marshal(parsed)
+	if err != nil {
+		return "", err
 	}
-	return buf.String(), nil
+	return string(out), nil
 }
 
 func (t *YAMLTool) toJSON(data string) (string, error) {
@@ -286,14 +322,9 @@ func (t *YAMLTool) fromJSON(data string) (string, error) {
 		return "", fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	// 简单 JSON 到 YAML 转换
-	if m, ok := result.(map[string]any); ok {
-		var buf strings.Builder
-		for k, v := range m {
-			buf.WriteString(fmt.Sprintf("%s: %v\n", k, v))
-		}
-		return buf.String(), nil
+	out, err := yaml.Marshal(result)
+	if err != nil {
+		return "", err
 	}
-
-	return "", fmt.Errorf("unsupported type for YAML conversion")
+	return string(out), nil
 }

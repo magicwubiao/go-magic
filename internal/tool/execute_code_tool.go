@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -57,11 +56,10 @@ func DefaultCodeExecutorConfig() *CodeExecutorConfig {
 	}
 }
 
-// ExecuteCodeTool provides in-process multi-language code execution with tool access
-// and package management support
+// ExecuteCodeTool provides in-process multi-language code execution
+// with package management support
 type ExecuteCodeTool struct {
 	config     *CodeExecutorConfig
-	tools      map[string]Tool // Available tools for code to call
 	codingMode bool
 }
 
@@ -69,13 +67,7 @@ type ExecuteCodeTool struct {
 func NewExecuteCodeTool() *ExecuteCodeTool {
 	return &ExecuteCodeTool{
 		config: DefaultCodeExecutorConfig(),
-		tools:  make(map[string]Tool),
 	}
-}
-
-// RegisterTool registers a tool that can be called from executed code
-func (t *ExecuteCodeTool) RegisterTool(name string, tool Tool) {
-	t.tools[name] = tool
 }
 
 // SetCodingMode enables coding mode with relaxed restrictions
@@ -94,11 +86,9 @@ func (t *ExecuteCodeTool) Description() string {
 	return `Execute code in multiple programming languages.
 Code runs in an isolated subprocess with timeout and memory limits.
 
-IMPORTANT: code cannot call back into agent tools in the current build —
-the subprocess is isolated and no tool bridge is wired up. The wrapper's
-tool()/read_file()/terminal() helpers exist but always return an
-"Unknown tool" error. Use execute_command, read_file etc. as separate
-tool calls instead.
+NOTE: code cannot call back into agent tools — the subprocess is isolated
+and there is no tool bridge. Use execute_command, read_file etc. as
+separate tool calls instead.
 
 Supported languages:
 - python, python3: Python 3.x (supports pip packages)
@@ -219,35 +209,14 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface
 		}
 	}
 
-	toolsOutput := false
-	if to, ok := args["tools_output"].(bool); ok {
-		toolsOutput = to
-	}
-
-	// Filter tools if specified
-	var toolNames []string
-	if tnArg, ok := args["tools"].([]interface{}); ok {
-		for _, tn := range tnArg {
-			if name, ok := tn.(string); ok {
-				toolNames = append(toolNames, name)
-			}
-		}
-	} else {
-		for name := range t.tools {
-			toolNames = append(toolNames, name)
-		}
-	}
-
 	// Create execution context
 	execCtx := &codeExecutionContext{
-		lang:        lang,
-		code:        code,
-		workDir:     workDir,
-		packages:    packages,
-		progArgs:    progArgs,
-		toolNames:   toolNames,
-		toolsOutput: toolsOutput,
-		timeout:     timeout,
+		lang:     lang,
+		code:     code,
+		workDir:  workDir,
+		packages: packages,
+		progArgs: progArgs,
+		timeout:  timeout,
 	}
 
 	return t.executeWithLanguage(ctx, execCtx)
@@ -255,14 +224,12 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, args map[string]interface
 
 // codeExecutionContext holds execution parameters
 type codeExecutionContext struct {
-	lang        Language
-	code        string
-	workDir     string
-	packages    []string
-	progArgs    []string
-	toolNames   []string
-	toolsOutput bool
-	timeout     time.Duration
+	lang     Language
+	code     string
+	workDir  string
+	packages []string
+	progArgs []string
+	timeout  time.Duration
 }
 
 // normalizeLanguage normalizes language names
@@ -349,15 +316,11 @@ func (t *ExecuteCodeTool) executePython(ctx context.Context, execCtx *codeExecut
 		pkgArgs = append(pkgArgs, execCtx.packages...)
 		cmd := exec.CommandContext(ctx, bin, pkgArgs...)
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("failed to install packages: %w\n%s", err, output)
+			return nil, fmt.Errorf("failed to install packages: %w\n%s", err, decodeConsoleOutput(output))
 		}
 	}
 
-	// Generate tool wrapper
-	toolWrapper := t.generatePythonToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
-	fullCode := toolWrapper + "\n\n# User code\n" + execCtx.code
-
-	return t.executeScript(ctx, fullCode, bin, prefix, ".py", execCtx.workDir, execCtx.timeout, execCtx.progArgs)
+	return t.executeScript(ctx, execCtx.code, bin, prefix, ".py", execCtx.workDir, execCtx.timeout, execCtx.progArgs)
 }
 
 // executeJavaScript executes JavaScript/Node.js code with npm package support
@@ -381,11 +344,7 @@ func (t *ExecuteCodeTool) executeJavaScript(ctx context.Context, execCtx *codeEx
 		}
 	}
 
-	// Generate tool wrapper
-	toolWrapper := t.generateNodeToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
-	fullCode := toolWrapper + "\n\n// User code\n" + execCtx.code
-
-	return t.executeScript(ctx, fullCode, "node", nil, ".js", tempDir, execCtx.timeout, execCtx.progArgs)
+	return t.executeScript(ctx, execCtx.code, "node", nil, ".js", tempDir, execCtx.timeout, execCtx.progArgs)
 }
 
 // executeTypeScript executes TypeScript code with ts-node
@@ -408,13 +367,9 @@ func (t *ExecuteCodeTool) executeTypeScript(ctx context.Context, execCtx *codeEx
 		return nil, err
 	}
 
-	// Generate tool wrapper
-	toolWrapper := t.generateNodeToolWrapper(execCtx.toolNames, execCtx.toolsOutput)
-	fullCode := toolWrapper + "\n\n// User code\n" + execCtx.code
-
 	// Write TypeScript file
 	tsFile := filepath.Join(tempDir, "script.ts")
-	if err := os.WriteFile(tsFile, []byte(fullCode), 0644); err != nil {
+	if err := os.WriteFile(tsFile, []byte(execCtx.code), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write TypeScript file: %w", err)
 	}
 
@@ -440,7 +395,7 @@ func (t *ExecuteCodeTool) executeGo(ctx context.Context, execCtx *codeExecutionC
 	cmd := exec.CommandContext(ctx, "go", "mod", "init", modName)
 	cmd.Dir = tempDir
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed to initialize go module: %w\n%s", err, output)
+		return nil, fmt.Errorf("failed to initialize go module: %w\n%s", err, decodeConsoleOutput(output))
 	}
 
 	// Write code to main.go
@@ -453,7 +408,7 @@ func (t *ExecuteCodeTool) executeGo(ctx context.Context, execCtx *codeExecutionC
 	cmd = exec.CommandContext(ctx, "go", "mod", "tidy")
 	cmd.Dir = tempDir
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed to tidy go modules: %w\n%s", err, output)
+		return nil, fmt.Errorf("failed to tidy go modules: %w\n%s", err, decodeConsoleOutput(output))
 	}
 
 	// Run the code
@@ -560,7 +515,7 @@ func (t *ExecuteCodeTool) executeJava(ctx context.Context, execCtx *codeExecutio
 		cmd := exec.CommandContext(ctx, "mvn", "dependency:copy-dependencies", "-DoutputDirectory=lib", "-q")
 		cmd.Dir = tempDir
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("failed to download dependencies: %w\n%s", err, output)
+			return nil, fmt.Errorf("failed to download dependencies: %w\n%s", err, decodeConsoleOutput(output))
 		}
 	}
 
@@ -578,7 +533,7 @@ func (t *ExecuteCodeTool) executeJava(ctx context.Context, execCtx *codeExecutio
 	compileCmd := exec.CommandContext(ctx, "javac", "-d", ".", "src/Main.java")
 	compileCmd.Dir = tempDir
 	if output, err := compileCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("compilation failed: %w\n%s", err, output)
+		return nil, fmt.Errorf("compilation failed: %w\n%s", err, decodeConsoleOutput(output))
 	}
 
 	// Run
@@ -634,7 +589,7 @@ func (t *ExecuteCodeTool) executeCpp(ctx context.Context, execCtx *codeExecution
 	compileCmd := exec.CommandContext(ctx, compiler, compileArgs...)
 	compileCmd.Dir = tempDir
 	if output, err := compileCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("compilation failed: %w\n%s", err, output)
+		return nil, fmt.Errorf("compilation failed: %w\n%s", err, decodeConsoleOutput(output))
 	}
 
 	// Run
@@ -660,7 +615,7 @@ func (t *ExecuteCodeTool) installNpmPackages(dir string, packages []string) erro
 	cmd := exec.Command("npm", args...)
 	cmd.Dir = dir
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to install npm packages: %w\n%s", err, output)
+		return fmt.Errorf("failed to install npm packages: %w\n%s", err, decodeConsoleOutput(output))
 	}
 	return nil
 }
@@ -713,7 +668,9 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.String()
+	// 子进程输出按控制台编码解码：Python 在 Windows 管道下默认按 ANSI 代码页
+	// （中文系统即 GBK）写 stdout，直接 string() 会得到替换字符。
+	return decodeConsoleOutput(b.buf.Bytes())
 }
 
 // defaultCommandWaitDelay 进程被 Kill 后等待管道排空的上限。
@@ -822,534 +779,3 @@ func (t *ExecuteCodeTool) runCommand(ctx context.Context, cmd *exec.Cmd, timeout
 	return result, nil
 }
 
-// generatePythonToolWrapper creates Python code that exposes tools as callable functions
-func (t *ExecuteCodeTool) generatePythonToolWrapper(toolNames []string, includeOutput bool) string {
-	var buf bytes.Buffer
-
-	buf.WriteString(`import json
-import sys
-import os
-
-# Tool registry - populated by executor
-_TOOLS = {}
-
-# Output collection
-_TOOL_RESULTS = []
-
-def register_tools(tools):
-    """Register available tools."""
-    global _TOOLS
-    _TOOLS = tools
-
-def tool(name, **kwargs):
-    """Call a tool by name with keyword arguments.
-    
-    Args:
-        name: Tool name (e.g., 'read_file', 'web_search')
-        **kwargs: Tool arguments
-        
-    Returns:
-        Tool result dict
-    """
-    if name not in _TOOLS:
-        return {"error": f"Unknown tool: {name}"}
-    
-    result = _TOOLS[name](**kwargs)
-    _TOOL_RESULTS.append({
-        "tool": name,
-        "args": kwargs,
-        "result": result
-    })
-    return result
-
-# Built-in convenience functions
-def read_file(path, limit=None, offset=0):
-    """Read file content. Alias for tool('read_file', ...)."""
-    return tool('read_file', path=path, limit=limit, offset=offset)
-
-def write_file(path, content):
-    """Write content to file. Alias for tool('write_file', ...)."""
-    return tool('write_file', path=path, content=content)
-
-def search_files(pattern, path=".", file_pattern="*"):
-    """Search files. Alias for tool('search_in_files', ...)."""
-    return tool('search_in_files', pattern=pattern, path=path, file_pattern=file_pattern)
-
-def terminal(command, timeout=30):
-    """Execute terminal command. Alias for tool('execute_command', ...)."""
-    return tool('execute_command', command=command, timeout=timeout)
-
-def web_search(query, count=5):
-    """Search the web. Alias for tool('web_search', ...)."""
-    return tool('web_search', query=query, count=count)
-
-def web_fetch(url):
-    """Fetch web page. Alias for tool('web_fetch', ...)."""
-    return tool('web_fetch', url=url)
-
-def json_dump(obj, indent=2):
-    """Pretty print JSON."""
-    print(json.dumps(obj, indent=indent))
-
-def print_results():
-    """Print all tool results collected so far."""
-    for r in _TOOL_RESULTS:
-        print(f"[{r['tool']}] {json.dumps(r['result'], indent=2)}")
-`)
-	return buf.String()
-}
-
-// generateNodeToolWrapper creates Node.js code that exposes tools as callable functions
-func (t *ExecuteCodeTool) generateNodeToolWrapper(toolNames []string, includeOutput bool) string {
-	var buf bytes.Buffer
-
-	buf.WriteString(`// Tool registry - populated by executor
-const _TOOLS = {};
-const _TOOL_RESULTS = [];
-
-// Register available tools
-function register_tools(tools) {
-    Object.assign(_TOOLS, tools);
-}
-
-// Call a tool by name with arguments
-async function tool(name, kwargs = {}) {
-    if (!Object.keys(_TOOLS).includes(name)) {
-        return { error: "Unknown tool: " + name };
-    }
-    
-    const result = await _TOOLS[name](kwargs);
-    _TOOL_RESULTS.push({
-        tool: name,
-        args: kwargs,
-        result: result
-    });
-    return result;
-}
-
-// Built-in convenience functions
-async function read_file(path, options = {}) {
-    return tool('read_file', { path, ...options });
-}
-
-async function write_file(path, content) {
-    return tool('write_file', { path, content });
-}
-
-async function search_files(pattern, options = {}) {
-    return tool('search_in_files', { pattern, ...options });
-}
-
-async function terminal(command, options = {}) {
-    return tool('execute_command', { command, ...options });
-}
-
-async function web_search(query, options = {}) {
-    return tool('web_search', { query, ...options });
-}
-
-async function web_fetch(url) {
-    return tool('web_fetch', { url });
-}
-
-function json_dump(obj, indent = 2) {
-    console.log(JSON.stringify(obj, null, indent));
-}
-
-function print_results() {
-    _TOOL_RESULTS.forEach(r => {
-        console.log("[" + r.tool + "] " + JSON.stringify(r.result, null, 2));
-    });
-}
-`)
-
-	return buf.String()
-}
-
-// =============================================================================
-// Code Execution with Tool Calls (Async)
-// =============================================================================
-
-// CodeExecutionRequest represents a code execution request with tool context
-type CodeExecutionRequest struct {
-	Code     string                 `json:"code"`
-	Language string                 `json:"language,omitempty"`
-	Timeout  int                    `json:"timeout,omitempty"`
-	WorkDir  string                 `json:"workdir,omitempty"`
-	Packages []string               `json:"packages,omitempty"`
-	Args     []string               `json:"args,omitempty"`
-	Tools    []string               `json:"tools,omitempty"`
-	Context  map[string]interface{} `json:"context,omitempty"`
-}
-
-// CodeExecutionResponse represents the response from code execution
-type CodeExecutionResponse struct {
-	Success   bool           `json:"success"`
-	Output    string         `json:"output,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	ExitCode  int            `json:"exit_code"`
-	ToolCalls []CodeToolCall `json:"tool_calls,omitempty"`
-	Duration  time.Duration  `json:"duration"`
-}
-
-// CodeToolCall represents a tool call made during code execution
-type CodeToolCall struct {
-	Tool     string        `json:"tool"`
-	Args     interface{}   `json:"args"`
-	Result   interface{}   `json:"result"`
-	Duration time.Duration `json:"duration"`
-}
-
-// ExecuteWithTools executes code with tool integration
-func (t *ExecuteCodeTool) ExecuteWithTools(ctx context.Context, req *CodeExecutionRequest, toolRegistry map[string]Tool) (*CodeExecutionResponse, error) {
-	start := time.Now()
-
-	// Register tools
-	for name, tool := range toolRegistry {
-		t.RegisterTool(name, tool)
-	}
-
-	args := map[string]interface{}{
-		"code":     req.Code,
-		"language": req.Language,
-	}
-	if req.Timeout > 0 {
-		args["timeout"] = float64(req.Timeout)
-	}
-	if req.WorkDir != "" {
-		args["workdir"] = req.WorkDir
-	}
-	if len(req.Packages) > 0 {
-		args["packages"] = req.Packages
-	}
-	if len(req.Args) > 0 {
-		args["args"] = req.Args
-	}
-	if len(req.Tools) > 0 {
-		args["tools"] = req.Tools
-	}
-	args["tools_output"] = true
-
-	result, err := t.Execute(ctx, args)
-	if err != nil {
-		return &CodeExecutionResponse{
-			Success:  false,
-			Error:    err.Error(),
-			ExitCode: -1,
-			Duration: time.Since(start),
-		}, nil
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		return &CodeExecutionResponse{
-			Success:  false,
-			Error:    "Invalid result format",
-			Duration: time.Since(start),
-		}, nil
-	}
-
-	exitCode := 0
-	if ec, ok := resultMap["exit_code"].(float64); ok {
-		exitCode = int(ec)
-	}
-
-	return &CodeExecutionResponse{
-		Success:  exitCode == 0,
-		Output:   fmt.Sprintf("%v", resultMap["stdout"]),
-		Error:    fmt.Sprintf("%v", resultMap["stderr"]),
-		ExitCode: exitCode,
-		Duration: time.Since(start),
-	}, nil
-}
-
-// =============================================================================
-// Code Template Library
-// =============================================================================
-
-// CodeTemplates provides pre-built code templates
-var CodeTemplates = map[string]string{
-	"file_processor": `
-import os
-import json
-
-def process_files(directory, pattern="*.txt"):
-    """Process all files matching pattern in directory."""
-    import glob
-    results = []
-    for filepath in glob.glob(os.path.join(directory, pattern)):
-        with open(filepath, 'r') as f:
-            results.append({
-                'path': filepath,
-                'content': f.read(),
-                'size': os.path.getsize(filepath)
-            })
-    return results
-
-# Example usage
-results = process_files('/tmp', '*.txt')
-print(f"Processed {len(results)} files")
-json_dump(results)
-`,
-
-	"web_scraper": `
-import json
-import re
-
-def scrape_links(html, base_url=''):
-    """Extract links from HTML."""
-    pattern = r'href=["\']([^"\']+)["\']'
-    links = re.findall(pattern, html)
-    return [{'url': link, 'absolute': link if link.startswith('http') else base_url + link} for link in links]
-
-# Example usage
-html = tool('web_fetch', url='https://example.com')
-if isinstance(html, dict):
-    html = html.get('content', '')
-
-links = scrape_links(str(html), 'https://example.com')
-print(f"Found {len(links)} links")
-json_dump(links[:10])
-`,
-
-	"data_analysis": `
-import json
-from collections import Counter
-
-def analyze_data(items, key):
-    """Analyze items by key."""
-    counter = Counter()
-    for item in items:
-        if isinstance(item, dict) and key in item:
-            counter[item[key]] += 1
-    return {
-        'total': len(items),
-        'distribution': dict(counter),
-        'most_common': counter.most_common(5)
-    }
-
-# Example: Analyze a list
-data = [{'category': 'A', 'value': 1}, {'category': 'B', 'value': 2}]
-results = analyze_data(data, 'category')
-json_dump(results)
-`,
-
-	// Node.js templates
-	"file_processor_node": `
-const fs = require('fs');
-const path = require('path');
-
-async function processFiles(directory, pattern = "*.txt") {
-    const results = [];
-    const files = fs.readdirSync(directory);
-    
-    for (const file of files) {
-        if (file.endsWith('.txt')) {
-            const filePath = path.join(directory, file);
-            const content = fs.readFileSync(filePath, 'utf8');
-            results.push({
-                path: filePath,
-                content: content,
-                size: fs.statSync(filePath).size
-            });
-        }
-    }
-    return results;
-}
-
-// Example usage
-const results = processFiles('/tmp');
-console.log("Processed " + results.length + " files");
-json_dump(results);
-`,
-
-	"web_scraper_node": `
-const https = require('https');
-const http = require('http');
-
-function extractLinks(html, baseUrl) {
-    baseUrl = baseUrl || '';
-    const linkRegex = /href=["']([^"']+)["']/g;
-    const links = [];
-    let match;
-    while ((match = linkRegex.exec(html)) !== null) {
-        links.push({
-            url: match[1],
-            absolute: match[1].startsWith('http') ? match[1] : baseUrl + match[1]
-        });
-    }
-    return links;
-}
-
-// Example usage
-// const html = await web_fetch('https://example.com');
-// const links = extractLinks(html, 'https://example.com');
-// console.log("Found " + links.length + " links");
-// json_dump(links.slice(0, 10));
-`,
-
-	"data_analysis_node": `
-function analyzeData(items, key) {
-    const distribution = {};
-    items.forEach(item => {
-        if (item && typeof item === 'object' && key in item) {
-            const val = item[key];
-            distribution[val] = (distribution[val] || 0) + 1;
-        }
-    });
-    
-    const entries = Object.entries(distribution);
-    entries.sort((a, b) => b[1] - a[1]);
-    const sorted = entries.slice(0, 5);
-    
-    return {
-        total: items.length,
-        distribution: distribution,
-        most_common: sorted
-    };
-}
-
-// Example: Analyze a list
-const data = [{category: 'A', value: 1}, {category: 'B', value: 2}];
-const results = analyzeData(data, 'category');
-json_dump(results);
-`,
-
-	// Go template
-	"hello_go": `
-package main
-
-import "fmt"
-
-func main() {
-    fmt.Println("Hello from Go!")
-}
-`,
-
-	// Rust template
-	"hello_rust": `
-fn main() {
-    println!("Hello from Rust!");
-}
-`,
-
-	// Java template
-	"hello_java": `
-public class Main {
-    public static void main(String[] args) {
-        System.out.println("Hello from Java!");
-    }
-}
-`,
-
-	// C++ template
-	"hello_cpp": `
-#include <iostream>
-
-int main() {
-    std::cout << "Hello from C++!" << std::endl;
-    return 0;
-}
-`,
-}
-
-// GetTemplate returns a code template by name
-func GetTemplate(name string) (string, bool) {
-	code, ok := CodeTemplates[name]
-	return code, ok
-}
-
-// ListTemplates returns all available template names
-func ListTemplates() []string {
-	templates := make([]string, 0, len(CodeTemplates))
-	for name := range CodeTemplates {
-		templates = append(templates, name)
-	}
-	return templates
-}
-
-// =============================================================================
-// Sandbox utilities
-// =============================================================================
-
-// ValidateCode performs static analysis on code for security issues
-// Supports both Python and JavaScript/Node.js
-func ValidateCode(code string) (bool, string) {
-	// Check for dangerous patterns (Python)
-	pythonDangerous := []string{
-		`__import__`,
-		`eval\(`,
-		`exec\(`,
-		`subprocess`,
-		`os\.system`,
-		`os\.popen`,
-		`pty\.spawn`,
-		`fork`,
-		`multiprocessing`,
-	}
-
-	for _, pattern := range pythonDangerous {
-		re := regexp.MustCompile(pattern)
-		if re.MatchString(code) {
-			return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
-		}
-	}
-
-	// Check for dangerous patterns (JavaScript/Node.js)
-	nodeDangerous := []string{
-		`require\(['"]child_process['"]\)`,
-		`eval\(`,
-		`new Function\(`,
-		`process\.exit`,
-		`process\.kill`,
-		`child_process\.exec`,
-		`child_process\.spawn.*rm`,
-		`child_process\.spawn.*delete`,
-	}
-
-	for _, pattern := range nodeDangerous {
-		re := regexp.MustCompile(pattern)
-		if re.MatchString(code) {
-			return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
-		}
-	}
-
-	return true, ""
-}
-
-// ValidateCodeForLanguage performs security check for specific language
-func ValidateCodeForLanguage(code, language string) (bool, string) {
-	switch language {
-	case "node", "nodejs", "js", "javascript":
-		nodeDangerous := []string{
-			`require\(['"]child_process['"]\)`,
-			`eval\(`,
-			`new Function\(`,
-			`process\.exit`,
-			`process\.kill`,
-			`child_process\.exec`,
-		}
-		for _, pattern := range nodeDangerous {
-			re := regexp.MustCompile(pattern)
-			if re.MatchString(code) {
-				return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
-			}
-		}
-	default: // Python
-		pythonDangerous := []string{
-			`__import__`,
-			`eval\(`,
-			`exec\(`,
-			`subprocess`,
-			`os\.system`,
-			`os\.popen`,
-		}
-		for _, pattern := range pythonDangerous {
-			re := regexp.MustCompile(pattern)
-			if re.MatchString(code) {
-				return false, fmt.Sprintf("potentially dangerous pattern detected: %s", pattern)
-			}
-		}
-	}
-	return true, ""
-}
