@@ -48,22 +48,33 @@ func (m *Manager) CreateToolJob(name, schedule, prompt, platform string) (string
 	return job.ID, nil
 }
 
+// toolJobSnapshot 把内部 Job 转成工具侧只读快照。CreatedAt 在旧任务上可能
+// 是零值（修复前创建），输出为 null 而不是 0001-01-01。
+func toolJobSnapshot(job *Job) tool.ToolJobInfo {
+	info := tool.ToolJobInfo{
+		ID:         job.ID,
+		Name:       job.Name,
+		Schedule:   job.Schedule,
+		Prompt:     job.Prompt,
+		Platform:   job.Platform,
+		Enabled:    job.Enabled,
+		NextRun:    job.NextRun,
+		LastRun:    job.LastRun,
+		LastStatus: job.LastStatus,
+	}
+	if !job.CreatedAt.IsZero() {
+		created := job.CreatedAt
+		info.CreatedAt = &created
+	}
+	return info
+}
+
 // ListToolJobs 返回工具侧的只读任务快照。
 func (m *Manager) ListToolJobs() []tool.ToolJobInfo {
 	jobs := m.List()
 	result := make([]tool.ToolJobInfo, 0, len(jobs))
 	for _, job := range jobs {
-		result = append(result, tool.ToolJobInfo{
-			ID:         job.ID,
-			Name:       job.Name,
-			Schedule:   job.Schedule,
-			Prompt:     job.Prompt,
-			Platform:   job.Platform,
-			Enabled:    job.Enabled,
-			NextRun:    job.NextRun,
-			LastRun:    job.LastRun,
-			LastStatus: job.LastStatus,
-		})
+		result = append(result, toolJobSnapshot(job))
 	}
 	return result
 }
@@ -79,17 +90,8 @@ func (m *Manager) GetToolJob(id string) (*tool.ToolJobInfo, error) {
 			return nil, fmt.Errorf("job not found: %s", id)
 		}
 	}
-	return &tool.ToolJobInfo{
-		ID:         job.ID,
-		Name:       job.Name,
-		Schedule:   job.Schedule,
-		Prompt:     job.Prompt,
-		Platform:   job.Platform,
-		Enabled:    job.Enabled,
-		NextRun:    job.NextRun,
-		LastRun:    job.LastRun,
-		LastStatus: job.LastStatus,
-	}, nil
+	info := toolJobSnapshot(job)
+	return &info, nil
 }
 
 // RemoveToolJob 删除任务。

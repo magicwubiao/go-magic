@@ -29,13 +29,15 @@ type CronJobManager interface {
 
 // ToolJobInfo 是 cronjob 工具视角的任务只读快照。
 type ToolJobInfo struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Schedule   string     `json:"schedule"`
-	Prompt     string     `json:"prompt"`
-	Platform   string     `json:"platform,omitempty"`
-	Enabled    bool       `json:"enabled"`
-	CreatedAt  time.Time  `json:"created_at,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Prompt   string `json:"prompt"`
+	Platform string `json:"platform,omitempty"`
+	Enabled  bool   `json:"enabled"`
+	// CreatedAt 用指针：旧任务（修复前创建）没有真实的创建时间，nil 比
+	// "0001-01-01T00:00:00Z" 这种零值序列化诚实——后者会让模型误判任务数据损坏。
+	CreatedAt  *time.Time `json:"created_at,omitempty"`
 	NextRun    *time.Time `json:"next_run,omitempty"`
 	LastRun    *time.Time `json:"last_run,omitempty"`
 	LastStatus string     `json:"last_status,omitempty"`

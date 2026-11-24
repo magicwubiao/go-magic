@@ -24,16 +24,17 @@ import (
 
 // Job represents a scheduled cron job
 type Job struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Schedule    string   `json:"schedule"`
-	Prompt      string   `json:"prompt"`
-	Skills      []string `json:"skills,omitempty"`
-	Platform    string   `json:"platform,omitempty"`
-	Enabled     bool     `json:"enabled"`
-	NoAgent     bool     `json:"no_agent"` // Skip agent, run script directly
-	Script      string   `json:"script"`   // Script/command for no_agent mode
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Schedule    string    `json:"schedule"`
+	Prompt      string    `json:"prompt"`
+	Skills      []string  `json:"skills,omitempty"`
+	Platform    string    `json:"platform,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"` // Add 时填充；旧数据（无该字段的 JSON）保持零值
+	Enabled     bool      `json:"enabled"`
+	NoAgent     bool      `json:"no_agent"` // Skip agent, run script directly
+	Script      string    `json:"script"`   // Script/command for no_agent mode
 	// WorkingDir pins the directory this job executes in (both agent and
 	// script mode). Supports "~" expansion. When empty, agent mode falls back
 	// to the per-run isolated dir (<base>/cron/<jobID>/run_<ts>) and script
@@ -348,6 +349,15 @@ func (m *Manager) List() []*Job {
 }
 
 func (m *Manager) Add(job *Job) error {
+	// created_at 单一来源：Add 时兜底填充，避免任何创建路径漏写。
+	if job.CreatedAt.IsZero() {
+		job.CreatedAt = time.Now()
+	}
+	// 禁用的任务不该带 next_run（语义：不会运行，何来下次）。
+	if !job.Enabled {
+		job.NextRun = nil
+	}
+
 	m.jobsMu.Lock()
 	m.jobs[job.ID] = job
 	m.jobsMu.Unlock()
@@ -395,6 +405,13 @@ func (m *Manager) Update(job *Job) error {
 
 	// Remove old scheduler entry
 	m.removeJobFromScheduler(job.ID)
+
+	// 禁用任务时清掉残留的 next_run：调度器条目已摘除，时间不会再兑现，
+	// 留着会出现 "enabled:false 却有 next_run" 的矛盾数据（此前 pause
+	// 接口禁用后即如此）。
+	if !job.Enabled {
+		job.NextRun = nil
+	}
 
 	m.jobs[job.ID] = job
 	m.jobsMu.Unlock()
