@@ -37,11 +37,24 @@ func TestBrowserToolsSerializePerTab(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 	gate := make(chan struct{})
+	started := make(chan struct{})
+
+	// order 的所有读写都必须持锁：主 goroutine 会在工具执行期间并发读它。
+	record := func(event string) {
+		mu.Lock()
+		order = append(order, event)
+		mu.Unlock()
+	}
 
 	slow := newGatedTool("browser_navigate", 0)
-	slow.run = func() { order = append(order, "first-start"); <-gate; order = append(order, "first-end") }
+	slow.run = func() {
+		record("first-start")
+		close(started)
+		<-gate
+		record("first-end")
+	}
 	fast := newGatedTool("browser_vision", 0)
-	fast.run = func() { mu.Lock(); order = append(order, "second"); mu.Unlock() }
+	fast.run = func() { record("second") }
 
 	done := make(chan struct{})
 	go func() {
@@ -51,16 +64,8 @@ func TestBrowserToolsSerializePerTab(t *testing.T) {
 		close(done)
 	}()
 
-	// 等第一个工具真的开始，再请求第二个
-	for {
-		mu.Lock()
-		started := len(order) > 0
-		mu.Unlock()
-		if started {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	// 等第一个工具真的开始（channel 同步，不忙轮询共享切片），再请求第二个
+	<-started
 
 	second := make(chan struct{})
 	go func() {

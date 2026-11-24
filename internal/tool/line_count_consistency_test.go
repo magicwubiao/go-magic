@@ -86,12 +86,12 @@ func TestDiffCountsSingleLineChange(t *testing.T) {
 // 空文件与"仅一个换行"的边界：行数分别为 0 和 1。
 func TestSplitContentLinesEdgeCases(t *testing.T) {
 	cases := map[string]int{
-		"":        0,
-		"a":       1,
-		"a\n":     1,
-		"a\nb":    2,
-		"a\n\n":   2,
-		"\n":      1,
+		"":         0,
+		"a":        1,
+		"a\n":      1,
+		"a\nb":     2,
+		"a\n\n":    2,
+		"\n":       1,
 		"a\r\nb\n": 2,
 	}
 	for content, want := range cases {
