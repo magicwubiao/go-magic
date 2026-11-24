@@ -35,7 +35,7 @@ func (t *BatchFileOpsTool) Schema() map[string]interface{} {
 			},
 			"files": map[string]interface{}{
 				"type":        "array",
-				"description": "Array of file paths (for batch_read and batch_delete). Each entry can be a string path or an object with path, offset, and limit fields.",
+				"description": "Array of file paths (for batch_read and batch_delete). Each entry can be a string path or an object with a path field (offset/limit only apply to batch_read). Passing operations for batch_delete is invalid — use files.",
 				"items": map[string]interface{}{
 					"oneOf": []interface{}{
 						map[string]interface{}{"type": "string"},
@@ -446,8 +446,17 @@ func (t *BatchFileOpsTool) batchDelete(ctx context.Context, params map[string]in
 
 	results := make(map[string]interface{})
 	for _, f := range filesRaw {
-		filePath, ok := f.(string)
-		if !ok || filePath == "" {
+		// 与 schema 对齐：条目既可以是纯路径字符串，也可以是 {path} 对象
+		// （offset/limit 等字段仅 batch_read 有效，batch_delete 只取 path）。
+		// 旧实现只认字符串，对象条目会被静默跳过，删除等于没执行。
+		var filePath string
+		switch v := f.(type) {
+		case string:
+			filePath = v
+		case map[string]interface{}:
+			filePath, _ = v["path"].(string)
+		}
+		if filePath == "" {
 			continue
 		}
 

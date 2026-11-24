@@ -979,13 +979,18 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 			}, nil
 		}
 
-		return map[string]interface{}{
+		result := map[string]interface{}{
 			"session_id": p.ID,
 			"status":     p.Status,
 			"pid":        p.PID,
 			"command":    p.Command,
-			"exit_code":  p.ExitCode,
-		}, nil
+		}
+		// 进程未结束时 ExitCode 是零值，回 0 会让模型误判"已成功退出"，
+		// 因此只在真正拿到退出码（exited/failed）时才带上该字段。
+		if p.Status == "exited" || p.Status == "failed" {
+			result["exit_code"] = p.ExitCode
+		}
+		return result, nil
 
 	case "wait":
 		sessionID, _ := args["session_id"].(string)
@@ -1016,13 +1021,17 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 				}, nil
 			}
 			if p.Status != "running" {
-				return map[string]interface{}{
+				result := map[string]interface{}{
 					"session_id": p.ID,
 					"status":     p.Status,
 					"pid":        p.PID,
 					"command":    p.Command,
-					"exit_code":  p.ExitCode,
-				}, nil
+				}
+				// 与 poll 同理：仅真正结束时携带 exit_code。
+				if p.Status == "exited" || p.Status == "failed" {
+					result["exit_code"] = p.ExitCode
+				}
+				return result, nil
 			}
 			select {
 			case <-ctx.Done():
@@ -1101,13 +1110,17 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]interface{}) 
 			}, nil
 		}
 
-		return map[string]interface{}{
+		result := map[string]interface{}{
 			"session_id": p.ID,
 			"status":     p.Status,
 			"pid":        p.PID,
-			"exit_code":  p.ExitCode,
 			"output":     p.log.String(),
-		}, nil
+		}
+		// 与 poll 同理：未结束时不下发 exit_code，避免零值误导。
+		if p.Status == "exited" || p.Status == "failed" {
+			result["exit_code"] = p.ExitCode
+		}
+		return result, nil
 
 	default:
 		return nil, fmt.Errorf("unknown action: %s (valid actions: run, list, poll, wait, kill, write, log)", action)
