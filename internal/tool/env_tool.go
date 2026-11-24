@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
+	"strings"
+	"sync"
+	"time"
 )
 
 // ============================================================================
@@ -209,10 +213,14 @@ func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]any) (any,
 }
 
 func (t *SystemInfoTool) osInfo() map[string]any {
+	// version 曾经直接返回 runtime.Version()（go1.26.0），info_type=os 的语义
+	// 就变成了"操作系统版本 = Go 运行时版本"，非常容易误读。现在显式区分：
+	// go_version 是运行时版本，os_version 才是操作系统版本。
 	return map[string]any{
-		"os":      runtime.GOOS,
-		"arch":    runtime.GOARCH,
-		"version": runtime.Version(),
+		"os":         runtime.GOOS,
+		"arch":       runtime.GOARCH,
+		"os_version": osVersion(),
+		"go_version": runtime.Version(),
 	}
 }
 
@@ -242,4 +250,46 @@ func (t *SystemInfoTool) goInfo() map[string]any {
 		"os":      runtime.GOOS,
 		"arch":    runtime.GOARCH,
 	}
+}
+
+var (
+	osVersionOnce sync.Once
+	osVersionVal  string
+)
+
+// osVersion 返回操作系统版本字符串（拿不到时返回空串，绝不报错）。
+// 结果缓存：system 工具会被频繁调用，没必要每次 fork 一个进程。
+func osVersion() string {
+	osVersionOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "windows":
+			cmd = exec.CommandContext(ctx, "cmd", "/c", "ver")
+		case "darwin":
+			cmd = exec.CommandContext(ctx, "sw_vers", "-productVersion")
+		case "linux":
+			// /etc/os-release 比 uname 更贴近用户认知（"Ubuntu 24.04"）。
+			if data, err := os.ReadFile("/etc/os-release"); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					if strings.HasPrefix(line, "PRETTY_NAME=") {
+						osVersionVal = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), `"`)
+						return
+					}
+				}
+			}
+			cmd = exec.CommandContext(ctx, "uname", "-r")
+		default:
+			return
+		}
+
+		out, err := cmd.Output()
+		if err != nil {
+			return
+		}
+		osVersionVal = strings.TrimSpace(string(out))
+	})
+	return osVersionVal
 }

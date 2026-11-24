@@ -128,6 +128,36 @@ func (r *Registry) SetTimeout(name string, timeout time.Duration) {
 	r.timeouts[name] = timeout
 }
 
+// browserTabLocks 按 tab 串行化浏览器工具的底层 CDP 操作。
+//
+// 所有 browser_* 工具共用同一个 tab（同一个 CDP target）。并行下发时
+// browser_vision 的 FullScreenshot 会临时改写 device metrics，而
+// browser_back 正在导航——两者互相踩，常见结果是双双 context deadline
+// exceeded，可动作其实已经执行完了（见 base.go 的超时宽限）。
+// 在注册表这个唯一入口上锁，可以同时覆盖 agent、MCP 与 HTTP 调用方。
+var browserTabLocks sync.Map // tabID -> *sync.Mutex
+
+// lockBrowserTab 获取（并创建）指定 tab 的操作锁，返回解锁函数。
+func lockBrowserTab(params map[string]interface{}) func() {
+	tabID := "default"
+	if id, ok := params["tab_id"].(string); ok && strings.TrimSpace(id) != "" {
+		tabID = id
+	}
+	v, _ := browserTabLocks.LoadOrStore(tabID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// serializeBrowserTool 对 browser_* 工具做按-tab 串行化，返回解锁函数。
+// 非浏览器工具返回 nil，调用方可直接 defer 一个空函数。
+func serializeBrowserTool(name string, params map[string]interface{}) func() {
+	if !strings.HasPrefix(name, "browser_") {
+		return func() {}
+	}
+	return lockBrowserTab(params)
+}
+
 // GetTimeout 获取工具的默认超时时间
 func (r *Registry) GetTimeout(name string) time.Duration {
 	r.mu.RLock()
@@ -324,11 +354,11 @@ func (r *Registry) RegisterAll(workDir string) {
 	r.SetTimeout("browser_click", 30*time.Second)
 	r.SetTimeout("browser_type", 30*time.Second)
 	r.SetTimeout("browser_scroll", 30*time.Second)
-	r.SetTimeout("browser_back", 30*time.Second)
+	r.SetTimeout("browser_back", 60*time.Second)
 	r.SetTimeout("browser_console", 30*time.Second)
 	r.SetTimeout("browser_get_images", 60*time.Second)
-	r.SetTimeout("browser_forward", 30*time.Second)
-	r.SetTimeout("browser_refresh", 30*time.Second)
+	r.SetTimeout("browser_forward", 60*time.Second)
+	r.SetTimeout("browser_refresh", 60*time.Second)
 	r.SetTimeout("browser_wait", 60*time.Second)
 	r.SetTimeout("browser_get_info", 30*time.Second)
 	r.SetTimeout("browser_clear_cache", 30*time.Second)
@@ -649,7 +679,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	}
 
 	// 使用执行器执行
+	// 浏览器工具共享同一个 tab，按 tab 串行（见 serializeBrowserTool）。
+	unlock := serializeBrowserTool(name, args)
 	result := r.executor.ExecuteWithProtection(ctx, t, args, timeout)
+	unlock()
 
 	// 记录统计
 	r.recordStat(name, result)
@@ -777,7 +810,9 @@ func (r *Registry) ExecuteWithTimeout(ctx context.Context, name string, args map
 		return nil, err
 	}
 
+	unlock := serializeBrowserTool(name, args)
 	result := r.executor.ExecuteWithProtection(ctx, t, args, timeout)
+	unlock()
 	return result.Result, result.Error
 }
 

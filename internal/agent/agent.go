@@ -55,6 +55,30 @@ var (
 		"batch_file_ops": true,
 		"diff_patch":     true,
 		"apply_patch":    true, // 兼容别名
+
+		// 浏览器工具共享同一个 tab（同一个 CDP target），并行下发会互相踩：
+		// browser_vision 的 FullScreenshot 临时改写 device metrics，同时
+		// browser_back 在导航，常见结果是两边都 context deadline exceeded，
+		// 而动作其实已经完成。这里串行化；Registry 侧还有一层按-tab 锁兜底
+		// （MCP / HTTP 调用方不经过 agent 的调度）。
+		"browser_navigate":    true,
+		"browser_snapshot":    true,
+		"browser_click":       true,
+		"browser_type":        true,
+		"browser_scroll":      true,
+		"browser_back":        true,
+		"browser_forward":     true,
+		"browser_refresh":     true,
+		"browser_wait":        true,
+		"browser_console":     true,
+		"browser_press":       true,
+		"browser_vision":      true,
+		"browser_dialog":      true,
+		"browser_get_images":  true,
+		"browser_get_info":    true,
+		"browser_get_cookies": true,
+		"browser_set_cookies": true,
+		"browser_clear_cache": true,
 	}
 )
 

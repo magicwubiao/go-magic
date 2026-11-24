@@ -417,7 +417,9 @@ func TestBatchReadCodeFileMetadata(t *testing.T) {
 	if entry["line_ending"] != "\n" {
 		t.Errorf("line_ending wrong: %v", entry["line_ending"])
 	}
-	if entry["total"] != 3 {
-		t.Errorf("total lines = %v, want 3", entry["total"])
+	// 行数口径与 read_file 一致：末尾换行是最后一行的结束符，不算独立一行。
+	// 旧约定是 newline 个数 + 1（同一文件 read_file 报 2、batch_read 报 3）。
+	if entry["total"] != 2 {
+		t.Errorf("total lines = %v, want 2", entry["total"])
 	}
 }

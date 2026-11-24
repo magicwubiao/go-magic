@@ -52,6 +52,15 @@ type LintResult struct {
 	Issues   []LintIssue `json:"issues,omitempty"`
 	Success  bool        `json:"success"`
 	Error    string      `json:"error,omitempty"`
+
+	// Checker 是实际运行的检查器（"gofmt -e"、"node --check"……）。
+	// 空值表示"什么都没跑"——以前这种情况下 Success 依然为 true，调用方
+	// 无法区分"检查通过"和"根本没有检查"。
+	Checker string `json:"checker,omitempty"`
+	// Skipped 列出预期存在但没运行的检查器（未安装、或该类型没有廉价检查器）。
+	Skipped []string `json:"skipped,omitempty"`
+	// Note 是给人和模型看的补充说明。
+	Note string `json:"note,omitempty"`
 }
 
 // LintOptions contains options for linting
@@ -221,6 +230,85 @@ func LintFiles(paths []string) []LintResult {
 		results = append(results, result)
 	}
 	return results
+}
+
+// fileChecker 返回该文件类型使用的检查器名，以及它当前是否真的能跑。
+// 第二个返回值为 false 时表示"内置检查器不覆盖该类型"，此时 lint 必须
+// 明确告知用户，而不是给一个空的 success。
+func fileChecker(path string) (name string, available bool) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		return "gofmt -e", hasBinary("gofmt")
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return "node --check", hasBinary("node")
+	case ".py":
+		_, _, ok := ResolvePythonCommand()
+		return "python -m py_compile", ok
+	case ".json":
+		return "encoding/json", true
+	case ".yml", ".yaml":
+		return "gopkg.in/yaml.v3", true
+	case ".toml":
+		return "BurntSushi/toml", true
+	default:
+		return "", false
+	}
+}
+
+func hasBinary(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+// expectedCheckers 列出该类型项目期望运行的检查器（名字 + 可执行文件）。
+func expectedCheckers(projectType ProjectType, dir string) []struct{ Name, Bin string } {
+	switch projectType {
+	case ProjectTypeGo:
+		return []struct{ Name, Bin string }{
+			{"go vet", "go"},
+			{"gofmt -l", "gofmt"},
+			{"golint", "golint"},
+			{"golangci-lint", "golangci-lint"},
+		}
+	case ProjectTypeNode:
+		return []struct{ Name, Bin string }{
+			{"eslint", findNodeBinary(dir, "eslint")},
+			{"prettier", findNodeBinary(dir, "prettier")},
+		}
+	case ProjectTypePython:
+		return []struct{ Name, Bin string }{
+			{"pylint", "pylint"},
+			{"flake8", "flake8"},
+			{"black", "black"},
+		}
+	case ProjectTypeRust:
+		return []struct{ Name, Bin string }{
+			{"cargo clippy", "cargo"},
+			{"cargo fmt", "cargo"},
+		}
+	default:
+		return nil
+	}
+}
+
+// skippedCheckers 列出没跑成的检查器及原因，让"空 success"可解释。
+func skippedCheckers(projectType ProjectType, dir string) []string {
+	var skipped []string
+	for _, c := range expectedCheckers(projectType, dir) {
+		if c.Bin == "" || !hasBinaryOrPath(c.Bin) {
+			skipped = append(skipped, c.Name+" (not installed)")
+		}
+	}
+	return skipped
+}
+
+// hasBinaryOrPath 判断一个可执行文件或绝对路径是否存在。
+func hasBinaryOrPath(bin string) bool {
+	if strings.ContainsAny(bin, `/\`) {
+		info, err := os.Stat(bin)
+		return err == nil && !info.IsDir()
+	}
+	return hasBinary(bin)
 }
 
 // DetectProjectType detects the project type based on files in the directory
@@ -1025,6 +1113,24 @@ func (t *LintTool) Execute(ctx context.Context, params map[string]interface{}) (
 		if err != nil {
 			return nil, err
 		}
+		projectType := DetectProjectType(absPath)
+		skipped := skippedCheckers(projectType, absPath)
+		if len(results) == 0 {
+			// 一个检查器都没跑（没有配置/lint 工具没装）：显式说明，
+			// 不再返回一个空列表让调用方以为"全部通过"。
+			results = []LintResult{{
+				FilePath: absPath,
+				Success:  true,
+				Skipped:  skipped,
+				Note:     fmt.Sprintf("no linter ran for this %s project: no lint configuration was found or the expected tools are not installed", projectType),
+			}}
+		} else {
+			for i := range results {
+				if results[i].Skipped == nil {
+					results[i].Skipped = skipped
+				}
+			}
+		}
 	} else {
 		// Single file linting
 		issues, err := LintFile(absPath)
@@ -1039,11 +1145,21 @@ func (t *LintTool) Execute(ctx context.Context, params map[string]interface{}) (
 				Level:    LintLevelError,
 			}
 		}
-		results = []LintResult{{
+		res := LintResult{
 			FilePath: absPath,
 			Issues:   lintIssues,
 			Success:  len(lintIssues) == 0,
-		}}
+		}
+		if checker, available := fileChecker(absPath); checker == "" {
+			// .ts/.vue/.css 之类没有廉价检查器：如实说明，别装作检查过。
+			res.Note = fmt.Sprintf("no built-in syntax checker for %s files; use lsp_diagnostics or the project's own linter", filepath.Ext(absPath))
+		} else if !available {
+			res.Skipped = []string{checker + " (not installed)"}
+			res.Note = fmt.Sprintf("%s is not installed, so this file was NOT checked", checker)
+		} else {
+			res.Checker = checker
+		}
+		results = []LintResult{res}
 	}
 
 	return results, nil

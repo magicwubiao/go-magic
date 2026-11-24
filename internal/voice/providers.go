@@ -960,12 +960,15 @@ func DownloadAudio(ctx context.Context, url string) ([]byte, error) {
 
 	resp, err := HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download audio: %w", err)
+		// 这里不加 "failed to download audio" 前缀：所有调用方（asr_tool、
+		// agentplugin、语音合成）都会自己包一层，重复前缀会变成
+		// "failed to download audio: failed to download audio: ..."。
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download failed: %s", resp.Status)
+		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
 
 	return io.ReadAll(resp.Body)

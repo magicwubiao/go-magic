@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -542,22 +543,29 @@ func NewTimeTool() *TimeTool {
 						"description": "Operation: now, parse, format, add, diff, sleep, timestamp",
 					},
 					"time_str": map[string]any{
+						"type": "string",
+						"description": "Time string. Accepted: RFC3339 ('2026-11-24T19:45:41+08:00'), " +
+							"'2006-01-02 15:04:05', '2006-01-02 15:04', '2006-01-02', unix seconds/milliseconds",
+					},
+					"time_str2": map[string]any{
 						"type":        "string",
-						"description": "Time string to parse",
+						"description": "Second time string (diff only); same formats as time_str",
 					},
 					"format": map[string]any{
-						"type":        "string",
-						"description": "Format string (Go reference: 2006-01-02 15:04:05)",
-						"default":     "2006-01-02 15:04:05",
+						"type": "string",
+						"description": "Output layout (Go reference: 2006-01-02 15:04:05). " +
+							"For diff, this legacy field is still accepted as the second time when time_str2 is empty.",
+						"default": "2006-01-02 15:04:05",
 					},
 					"duration": map[string]any{
 						"type":        "string",
-						"description": "Duration to add (e.g., '1h30m', '2d')",
+						"description": "Duration to add (e.g. '90m', '1h30m', '2d', '1w3d4h'). Units: ns/us/ms/s/m/h/d/w",
 					},
 					"timezone": map[string]any{
-						"type":        "string",
-						"description": "Timezone (e.g., 'UTC', 'America/New_York', 'Asia/Shanghai')",
-						"default":     "UTC",
+						"type": "string",
+						"description": "Timezone (e.g. 'UTC', 'America/New_York', 'Asia/Shanghai'). " +
+							"Zone-less inputs are parsed in this timezone and outputs are rendered in it. Default UTC",
+						"default": "UTC",
 					},
 				},
 				"required": []any{"operation"},
@@ -589,19 +597,177 @@ func (t *TimeTool) Execute(ctx context.Context, args map[string]any) (any, error
 	}
 }
 
-func (t *TimeTool) now(args map[string]any) (map[string]any, error) {
-	loc := time.UTC
-	if tz, ok := args["timezone"].(string); ok {
-		var err error
-		loc, err = time.LoadLocation(tz)
-		if err != nil {
-			loc = time.UTC
+// ============================================================================
+// Time helpers
+// ============================================================================
+
+// timeLayouts 是 parseAnyTime 依次尝试的布局（不含带时区的 RFC3339 系列，
+// 那些由 time.Parse 直接判定）。带时间但无时区的字符串按 loc 解析——这也是
+// "UTC+8 用户看到的时间差 8 小时" 的根源：以前所有入口都硬编码
+// "2006-01-02 15:04:05"，既拒绝 RFC3339，又把无时区串当 UTC。
+var timeLayouts = []string{
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04",
+	"2006-01-02",
+	"2006/01/02 15:04:05",
+	"2006/01/02 15:04",
+	"2006/01/02",
+}
+
+// resolveTZ 返回 args["timezone"] 指定的时区，缺省 UTC。
+// 非法时区名不静默回落：显式报错比"结果差了 8 小时"好排查。
+func resolveTZ(args map[string]any) (*time.Location, error) {
+	tz, _ := args["timezone"].(string)
+	if strings.TrimSpace(tz) == "" {
+		return time.UTC, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil, fmt.Errorf("unknown timezone %q (use IANA names such as 'UTC', 'Asia/Shanghai')", tz)
+	}
+	return loc, nil
+}
+
+// parseAnyTime 解析一个时间字符串，兼容 RFC3339 与常见人类格式，以及
+// unix 秒/毫秒时间戳。无时区的输入按 loc 解析。
+//
+// 之前 parse/add/diff 各自只认一种布局，导致同一串时间在 format 能用、在
+// diff 报错；现在四个入口共用这一个解析器。
+func parseAnyTime(s string, loc *time.Location) (time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty time string")
+	}
+
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
 		}
+	}
+
+	// 纯数字：10 位按秒、13 位按毫秒（覆盖日志/接口里最常见的两种时间戳）。
+	if allDigits(s) {
+		switch len(s) {
+		case 10:
+			if sec, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return time.Unix(sec, 0).In(loc), nil
+			}
+		case 13:
+			if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return time.UnixMilli(ms).In(loc), nil
+			}
+		}
+	}
+
+	for _, layout := range timeLayouts {
+		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf(
+		"cannot parse %q: accepted formats are RFC3339 (2026-11-24T19:45:41+08:00), "+
+			"2006-01-02 15:04:05, 2006-01-02 15:04, 2006-01-02, and unix timestamps", s)
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// durationTokenRe 匹配 "数字+单位" 片段，用于扩展 time.ParseDuration。
+// Go 原生 duration 不支持 d/w，"2d3h" 会直接报 unknown unit。
+var durationTokenRe = regexp.MustCompile(`(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h|d|w)`)
+
+// parseDurationExt 解析时长，支持 Go 原生单位外加 d（天）和 w（周）。
+// 分段累加而非字符串替换：把 "2d" 替换成 "48h" 会得到 "48h3h" 这种非法串。
+func parseDurationExt(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	neg := false
+	switch s[0] {
+	case '-':
+		neg = true
+		s = s[1:]
+	case '+':
+		s = s[1:]
+	}
+
+	matches := durationTokenRe.FindAllStringSubmatchIndex(s, -1)
+	if len(matches) == 0 {
+		return 0, invalidDurationError(s)
+	}
+
+	var total time.Duration
+	consumed := 0
+	for _, m := range matches {
+		// 片段之间只允许空白，出现其它字符说明写法不合法
+		if strings.TrimSpace(s[consumed:m[0]]) != "" {
+			return 0, invalidDurationError(s)
+		}
+		numStr, unit := s[m[2]:m[3]], s[m[4]:m[5]]
+		num, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return 0, invalidDurationError(s)
+		}
+		switch unit {
+		case "d":
+			total += time.Duration(num * 24 * float64(time.Hour))
+		case "w":
+			total += time.Duration(num * 7 * 24 * float64(time.Hour))
+		default:
+			d, err := time.ParseDuration(numStr + unit)
+			if err != nil {
+				return 0, invalidDurationError(s)
+			}
+			total += d
+		}
+		consumed = m[1]
+	}
+	if strings.TrimSpace(s[consumed:]) != "" {
+		return 0, invalidDurationError(s)
+	}
+	if neg {
+		total = -total
+	}
+	return total, nil
+}
+
+func invalidDurationError(s string) error {
+	return fmt.Errorf("invalid duration %q: use units ns/us/ms/s/m/h, plus d (day) and w (week); e.g. \"90m\", \"1h30m\", \"2d3h\", \"1w\"", s)
+}
+
+// requireTimeStr 读取并校验必填的时间参数。
+func requireTimeStr(args map[string]any, key string) (string, error) {
+	s, _ := args[key].(string)
+	if strings.TrimSpace(s) == "" {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	return s, nil
+}
+
+func (t *TimeTool) now(args map[string]any) (map[string]any, error) {
+	loc, err := resolveTZ(args)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now().In(loc)
 	format := "2006-01-02 15:04:05"
-	if f, ok := args["format"].(string); ok {
+	if f, ok := args["format"].(string); ok && f != "" {
 		format = f
 	}
 
@@ -611,117 +777,191 @@ func (t *TimeTool) now(args map[string]any) (map[string]any, error) {
 		"formatted": now.Format(format),
 		"timezone":  loc.String(),
 		"iso":       now.Format(time.RFC3339),
+		"weekday":   now.Weekday().String(),
 	}, nil
 }
 
 func (t *TimeTool) parse(args map[string]any) (map[string]any, error) {
-	timeStr, _ := args["time_str"].(string)
-	if timeStr == "" {
-		return nil, fmt.Errorf("time_str is required")
+	timeStr, err := requireTimeStr(args, "time_str")
+	if err != nil {
+		return nil, err
+	}
+	loc, err := resolveTZ(args)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := parseAnyTime(timeStr, loc)
+	if err != nil {
+		return nil, err
 	}
 
 	format := "2006-01-02 15:04:05"
-	if f, ok := args["format"].(string); ok {
+	if f, ok := args["format"].(string); ok && f != "" {
 		format = f
 	}
 
-	parsed, err := time.Parse(format, timeStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse time: %w", err)
+	renderLoc := parsed.Location()
+	if strings.TrimSpace(paramString(args, "timezone")) != "" {
+		renderLoc = loc
 	}
 
+	// 回显解析结果所用的时区：无时区输入被当作 loc 处理，必须让调用方看到，
+	// 否则 UTC+8 场景下 "2026-11-24 19:45:41" 会被误解成本地 19:45。
 	return map[string]any{
 		"unix":      parsed.Unix(),
-		"formatted": parsed.Format("2006-01-02 15:04:05"),
+		"formatted": parsed.In(renderLoc).Format(format),
 		"iso":       parsed.Format(time.RFC3339),
+		"timezone":  renderLoc.String(),
+		"utc":       parsed.UTC().Format(time.RFC3339),
 		"weekday":   parsed.Weekday().String(),
 	}, nil
 }
 
 func (t *TimeTool) format(args map[string]any) (map[string]any, error) {
-	timeStr, _ := args["time_str"].(string)
-	if timeStr == "" {
-		return nil, fmt.Errorf("time_str is required")
+	timeStr, err := requireTimeStr(args, "time_str")
+	if err != nil {
+		return nil, err
+	}
+	loc, err := resolveTZ(args)
+	if err != nil {
+		return nil, err
+	}
+
+	parsed, err := parseAnyTime(timeStr, loc)
+	if err != nil {
+		return nil, err
+	}
+
+	// 输入自带时区（RFC3339）时按输入时区渲染，只有调用方显式给了 timezone
+	// 才换算——否则 "2026-11-24T19:45:41+08:00" 在默认 UTC 下会变成 11:45，
+	// 看起来像时间被算错了。
+	renderLoc := parsed.Location()
+	if strings.TrimSpace(paramString(args, "timezone")) != "" {
+		renderLoc = loc
 	}
 
 	format := "2006-01-02 15:04:05"
-	if f, ok := args["format"].(string); ok {
+	if f, ok := args["format"].(string); ok && f != "" {
 		format = f
 	}
 
-	// Try parsing with multiple common formats
-	parsed, err := time.Parse(time.RFC3339, timeStr)
-	if err != nil {
-		parsed, err = time.Parse("2006-01-02 15:04:05", timeStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse time: %w", err)
-		}
-	}
-
 	return map[string]any{
-		"formatted": parsed.Format(format),
+		"formatted": parsed.In(renderLoc).Format(format),
 		"unix":      parsed.Unix(),
+		"iso":       parsed.Format(time.RFC3339),
+		"timezone":  renderLoc.String(),
 	}, nil
 }
 
 func (t *TimeTool) add(args map[string]any) (map[string]any, error) {
-	timeStr, _ := args["time_str"].(string)
 	durationStr, _ := args["duration"].(string)
-
-	if durationStr == "" {
+	if strings.TrimSpace(durationStr) == "" {
 		return nil, fmt.Errorf("duration is required")
 	}
-
-	duration, err := time.ParseDuration(durationStr)
+	duration, err := parseDurationExt(durationStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid duration: %w", err)
+		return nil, err
 	}
 
-	var result time.Time
-	if timeStr == "" {
-		result = time.Now().Add(duration)
-	} else {
-		parsed, err := time.Parse("2006-01-02 15:04:05", timeStr)
+	loc, err := resolveTZ(args)
+	if err != nil {
+		return nil, err
+	}
+
+	var base time.Time
+	explicitZone := strings.TrimSpace(paramString(args, "timezone")) != ""
+	if timeStr, _ := args["time_str"].(string); strings.TrimSpace(timeStr) != "" {
+		base, err = parseAnyTime(timeStr, loc)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse time: %w", err)
+			return nil, err
 		}
-		result = parsed.Add(duration)
+	} else {
+		base = time.Now().In(loc)
 	}
 
+	// 与 format 一致：输入自带时区就按输入时区渲染，显式传 timezone 才换算。
+	renderLoc := base.Location()
+	if explicitZone {
+		renderLoc = loc
+	}
+
+	result := base.Add(duration)
 	return map[string]any{
 		"unix":      result.Unix(),
-		"formatted": result.Format("2006-01-02 15:04:05"),
+		"formatted": result.In(renderLoc).Format("2006-01-02 15:04:05"),
 		"iso":       result.Format(time.RFC3339),
+		"timezone":  renderLoc.String(),
+		"duration":  duration.String(),
 	}, nil
 }
 
 func (t *TimeTool) diff(args map[string]any) (map[string]any, error) {
-	timeStr1, _ := args["time_str"].(string)
-	timeStr2, _ := args["format"].(string) // using format field for second time
-
-	if timeStr1 == "" || timeStr2 == "" {
-		return nil, fmt.Errorf("time_str and format (second time) are required")
+	timeStr1, err := requireTimeStr(args, "time_str")
+	if err != nil {
+		return nil, err
 	}
 
-	t1, err := time.Parse("2006-01-02 15:04:05", timeStr1)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse first time: %w", err)
+	// 第二个时间优先用 time_str2。历史上它借用 "format" 字段传递（format 同时
+	// 被当成输出布局，语义完全对不上），为兼容旧调用保留，但在结果里提示。
+	timeStr2, _ := args["time_str2"].(string)
+	legacyField := false
+	if strings.TrimSpace(timeStr2) == "" {
+		if v, ok := args["format"].(string); ok && strings.TrimSpace(v) != "" {
+			timeStr2 = v
+			legacyField = true
+		}
+	}
+	if strings.TrimSpace(timeStr2) == "" {
+		return nil, fmt.Errorf("time_str2 is required (second time to compare against time_str)")
 	}
 
-	t2, err := time.Parse("2006-01-02 15:04:05", timeStr2)
+	loc, err := resolveTZ(args)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse second time: %w", err)
+		return nil, err
+	}
+
+	t1, err := parseAnyTime(timeStr1, loc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse time_str: %w", err)
+	}
+	t2, err := parseAnyTime(timeStr2, loc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse time_str2: %w", err)
 	}
 
 	diff := t2.Sub(t1)
-
-	return map[string]any{
+	result := map[string]any{
 		"seconds":   int(diff.Seconds()),
 		"minutes":   int(diff.Minutes()),
 		"hours":     int(diff.Hours()),
 		"days":      int(diff.Hours() / 24),
 		"formatted": diff.String(),
-	}, nil
+		"sign":      diffSign(diff),
+		"absolute":  absDuration(diff).String(),
+		"timezone":  loc.String(),
+	}
+	if legacyField {
+		result["note"] = "the second time was read from the legacy 'format' field; use time_str2 instead"
+	}
+	return result, nil
+}
+
+func diffSign(d time.Duration) string {
+	switch {
+	case d > 0:
+		return "positive" // t2 is later than t1
+	case d < 0:
+		return "negative"
+	default:
+		return "zero"
+	}
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 func (t *TimeTool) timestamp() (map[string]any, error) {
@@ -739,9 +979,9 @@ func (t *TimeTool) sleep(args map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("duration is required")
 	}
 
-	duration, err := time.ParseDuration(durationStr)
+	duration, err := parseDurationExt(durationStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid duration: %w", err)
+		return nil, err
 	}
 
 	time.Sleep(duration)

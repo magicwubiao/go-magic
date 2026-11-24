@@ -148,12 +148,21 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, params map[string]inter
 	return info, nil
 }
 
-// analyzeWithSessionModel 用当前配置的对话模型分析图片（无需独立
-// VISION_API_KEY）。走 provider.Chat，协议无关（OpenAI 兼容 / Anthropic /
-// Gemini 各自的转换都由 provider 层处理），并且自动吃到视觉能力运行时
-// 自学习的判定结果。返回 ok=false 表示不可用（provider 未配置 / 模型不
-// 支持视觉 / 请求失败），调用方回退到元数据模式。
+// analyzeWithSessionModel 用当前配置的对话模型分析一张图片。多图场景
+// （video_analyze 的关键帧）走 analyzeImagesWithSessionModel。
 func analyzeWithSessionModel(ctx context.Context, imagePath, question string) (description, usedModel string, ok bool) {
+	return analyzeImagesWithSessionModel(ctx, []string{imagePath}, question)
+}
+
+// analyzeImagesWithSessionModel 用当前配置的对话模型分析一组图片（视频关键帧）。
+// 走 provider.Chat，协议无关（OpenAI 兼容 / Anthropic / Gemini 各自的转换都由
+// provider 层处理），并且自动吃到视觉能力运行时自学习的判定结果。
+// 返回 ok=false 表示不可用（provider 未配置 / 模型不支持视觉 / 请求失败），
+// 调用方回退到元数据模式。
+func analyzeImagesWithSessionModel(ctx context.Context, imagePaths []string, question string) (description, usedModel string, ok bool) {
+	if len(imagePaths) == 0 {
+		return "", "", false
+	}
 	cfg, err := config.Load()
 	if err != nil || cfg == nil || cfg.Provider == "" {
 		return "", "", false
@@ -196,23 +205,35 @@ func analyzeWithSessionModel(ctx context.Context, imagePath, question string) (d
 		VisionOverride: provCfg.Vision,
 	})
 
-	data, err := os.ReadFile(imagePath)
+	parts, err := buildImageParts(imagePaths, question)
 	if err != nil {
 		return "", "", false
 	}
-	dataURL := "data:" + mimeForImage(imagePath) + ";base64," + base64.StdEncoding.EncodeToString(data)
 
-	resp, err := prov.Chat(ctx, []types.Message{{
-		Role: "user",
-		ContentParts: []types.ContentPart{
-			{Type: "text", Text: question},
-			{Type: "image_url", ImageURL: &types.MediaURL{URL: dataURL}},
-		},
-	}})
+	resp, err := prov.Chat(ctx, []types.Message{{Role: "user", ContentParts: parts}})
 	if err != nil || resp == nil || strings.TrimSpace(resp.Content) == "" {
 		return "", "", false
 	}
 	return strings.TrimSpace(resp.Content), modelName, true
+}
+
+// buildImageParts 把「问题 + N 张图」拼成一条 user 消息的 ContentParts。
+// 多帧一次发送而不是逐帧问答：模型能比较帧间变化（"从 A 走到 B"），
+// 逐帧描述拼起来只会得到 N 段互相不知道对方存在的文字。
+func buildImageParts(imagePaths []string, question string) ([]types.ContentPart, error) {
+	parts := make([]types.ContentPart, 0, len(imagePaths)+1)
+	parts = append(parts, types.ContentPart{Type: "text", Text: question})
+	for _, p := range imagePaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read image %s: %w", p, err)
+		}
+		parts = append(parts, types.ContentPart{
+			Type:     "image_url",
+			ImageURL: &types.MediaURL{URL: "data:" + mimeForImage(p) + ";base64," + base64.StdEncoding.EncodeToString(data)},
+		})
+	}
+	return parts, nil
 }
 
 // resolveLocalMedia resolves a local media file path (image/video/audio) for
@@ -382,6 +403,15 @@ func mimeForImage(path string) string {
 // analyzeWithOpenAICompat performs a vision analysis via an OpenAI-compatible
 // chat completions endpoint (data-URL image input).
 func analyzeWithOpenAICompat(ctx context.Context, imagePath, question, model, apiKey string) (string, string, error) {
+	return analyzeImagesWithOpenAICompat(ctx, []string{imagePath}, question, model, apiKey)
+}
+
+// analyzeImagesWithOpenAICompat 是 analyzeWithOpenAICompat 的多图版本，
+// video_analyze 用它一次性把全部关键帧发给独立的视觉端点。
+func analyzeImagesWithOpenAICompat(ctx context.Context, imagePaths []string, question, model, apiKey string) (string, string, error) {
+	if len(imagePaths) == 0 {
+		return "", "", fmt.Errorf("no images to analyze")
+	}
 	baseURL := os.Getenv("VISION_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
@@ -393,27 +423,29 @@ func analyzeWithOpenAICompat(ctx context.Context, imagePath, question, model, ap
 		model = "gpt-4o-mini"
 	}
 
-	// Read and base64-encode the image.
-	data, err := os.ReadFile(imagePath)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to read image: %w", err)
+	content := []interface{}{
+		map[string]interface{}{"type": "text", "text": question},
 	}
-	dataURL := "data:" + mimeForImage(imagePath) + ";base64," + base64.StdEncoding.EncodeToString(data)
+	for _, imagePath := range imagePaths {
+		// Read and base64-encode each image.
+		data, err := os.ReadFile(imagePath)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read image: %w", err)
+		}
+		content = append(content, map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url": "data:" + mimeForImage(imagePath) + ";base64," + base64.StdEncoding.EncodeToString(data),
+			},
+		})
+	}
 
 	reqBody := map[string]interface{}{
 		"model": model,
 		"messages": []interface{}{
 			map[string]interface{}{
-				"role": "user",
-				"content": []interface{}{
-					map[string]interface{}{"type": "text", "text": question},
-					map[string]interface{}{
-						"type": "image_url",
-						"image_url": map[string]interface{}{
-							"url": dataURL,
-						},
-					},
-				},
+				"role":    "user",
+				"content": content,
 			},
 		},
 		"max_tokens": 1024,

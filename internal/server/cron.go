@@ -455,7 +455,10 @@ func (s *Server) handleCronNextRuns(w http.ResponseWriter, r *http.Request) {
 
 	nextRuns := make([]string, 0, len(times))
 	for _, t := range times {
-		nextRuns = append(nextRuns, t.Format("2006-01-02 15:04:05"))
+		// RFC3339 带时区偏移，前端 new Date() 能可靠解析；旧的
+		// "2006-01-02 15:04:05" 无时区且非标准格式（Safari 可能 Invalid Date，
+		// 其它引擎按本地时间猜），UTC+8 用户容易读错 8 小时。
+		nextRuns = append(nextRuns, t.Format(time.RFC3339))
 	}
 	jsonResponse(w, map[string]interface{}{
 		"valid":     true,
@@ -554,7 +557,7 @@ If the request is not schedulable as a recurring task, reply {"error": "reason"}
 	if nextRuns, err := cron.GetNextRuns(parsed.Schedule, 3); err == nil {
 		times := make([]string, 0, len(nextRuns))
 		for _, t := range nextRuns {
-			times = append(times, t.Format("2006-01-02 15:04:05"))
+			times = append(times, t.Format(time.RFC3339))
 		}
 		result["next_runs"] = times
 	}

@@ -146,9 +146,23 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 		// 性提示，避免模型拿到裸的 context deadline exceeded 后原样重试
 		// 烧满轮次。用 %w 包装保留 errors.Is 判定能力。
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			result.Error = fmt.Errorf("%w after %.0fs. Do not retry the same call unchanged: "+
-				"break the work into smaller steps, use a more targeted tool, "+
-				"or run long work in the background", ctx.Err(), timeout.Seconds())
+			// 超时与工具真正结束经常只差几十毫秒（browser_back 就是典型：
+			// 导航已经完成，结果在超时判定之后才送回 channel）。给一个很短的
+			// 宽限期把已完成的真实结果交出去，否则会误导模型"失败了，重试"。
+			select {
+			case res := <-done:
+				// 真实结果优先；但工具若只是把 ctx 错误原样退回（常见的
+				// "睡到 ctx 取消就返回"实现），那不算结果，仍要补重试提示。
+				if res.Error == nil || (!errors.Is(res.Error, context.DeadlineExceeded) && !errors.Is(res.Error, context.Canceled)) {
+					return res
+				}
+			case <-time.After(timeoutDrainGrace):
+			}
+			result.Error = fmt.Errorf("%w after %.0fs. The call may still be running, or may already have "+
+				"completed in the background — verify the current state before retrying "+
+				"(browser_*: take a browser_snapshot; file edits: read the file). "+
+				"Do not retry the same call unchanged; break the work into smaller steps or use a more targeted tool",
+				ctx.Err(), timeout.Seconds())
 		} else {
 			result.Error = ctx.Err()
 		}
@@ -158,6 +172,9 @@ func (e *DefaultToolExecutor) ExecuteWithProtection(ctx context.Context, tool To
 		return res
 	}
 }
+
+// timeoutDrainGrace 是超时后等待"工具刚好完成"的宽限期。
+const timeoutDrainGrace = 750 * time.Millisecond
 
 // ParamValidator 参数验证器接口
 type ParamValidator interface {

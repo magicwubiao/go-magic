@@ -272,10 +272,8 @@ func (t *FileEditTool) Execute(ctx context.Context, params map[string]interface{
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	content := string(data)
-	totalLines := strings.Count(normalizeLineEndings(content), "\n") + 1
-	if content == "" {
-		totalLines = 0
-	}
+	// 与 read_file / batch_read 共用同一套行数口径（末尾换行不算独立一行）。
+	totalLines := countContentLines(normalizeLineEndings(content))
 
 	var (
 		newContent string

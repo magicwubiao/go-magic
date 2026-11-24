@@ -202,19 +202,10 @@ func (t *BatchFileOpsTool) batchRead(ctx context.Context, params map[string]inte
 		if !isBinary {
 			content := normalizeLineEndings(string(data))
 			endedWithNewline := strings.HasSuffix(content, "\n")
-			lines := strings.Split(content, "\n")
-			if endedWithNewline && len(lines) > 0 {
-				lines = lines[:len(lines)-1]
-			}
-			if content == "" {
-				lines = nil
-			}
+			// 行数口径与 read_file 一致：末尾换行只是最后一行的结束符，
+			// 不再额外算一行（此前这里 totalLines++ 导致同一文件两处口径差 1）。
+			lines := splitContentLines(content)
 			totalLines := len(lines)
-			if endedWithNewline {
-				// Preserve the historical line count convention (newline count + 1),
-				// which includes the final empty line after a trailing newline.
-				totalLines++
-			}
 
 			startIdx := 0
 			if offset > 0 {

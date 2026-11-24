@@ -262,12 +262,27 @@ func replaceAllExact(s, search, replace string, caseSensitive bool, maxReplace i
 	return sb.String(), len(matches)
 }
 
+// splitContentLines 把内容切成"真正的行"，与 read_file 的行数口径一致：
+// 末尾换行只作为最后一行的结束符，不再额外产生一个空行。
+//
+// 这是全工具层唯一的行数口径。此前 batch_read / file_edit / countContentLines
+// 都用 "\n" 个数 + 1，于是同一个 "a\nb\nc\n" 在 read_file 里是 3 行、在
+// batch_read 里是 4 行；diff 也因此多出一行幻影上下文（@@ -1,4 +1,4 @@）。
+func splitContentLines(content string) []string {
+	if content == "" {
+		return nil
+	}
+	lines := strings.Split(content, "\n")
+	// 只吃掉最后一个空元素（即末尾的那个换行符），中间的空行必须保留。
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
 // countContentLines returns the number of lines in LF-normalized content.
 func countContentLines(content string) int {
-	if content == "" {
-		return 0
-	}
-	return strings.Count(content, "\n") + 1
+	return len(splitContentLines(content))
 }
 
 // paramInt reads a numeric parameter as an int, tolerating float64 (JSON

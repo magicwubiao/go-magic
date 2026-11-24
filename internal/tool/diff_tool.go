@@ -383,6 +383,10 @@ func computeDiffOps(a, b []string) []diffOp {
 
 // generateUnifiedDiff creates a unified diff string from two line slices.
 func generateUnifiedDiff(label string, oldLines, newLines []string) string {
+	// 末尾换行会被 split 成一个空元素：不剔除的话 hunk 头会写成
+	// "@@ -1,4 +1,4 @@"（3 行的文件），并多出一行幻影上下文 " "。
+	oldLines = trimTrailingEmptyElement(oldLines)
+	newLines = trimTrailingEmptyElement(newLines)
 	ops := computeDiffOps(oldLines, newLines)
 
 	var sb strings.Builder
@@ -532,12 +536,27 @@ func countNewLineNumber(ops []diffOp, idx int) int {
 }
 
 // countLinesByPrefix counts lines in the diff output that start with the given prefix.
+// trimTrailingEmptyElement 去掉 split 出来的那个"末尾换行"空元素。
+// 只去一个：文件里的真实空行（"a\n\n"）必须保留。
+func trimTrailingEmptyElement(lines []string) []string {
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		return lines[:len(lines)-1]
+	}
+	return lines
+}
+
 func countLinesByPrefix(diff, prefix string) int {
 	count := 0
 	for _, line := range strings.Split(diff, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			count++
+		if !strings.HasPrefix(line, prefix) {
+			continue
 		}
+		// 跳过 unified diff 的文件头 "--- a (original)" / "+++ b (modified)"：
+		// 它们以 +/- 开头，会把"改 1 行"统计成 add=2/remove=2。
+		if strings.HasPrefix(line, prefix+prefix+prefix+" ") {
+			continue
+		}
+		count++
 	}
 	return count
 }

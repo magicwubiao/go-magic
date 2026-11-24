@@ -497,9 +497,10 @@ func (t *FileSearchTool) scanLinesWithContext(ctx context.Context, filePath stri
 		// 该匹配的上下文（含 "<<< MATCH" 标记）被整段丢掉 —— 相邻行的
 		// 多个匹配都会中招。这里保留重复行，换取"每个匹配上下文必然完整"。
 		contextSlice := make([]string, 0, end-start)
+		marker := matchMarker(filePath)
 		for ln := start; ln < end; ln++ {
 			if ln == i {
-				contextSlice = append(contextSlice, lines[ln]+"  // <<< MATCH")
+				contextSlice = append(contextSlice, lines[ln]+marker)
 			} else {
 				contextSlice = append(contextSlice, lines[ln])
 			}
@@ -556,4 +557,28 @@ func emptyResultHint(res *SearchResult, filesFound int) string {
 // ValidateParams 实现 ParamValidator 接口
 func (t *FileSearchTool) ValidateParams(params map[string]interface{}) error {
 	return ValidateParams(t.Schema(), params)
+}
+
+// matchMarker 返回该文件类型可用的行尾匹配标记。
+//
+// 以前无条件拼 "  // <<< MATCH"：在 Markdown / 纯文本 / JSON 里会凭空出现
+// 一个不存在的注释，模型容易把它当成文件原文内容去引用或改回去。
+func matchMarker(filePath string) string {
+	const marker = "<<< MATCH"
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".java", ".c", ".h",
+		".cc", ".cpp", ".hpp", ".cs", ".rs", ".swift", ".kt", ".kts", ".scala",
+		".php", ".dart", ".proto", ".gradle":
+		return "  // " + marker
+	case ".py", ".rb", ".sh", ".bash", ".zsh", ".ps1", ".yaml", ".yml", ".toml",
+		".ini", ".conf", ".cfg", ".r", ".pl", ".mk", ".tf", ".env":
+		return "  # " + marker
+	case ".html", ".htm", ".xml", ".vue", ".svelte", ".svg", ".xsl":
+		return "  <!-- " + marker + " -->"
+	case ".sql", ".lua", ".hs", ".elm":
+		return "  -- " + marker
+	default:
+		return "  " + marker
+	}
 }
