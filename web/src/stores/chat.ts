@@ -345,9 +345,14 @@ export const useChatStore = defineStore('chat', () => {
   })
 
   // 当前会话排队等待执行的消息（不含正在执行的）。
+  //
+  // status==='running' 的条目是"服务端已认领、本端还没收到 stream_started"的
+  // 镜像（见 syncQueuedFromServer）：它已经在跑，只用来在 stream_started 到来
+  // 时带附件清单把用户气泡固化下来，绝不能出现在待发 dock 里——否则用户会看到
+  // 一条永远不动的"排队中"，而那条消息其实正在执行。
   const queuedMessages = computed((): QueuedMessage[] => {
     const state = activeSessionState.value
-    return state?.queued || []
+    return (state?.queued || []).filter(q => q.status === 'queued')
   })
 
   // 排队数量，供状态栏提示与"停止并清空"确认文案使用。
@@ -356,7 +361,9 @@ export const useChatStore = defineStore('chat', () => {
   // 是否有回合在跑或有消息排队：决定输入框能否发送。
   // 与改造前不同，现在"回合进行中"不再禁止发送（消息会排队），
   // 因此这里只用于提示，不再作为发送按钮的禁用依据。
-  const busy = computed(() => streaming.value || queueDepth.value > 0)
+  // 计的是整张队列表而不是 queuedMessages：认领后的 running 镜像虽不显示，
+  // 但它代表服务端正忙，此时发送同样是"排队发送"。
+  const busy = computed(() => streaming.value || (activeSessionState.value?.queued.length || 0) > 0)
 
   // 当前回合认领时刻（unix 秒，0 = 空闲）。来自服务端 /running 与
   // queue_changed 的 active_started_at，用于让用户判断"当前回合是
@@ -591,9 +598,26 @@ export const useChatStore = defineStore('chat', () => {
         continue
       }
       // 乐观气泡（user_local_* / assistant_<时间戳> 等）：按角色+内容认领
-      const twin = serverMsgs.find(
-        s => remaining.has(s.id) && s.role === local.role && s.content === local.content,
-      )
+      const twin = serverMsgs.find((s) => {
+        if (!remaining.has(s.id) || s.role !== local.role) return false
+        if (s.content === local.content) return true
+        // 用户消息额外容忍"预览版"：本地气泡可能是按 stream_started 的
+        // content 补出来的，而服务端预览经过 TrimSpace、超长还会截断加 "…"。
+        // 严格比字符串会让同一条消息认领失败，服务端那份被当成"本地没有的"
+        // 追加到末尾——表现就是同一条消息两个气泡（一个只有正文，一个带
+        // 引用文件/附件），刷新后又只剩一个。见 promoteQueuedToMessage 的
+        // 就地修正。
+        if (local.role !== 'user') return false
+        const remote = (s.content || '').trim().replace(/…$/, '')
+        const mine = (local.content || '').trim().replace(/…$/, '')
+        if (!remote || !mine) return false
+        if (remote === mine) return true
+        // 截断预览：短的一侧 >= 20 字且是长的一侧的前缀。取 20 字是为了避免
+        // "好"、"继续" 这类极短消息把两个不同回合误判成同一条。
+        const shorter = remote.length <= mine.length ? remote : mine
+        const longer = remote.length <= mine.length ? mine : remote
+        return shorter.length >= 20 && longer.startsWith(shorter)
+      })
       if (twin) {
         state.messages[i] = combine(local, twin)
         remaining.delete(twin.id)
@@ -1606,8 +1630,26 @@ export const useChatStore = defineStore('chat', () => {
       // snapshot 的 items 之外（由 activeId 标识），不应被当作"已不存在"删除。
       // 但它同样不能永久驻留：只有当它就是当前 activeId 时才保留，否则说明
       // 那个回合早已结束/被回收，留在列表里就是一条永远不动的"排队中"。
-      if (q.status === 'running') return q.turnId === activeId
+      if (q.status === 'running') {
+        if (q.turnId === activeId) return true
+        queuedAttachments.delete(q.turnId)
+        return false
+      }
       if (serverIds.has(q.turnId)) return true
+      // 已被服务端认领（activeId）但 stream_started 还没到：立刻把本地这条
+      // 镜像标成"执行中"保留下来，**绝不能连附件清单一起删**。
+      //
+      // 此前这里直接删掉镜像 + queuedAttachments：随后到达的 stream_started
+      // 找不到本地占位，只能按"预览正文"补一条用户气泡，而预览是 TrimSpace
+      // 过的、附件清单也已丢失——于是用户看到的就是"消息先以纯文本出现，
+      // 引用文件/图片的 chip 要等刷新（从服务端历史回放）才补上"，长消息还会
+      // 因为预览被截断而在对账时再补一条气泡（看起来"渲染了两次"）。
+      // 这种窗口在长回合里很常见：停滞看门狗每 15s 都会拿 /running 对账一次，
+      // 恰好落在"服务端已认领、stream_started 还在路上"之间就会触发。
+      if (activeId && q.turnId === activeId) {
+        q.status = 'running'
+        return true
+      }
       queuedAttachments.delete(q.turnId)
       return false
     })
@@ -1721,6 +1763,11 @@ export const useChatStore = defineStore('chat', () => {
       || state.messages.some(m => m.id === `user_${serverId}` || m.id === `assistant_${serverId}`)
     if (claimed) {
       state.queued = state.queued.filter(q => q !== item)
+      // 回合已被认领：附件清单**不能跟着占位一起删**。气泡要么已经固化
+      // （promote 时已释放），要么马上由 stream_started 固化——那一秒里它
+      // 仍需从这张表里取引用文件/附件，否则气泡只剩正文，chip 要等刷新才出现。
+      // 换到正式 turnId 上留一手，由 promote 用完释放（回合结束也会兜底清理）。
+      rekeyQueuedAttachments(localId, serverId)
       queuedAttachments.delete(localId)
       return
     }
@@ -2323,6 +2370,10 @@ export const useChatStore = defineStore('chat', () => {
                 queuedAttachments.delete(state.queued[staleIdx].turnId)
                 state.queued.splice(staleIdx, 1)
               }
+              // 回合已收尾：这条回合的附件清单无论如何都不会再用到（用户气泡
+              // 在 stream_started 时就已固化）。此前只在"镜像还挂在队列里"时
+              // 才删，认领后被摘掉镜像的那些回合会把它一直留在内存里。
+              queuedAttachments.delete(doneTurnId)
             }
 
             // 先恢复按钮状态，让用户可以立即操作。注意：排队队列非空时
@@ -2566,8 +2617,27 @@ export const useChatStore = defineStore('chat', () => {
     // 回合在这里首次"上屏"，登记序号供后续回答落位使用（重复到达幂等）。
     noteTurnSeq(sessionId, item.turnId)
     const msgId = `user_${item.turnId}`
-    if (indexOfMessage(state.messages, item.turnId) >= 0) return
     const files = queuedAttachments.get(item.turnId)
+    const existingIdx = indexOfMessage(state.messages, item.turnId)
+    if (existingIdx >= 0) {
+      // 这条气泡已经在屏幕上了。典型来源：本地排队占位曾丢过，stream_started
+      // 只能按 `content`（TrimSpace 过、可能带 "…" 的预览）补一条纯文本气泡。
+      // 这里用本地的完整正文与附件清单就地修正，否则：
+      //   · 引用文件 / 图片的 chip 永远不出现，要等刷新从服务端历史回放才补上；
+      //   · 正文停在预览版，与落库版本不一致，后续对账按内容匹配不上，会再补
+      //     一条气泡（用户看到"同一条消息渲染了两次"）。
+      const existing = state.messages[existingIdx]
+      const sameText = (existing.content || '').trim() === (item.content || '').trim()
+      if (item.content && item.content !== existing.content
+        && (sameText || !existing.content || existing.content.endsWith('…'))) {
+        existing.content = item.content
+      }
+      if (files?.length && !(existing.files && existing.files.length)) {
+        existing.files = files
+        queuedAttachments.delete(item.turnId)
+      }
+      return
+    }
     const msg: sessionsApi.Message = {
       id: msgId,
       role: 'user',
@@ -2760,9 +2830,13 @@ export const useChatStore = defineStore('chat', () => {
     try {
       const res = await sessionsApi.moveQueuedTurn(sessionId, turnId, to)
       if (!res.moved && res.started) {
-        // 拖动期间这一条已经被 worker 认领：撤出排队区（已转流式渲染）。
-        state.queued = state.queued.filter(q => q.turnId !== turnId)
-        queuedAttachments.delete(turnId)
+        // 拖动期间这一条已经被 worker 认领：它已经转入执行，不再属于"待发"。
+        // 但别把本地镜像与附件清单一起扔掉——随后的 stream_started 还要靠它们
+        // 把用户气泡固化完整（正文 + 引用文件/图片 chip）。标成 running 后
+        // dock 不再显示它（见 queuedMessages），真正上屏交给 promote。
+        const claimed = state.queued.find(q => q.turnId === turnId)
+        if (claimed) claimed.status = 'running'
+        else queuedAttachments.delete(turnId)
       }
     } catch {
       // 网络失败：保留本地顺序，等下一次 queue_changed / /running 对账校正。
