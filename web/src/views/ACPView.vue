@@ -172,7 +172,14 @@
         <div class="acp-form-grid">
           <div class="acp-field">
             <label class="acp-label">{{ t('acp.fieldWorkspace') }}</label>
-            <n-input v-model:value="form.workspace" size="small" placeholder="D:/project/demo" />
+            <!-- 工作区支持点击选择：与设置页的工作目录同款 DirPickerModal，
+                 输入框仍保留（用户可以手填不存在于列表里的路径）。 -->
+            <div class="acp-input-row">
+              <n-input v-model:value="form.workspace" size="small" placeholder="D:/project/demo" class="acp-input-grow" />
+              <n-button size="small" secondary @click="showWorkspacePicker = true">
+                <template #icon><n-icon :component="FolderOpenOutline" /></template>
+              </n-button>
+            </div>
             <div class="acp-hint">{{ t('acp.workspaceHint') }}</div>
           </div>
           <div class="acp-field">
@@ -425,14 +432,23 @@
         </template>
       </div>
     </n-modal>
+
+    <!-- 工作区目录选择：与设置页/聊天页共用的 DirPickerModal（推荐目录 + 浏览 + 新建文件夹） -->
+    <DirPickerModal
+      v-model:show="showWorkspacePicker"
+      :title="t('acp.fieldWorkspace')"
+      :current="form.workspace"
+      @select="(p: string) => (form.workspace = p)"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { NAlert, NButton, NCheckbox, NCheckboxGroup, NDropdown, NEmpty, NInput, NInputNumber, NModal, NSpace, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { NAlert, NButton, NCheckbox, NCheckboxGroup, NDropdown, NEmpty, NIcon, NInput, NInputNumber, NModal, NSpace, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { AddOutline, DocumentTextOutline, EllipsisHorizontalOutline, RefreshOutline, SearchOutline } from '@vicons/ionicons5'
+import { AddOutline, DocumentTextOutline, EllipsisHorizontalOutline, FolderOpenOutline, RefreshOutline, SearchOutline } from '@vicons/ionicons5'
+import DirPickerModal from '@/components/DirPickerModal.vue'
 import {
   createACPAgent,
   deleteACPAgent,
@@ -485,6 +501,9 @@ const logsLoading = ref(false)
 const logRecords = ref<ACPCallRecord[]>([])
 const logStderr = ref<Record<string, string>>({})
 const openLogId = ref<number | null>(null)
+
+// 工作区目录选择器（DirPickerModal）
+const showWorkspacePicker = ref(false)
 
 // ACPMessageResult 只是本文件内的别名：api 层返回的是 ACPTestResult。
 type ACPMessageResult = ACPTestResult
@@ -979,6 +998,17 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 输入框 + 选择按钮并排（工作区目录选择） */
+.acp-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.acp-input-grow {
+  flex: 1;
 }
 
 .acp-label {
