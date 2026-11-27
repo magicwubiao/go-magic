@@ -1991,6 +1991,27 @@ export default {
     approveTitle: 'Permission approvals',
     approveAllHint: 'Equivalent to allow everything: edits, execution and deletes are auto-approved.',
     approveHint: 'Checked tool kinds are approved by magic automatically; unchecked ones go back to the agent (most implementations then fail). Only read-only kinds are allowed by default.',
+    // Call log (/api/acp/logs). Records live in server process memory and are
+    // cleared on restart.
+    logs: 'Call log',
+    logsTitle: 'ACP Call Log',
+    logsHint: 'Last 200 prompt / connect / reset calls, newest first. Click a row for input/output previews and stderr. Records live in server memory only and are cleared on restart.',
+    logLoadFailed: 'Failed to load the call log',
+    logEmpty: 'No calls recorded yet',
+    logKind: {
+      prompt: 'Prompt',
+      connect: 'Connect',
+      reset: 'Reset',
+    },
+    logStatus: {
+      ok: 'OK',
+      error: 'Failed',
+      cancelled: 'Cancelled',
+    },
+    logTools: '{n} tool calls',
+    logPrompt: 'Input preview',
+    logReply: 'Reply preview',
+    stderrTitle: 'agent stderr (live connections)',
     kind: {
       read: 'Read',
       edit: 'Edit',

@@ -187,8 +187,19 @@ func (m *Manager) client(ctx context.Context, name string) (*Client, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 
+	connectStart := time.Now()
 	client, err := Connect(connectCtx, opts)
+	// 建连成败都留痕：管理页 test 连接走的也是这条路，失败原因
+	// （npx 没装、key 错、协议版本不匹配）直接看日志即可。
 	if err != nil {
+		appendCall(CallRecord{
+			Agent:      name,
+			Kind:       CallKindConnect,
+			Start:      time.Now().Add(-time.Since(connectStart)),
+			DurationMs: time.Since(connectStart).Milliseconds(),
+			Status:     CallStatusError,
+			Error:      fmt.Sprintf("connect acp agent %q: %v", name, err),
+		})
 		return nil, fmt.Errorf("connect acp agent %q: %w", name, err)
 	}
 
@@ -200,6 +211,14 @@ func (m *Manager) client(ctx context.Context, name string) (*Client, error) {
 	}
 	m.clients[name] = client
 	m.mu.Unlock()
+	appendCall(CallRecord{
+		Agent:      name,
+		Kind:       CallKindConnect,
+		Start:      time.Now().Add(-time.Since(connectStart)),
+		DurationMs: time.Since(connectStart).Milliseconds(),
+		Status:     CallStatusOK,
+		Stderr:     snipStderr(client.Diagnostics()),
+	})
 	return client, nil
 }
 
@@ -261,24 +280,49 @@ func (m *Manager) timeoutFor(name string, agent AgentConfig) time.Duration {
 }
 
 // Prompt 向指定 agent 发一轮消息。
+//
+// 每次调用都写一条调用历史（成功/失败/取消），管理页「调用日志」读它。
 func (m *Manager) Prompt(ctx context.Context, name string, blocks []ContentBlock, onUpdate func(Update)) (*PromptOutcome, error) {
 	client, err := m.client(ctx, name)
 	if err != nil {
+		// 没连上（agent 不存在/被禁用/建连失败）：同样要留痕，否则"点了没反应"
+		// 这种问题在日志里查不到原因。
+		appendCall(CallRecord{
+			Agent:         name,
+			Kind:          CallKindPrompt,
+			Start:         time.Now(),
+			Status:        CallStatusError,
+			Error:         err.Error(),
+			PromptPreview: promptPreview(blocks, previewRunes),
+			Stderr:        snipStderr(m.StderrTail(name)),
+		})
 		return nil, err
 	}
 
+	start := time.Now()
 	outcome, err := client.Prompt(ctx, blocks, onUpdate)
+	elapsed := time.Since(start)
 	if err != nil && !client.alive() {
 		// 连接已死，丢弃残骸，下一次调用重建。
 		m.drop(name, client)
 	}
+	appendCall(buildPromptRecord(name, blocks, outcome, err, elapsed, client.Diagnostics()))
 	return outcome, err
 }
 
 // ResetSession 重置某个 agent 的会话上下文。
 func (m *Manager) ResetSession(ctx context.Context, name string) error {
+	start := time.Now()
 	client, err := m.client(ctx, name)
 	if err != nil {
+		appendCall(CallRecord{
+			Agent:  name,
+			Kind:   CallKindReset,
+			Start:  time.Now(),
+			Status: CallStatusError,
+			Error:  err.Error(),
+			Stderr: snipStderr(m.StderrTail(name)),
+		})
 		return err
 	}
 	resetCtx, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -288,8 +332,25 @@ func (m *Manager) ResetSession(ctx context.Context, name string) error {
 		if !client.alive() {
 			m.drop(name, client)
 		}
+		appendCall(CallRecord{
+			Agent:      name,
+			Kind:       CallKindReset,
+			Start:      time.Now().Add(-time.Since(start)),
+			DurationMs: time.Since(start).Milliseconds(),
+			Status:     CallStatusError,
+			Error:      err.Error(),
+			Stderr:     snipStderr(client.Diagnostics()),
+		})
 		return err
 	}
+	appendCall(CallRecord{
+		Agent:      name,
+		Kind:       CallKindReset,
+		Start:      time.Now().Add(-time.Since(start)),
+		DurationMs: time.Since(start).Milliseconds(),
+		Status:     CallStatusOK,
+		Stderr:     snipStderr(client.Diagnostics()),
+	})
 	return nil
 }
 
@@ -326,6 +387,23 @@ func (m *Manager) DropAgent(name string) {
 // Client 返回底层连接（诊断用）。
 func (m *Manager) Client(ctx context.Context, name string) (*Client, error) {
 	return m.client(ctx, name)
+}
+
+// RecentCalls 返回最近的调用历史（新的在前）。agent 非空时只取该 agent 的。
+func (m *Manager) RecentCalls(agent string, limit int) []CallRecord {
+	return RecentCalls(agent, limit)
+}
+
+// StderrTail 返回某个 agent 当前存活连接的 stderr 尾巴；没有存活连接时为空。
+// 只读不建连——这是给管理页看的，探询不该有拉起子进程的副作用。
+func (m *Manager) StderrTail(name string) string {
+	m.mu.Lock()
+	client := m.clients[name]
+	m.mu.Unlock()
+	if client == nil || !client.alive() {
+		return ""
+	}
+	return client.Diagnostics()
 }
 
 func (m *Manager) drop(name string, client *Client) {

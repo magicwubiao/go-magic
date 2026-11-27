@@ -1821,6 +1821,7 @@ func (s *Server) buildRouter() *http.ServeMux {
 	mux.HandleFunc("/api/acp/catalog", withCORS(requireAuth(s.handleACPCatalog)))
 	mux.HandleFunc("/api/acp/agents", withCORS(requireAuth(s.handleACPAgents)))
 	mux.HandleFunc("/api/acp/agents/", withCORS(requireAuth(s.handleACPAgentByID)))
+	mux.HandleFunc("/api/acp/logs", withCORS(requireAuth(s.handleACPLogs)))
 
 	// Skills
 	mux.HandleFunc("/api/skills", withCORS(requireAuth(s.handleSkills)))

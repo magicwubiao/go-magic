@@ -1994,6 +1994,26 @@ export default {
     approveTitle: '权限批准',
     approveAllHint: '等于全部放行：写入、执行、删除都会自动批准。',
     approveHint: '勾选的工具种类由 magic 自动批准，未勾选的会交给 agent 自己确认（多数实现会直接失败）。默认只放行只读类。',
+    // 调用日志（/api/acp/logs）。记录在服务端进程内存里，重启即清空。
+    logs: '调用日志',
+    logsTitle: 'ACP 调用日志',
+    logsHint: '最近 200 次 prompt / 建连 / 重置的过程记录，点一行查看输入输出预览与 stderr。记录只存于服务进程内存，重启即清空。',
+    logLoadFailed: '加载调用日志失败',
+    logEmpty: '还没有调用记录',
+    logKind: {
+      prompt: '对话',
+      connect: '建连',
+      reset: '重置',
+    },
+    logStatus: {
+      ok: '成功',
+      error: '失败',
+      cancelled: '已取消',
+    },
+    logTools: '{n} 个工具调用',
+    logPrompt: '输入预览',
+    logReply: '回复预览',
+    stderrTitle: 'agent stderr（当前存活连接）',
     kind: {
       read: '读取',
       edit: '编辑',

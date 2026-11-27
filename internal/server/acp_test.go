@@ -177,3 +177,38 @@ func TestACPAgentValidationRejectsBadInput(t *testing.T) {
 		}
 	}
 }
+
+// /api/acp/logs 的冒烟测试：调用历史本身是进程级状态，这里只守接口契约
+// （形状、method、agent/limit 参数不炸），环形缓冲/过滤语义由 acp 包测试覆盖。
+func TestACPLogsEndpoint(t *testing.T) {
+	s, _ := newACPServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/acp/logs?agent=ghost&limit=5", nil)
+	rec := httptest.NewRecorder()
+	s.handleACPLogs(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var out struct {
+		Records []json.RawMessage `json:"records"`
+		Stderr  map[string]string `json:"stderr"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if out.Records == nil {
+		t.Error("records should be an array (may be empty), not null")
+	}
+	if out.Stderr == nil {
+		t.Error("stderr should be an object, not null")
+	}
+
+	// 非 GET 拒绝。
+	req = httptest.NewRequest(http.MethodPost, "/api/acp/logs", strings.NewReader(""))
+	rec = httptest.NewRecorder()
+	s.handleACPLogs(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", rec.Code)
+	}
+}

@@ -341,6 +341,9 @@ func (c *Client) newSession(ctx context.Context) error {
 // Info 返回 initialize 协商结果。
 func (c *Client) Info() InitializeResult { return c.initRes }
 
+// Diagnostics 返回对端 stderr 的尾巴（供调用历史/管理页排障用）。
+func (c *Client) Diagnostics() string { return c.transport.Diagnostics() }
+
 // SessionID 返回当前会话 id。
 func (c *Client) SessionID() string { return c.currentSession() }
 

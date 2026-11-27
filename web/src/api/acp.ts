@@ -139,3 +139,40 @@ export async function resetACPAgentSession(name: string): Promise<void> {
 export async function disconnectACPAgent(name: string): Promise<void> {
   return request<void>(`/acp/agents/${encodeURIComponent(name)}/disconnect`, { method: 'POST' })
 }
+
+/**
+ * 一次 ACP 调用的历史记录（服务端进程内存环形缓冲，重启即清空）。
+ *
+ * kind: prompt = 一轮对话；connect = 拉起子进程并握手（测试连接也走这条）；
+ *       reset = 新建 session。
+ */
+export interface ACPCallRecord {
+  id: number
+  agent: string
+  kind: 'prompt' | 'connect' | 'reset'
+  start: string
+  duration_ms: number
+  status: 'ok' | 'error' | 'cancelled'
+  stop_reason?: string
+  error?: string
+  /** 输入/输出预览（前 200 字符）；图片/音频只留占位标记 */
+  prompt_preview?: string
+  reply_preview?: string
+  tool_calls?: number
+  updates?: number
+  /** 调用结束时 agent 进程 stderr 的尾巴 */
+  stderr?: string
+}
+
+export interface ACPLogsResult {
+  records: ACPCallRecord[]
+  /** 仅包含当前有存活连接的 agent（stderr 从启动起持续缓冲的尾巴） */
+  stderr: Record<string, string>
+}
+
+/** 最近调用历史 + 存活连接的 stderr。agent 为空时返回全部。 */
+export async function listACPLogs(agent?: string, limit = 100): Promise<ACPLogsResult> {
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (agent) query.set('agent', agent)
+  return request<ACPLogsResult>(`/acp/logs?${query.toString()}`)
+}

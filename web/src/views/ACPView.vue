@@ -12,6 +12,12 @@
           <template #icon><component :is="AddOutline" /></template>
           {{ t('acp.add') }}
         </n-button>
+        <!-- 调用日志：排障入口。模型经 acp_prompt 的调用在聊天页只看到结果，
+             agent 挂了/没反应时来这里看过程记录与 stderr。 -->
+        <n-button size="small" @click="openLogs">
+          <template #icon><component :is="DocumentTextOutline" /></template>
+          {{ t('acp.logs') }}
+        </n-button>
         <n-button size="small" :loading="loading" @click="load">
           <template #icon><component :is="RefreshOutline" /></template>
           {{ t('common.refresh') }}
@@ -353,6 +359,72 @@
         </div>
       </div>
     </n-modal>
+
+    <!-- 调用日志：prompt/建连/重置的过程记录 + 存活连接的 stderr 尾巴。
+         点击一行展开输入/输出预览与 stderr。记录只存进程内存（最近 200 条），
+         服务重启即清空——这是排障辅助，不是审计日志。 -->
+    <n-modal
+      v-model:show="showLogs"
+      preset="card"
+      class="modal-responsive modal-scroll"
+      style="width: 760px; max-width: 96vw;"
+      :title="t('acp.logsTitle')"
+    >
+      <div class="acp-logs">
+        <div class="acp-logs-hint">{{ t('acp.logsHint') }}</div>
+        <n-spin v-if="logsLoading && !logRecords.length" size="small" style="margin: 16px 0;" />
+        <template v-else>
+          <!-- 存活连接的 stderr：agent 还没被调用也会说话（npm 装包、鉴权失败），这里常驻可看 -->
+          <div v-if="logStderrEntries.length" class="acp-log-stderr">
+            <div class="acp-log-stderr-title">{{ t('acp.stderrTitle') }}</div>
+            <div v-for="[name, tail] in logStderrEntries" :key="name" class="acp-log-stderr-item">
+              <n-tag size="tiny" :bordered="false">{{ name }}</n-tag>
+              <pre class="acp-log-pre">{{ tail }}</pre>
+            </div>
+          </div>
+
+          <n-empty v-if="!logRecords.length" :description="t('acp.logEmpty')" style="margin: 16px 0;" />
+          <div v-else class="acp-log-list">
+            <div
+              v-for="rec in logRecords"
+              :key="rec.id"
+              class="acp-log-item"
+              :class="{ 'is-error': rec.status === 'error' }"
+              @click="toggleLogDetail(rec.id)"
+            >
+              <div class="acp-log-row">
+                <span class="acp-log-time">{{ fmtLogTime(rec.start) }}</span>
+                <n-tag size="tiny" :bordered="false">{{ rec.agent }}</n-tag>
+                <n-tag size="tiny" :bordered="false" :type="kindTagType(rec.kind)">
+                  {{ t(`acp.logKind.${rec.kind}`) }}
+                </n-tag>
+                <n-tag size="tiny" :bordered="false" :type="statusTagType(rec.status)">
+                  {{ t(`acp.logStatus.${rec.status}`) }}
+                </n-tag>
+                <span class="acp-log-meta">{{ rec.duration_ms }}ms</span>
+                <span v-if="rec.stop_reason" class="acp-log-meta">{{ rec.stop_reason }}</span>
+                <span v-if="rec.tool_calls" class="acp-log-meta">{{ t('acp.logTools', { n: rec.tool_calls }) }}</span>
+              </div>
+              <div v-if="rec.error" class="acp-log-error">{{ rec.error }}</div>
+              <div v-if="openLogId === rec.id" class="acp-log-detail">
+                <div v-if="rec.prompt_preview" class="acp-log-block">
+                  <div class="acp-log-block-label">{{ t('acp.logPrompt') }}</div>
+                  <pre class="acp-log-pre">{{ rec.prompt_preview }}</pre>
+                </div>
+                <div v-if="rec.reply_preview" class="acp-log-block">
+                  <div class="acp-log-block-label">{{ t('acp.logReply') }}</div>
+                  <pre class="acp-log-pre">{{ rec.reply_preview }}</pre>
+                </div>
+                <div v-if="rec.stderr" class="acp-log-block">
+                  <div class="acp-log-block-label">{{ t('acp.stderrTitle') }}</div>
+                  <pre class="acp-log-pre">{{ rec.stderr }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -360,18 +432,19 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { NAlert, NButton, NCheckbox, NCheckboxGroup, NDropdown, NEmpty, NInput, NInputNumber, NModal, NSpace, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { AddOutline, EllipsisHorizontalOutline, RefreshOutline, SearchOutline } from '@vicons/ionicons5'
+import { AddOutline, DocumentTextOutline, EllipsisHorizontalOutline, RefreshOutline, SearchOutline } from '@vicons/ionicons5'
 import {
   createACPAgent,
   deleteACPAgent,
   disconnectACPAgent,
   listACPAgents,
+  listACPLogs,
   listACPTemplates,
   resetACPAgentSession,
   testACPAgent,
   updateACPAgent,
 } from '@/api/acp'
-import type { ACPAgent, ACPAgentPayload, ACPTestResult, ACPCatalog, ACPTemplate } from '@/api/acp'
+import type { ACPAgent, ACPAgentPayload, ACPTestResult, ACPCatalog, ACPTemplate, ACPCallRecord } from '@/api/acp'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -405,6 +478,13 @@ const activeTplId = ref('')
 const showTest = ref(false)
 const testResult = ref<ACPMessageResult | null>(null)
 const testError = ref('')
+
+// 调用日志弹窗。打开时全量拉一次（无自动刷新）；点行展开详情。
+const showLogs = ref(false)
+const logsLoading = ref(false)
+const logRecords = ref<ACPCallRecord[]>([])
+const logStderr = ref<Record<string, string>>({})
+const openLogId = ref<number | null>(null)
 
 // ACPMessageResult 只是本文件内的别名：api 层返回的是 ACPTestResult。
 type ACPMessageResult = ACPTestResult
@@ -672,6 +752,46 @@ async function disconnect(row: ACPAgent) {
   } finally {
     busy.value = { ...busy.value, [row.name]: false }
   }
+}
+
+/** 打开日志弹窗：全量拉最近记录 + 存活连接的 stderr。 */
+async function openLogs() {
+  showLogs.value = true
+  logsLoading.value = true
+  openLogId.value = null
+  try {
+    const res = await listACPLogs()
+    logRecords.value = res.records || []
+    logStderr.value = res.stderr || {}
+  } catch (err: any) {
+    message.error(err?.message || t('acp.logLoadFailed'))
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+const logStderrEntries = computed(() => Object.entries(logStderr.value))
+
+function toggleLogDetail(id: number) {
+  openLogId.value = openLogId.value === id ? null : id
+}
+
+function fmtLogTime(value: string): string {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleTimeString()
+}
+
+function kindTagType(kind: ACPCallRecord['kind']) {
+  if (kind === 'connect') return 'info'
+  if (kind === 'reset') return 'warning'
+  return 'default'
+}
+
+function statusTagType(status: ACPCallRecord['status']) {
+  if (status === 'ok') return 'success'
+  if (status === 'error') return 'error'
+  return 'warning'
 }
 
 function confirmDelete(row: ACPAgent) {
@@ -966,6 +1086,119 @@ onMounted(load)
   font-size: 12px;
 }
 
+/* 调用日志弹窗 */
+.acp-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.acp-logs-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  line-height: 1.5;
+}
+
+.acp-log-stderr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acp-log-stderr-title {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.acp-log-stderr-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.acp-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.acp-log-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.18);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.acp-log-item:hover {
+  border-color: rgba(128, 128, 128, 0.4);
+}
+
+.acp-log-item.is-error {
+  border-color: rgba(208, 48, 79, 0.35);
+}
+
+.acp-log-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.acp-log-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.acp-log-meta {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.acp-log-error {
+  font-size: 12px;
+  color: #d03050;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.acp-log-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed rgba(128, 128, 128, 0.25);
+  padding-top: 8px;
+}
+
+.acp-log-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.acp-log-block-label {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.acp-log-pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #374151;
+  background: rgba(128, 128, 128, 0.08);
+  padding: 8px 10px;
+  border-radius: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 /* 模板选择层 */
 .acp-pick-sub {
   font-size: 12px;
@@ -1081,6 +1314,26 @@ onMounted(load)
   }
 
   .acp-pick-cmd {
+    color: #d1d5db;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .acp-logs-hint,
+  .acp-log-stderr-title,
+  .acp-log-meta,
+  .acp-log-block-label {
+    color: #8b93a1;
+  }
+
+  .acp-log-time {
+    color: #9aa3b2;
+  }
+
+  .acp-log-error {
+    color: #e88080;
+  }
+
+  .acp-log-pre {
     color: #d1d5db;
     background: rgba(255, 255, 255, 0.08);
   }

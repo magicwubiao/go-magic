@@ -11,6 +11,7 @@ package server
 //	POST   /api/acp/agents/{name}/test          建连并返回协商结果（能力/会话/目录）
 //	POST   /api/acp/agents/{name}/reset         丢弃会话上下文（新建 session）
 //	POST   /api/acp/agents/{name}/disconnect    关闭缓存连接（保留配置）
+//	GET    /api/acp/logs                        调用历史 + 存活连接的 stderr 尾巴
 //
 // 与 MCP 连接器的区别：ACP 的配置在自己的 acp.json 里（internal/acp 负责读写），
 // 不经过 config.json， поэтому这里没有 persistConfig / syncApprovalToMainConfig
@@ -30,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -359,6 +361,54 @@ func (s *Server) handleACPAgentReset(w http.ResponseWriter, r *http.Request, nam
 		return
 	}
 	jsonResponse(w, map[string]interface{}{"ok": true})
+}
+
+// acpLogsLimit 是 /api/acp/logs 的条数上限（缓冲本身 200 条，给前端留余量）。
+const (
+	acpLogsDefaultLimit = 100
+	acpLogsMaxLimit     = 500
+)
+
+// handleACPLogs 返回调用历史与存活连接的 stderr 尾巴。只读、无副作用：
+// stderr 查询刻意不建连（StderrTail 只看缓存连接），探询不能拉起子进程。
+//
+// GET /api/acp/logs?agent=name&limit=100
+//
+//	records: 最近调用记录（新的在前），agent 为空时返回全部 agent 的；
+//	stderr:  {agent: 尾巴}，只包含当前有存活连接的 agent。
+func (s *Server) handleACPLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	limit := acpLogsDefaultLimit
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > acpLogsMaxLimit {
+		limit = acpLogsMaxLimit
+	}
+
+	mgr := s.acpManager()
+	stderr := map[string]string{}
+	// 配置读失败时 stderr 就空着——历史记录不依赖磁盘配置，别让一次
+	// 读盘抖动把整个日志接口变成 500。
+	if cfg, err := mgr.Config(); err == nil {
+		for name := range cfg.Agents {
+			if tail := mgr.StderrTail(name); tail != "" {
+				stderr[name] = tail
+			}
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"records": mgr.RecentCalls(agent, limit),
+		"stderr":  stderr,
+	})
 }
 
 // ---------- 内部工具 ----------
