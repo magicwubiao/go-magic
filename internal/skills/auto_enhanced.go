@@ -34,6 +34,12 @@ type EnhancedAutoCreator struct {
 	minFrequency int      // Minimum occurrences to generate skill
 	manager      *Manager // optional: register generated skills
 	mu           sync.Mutex
+	// genMu 串行化「查重 + 生成」临界区。磁盘上的"已存在"检查与
+	// GenerateSkillFromPattern 写盘之间原本没有互斥，多会话并发触发同一
+	// pattern 时双方都判定不存在，各自生成一份重复技能（skillCount 双计，
+	// skillID 的秒级时间戳同秒还会写进同一目录）。genMu 让这段 check-then-
+	// generate 原子化：后到的一方一定能看到先到一方落盘的目录。
+	genMu sync.Mutex
 }
 
 // DefaultAutoSkillMinFrequency 是"模式出现多少次才允许自动建技能"的默认阈值。
@@ -68,7 +74,16 @@ func NewEnhancedAutoCreator(baseDir string) *EnhancedAutoCreator {
 	}
 	// 清理历史遗留的低质量模式：丢弃只含单一工具的平凡序列，并对示例任务
 	// 去重、封顶，避免 patterns.json 长期累积重复噪声数据。
+	rawCount := len(patterns)
 	patterns = prunePatterns(patterns)
+	// prune 只改内存的话要等下一次"有变化"的 save 才落盘；加载期若确实清掉了
+	// 噪声数据，立即回写一次，让清理效果马上持久化（与 savePatternsLocked 的
+	// "空列表不覆写"口径一致：清空后不写）。
+	if rawCount > 0 && len(patterns) > 0 && len(patterns) < rawCount {
+		if data, err := json.MarshalIndent(patterns, "", "  "); err == nil {
+			_ = os.WriteFile(patternsFile, data, 0644)
+		}
+	}
 
 	return &EnhancedAutoCreator{
 		baseDir:  skillsDir,
@@ -136,6 +151,8 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 
 	e.mu.Lock()
 
+	changed := false
+
 	// Look for subsequences that repeat across tasks
 	for i := 0; i < len(tools)-2; i++ {
 		subsequence := tools[i : i+3]
@@ -163,6 +180,7 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 				}
 				addExampleTask(&e.patterns[pIdx], task)
 				found = true
+				changed = true
 				break
 			}
 		}
@@ -178,12 +196,16 @@ func (e *EnhancedAutoCreator) AnalyzeToolSequence(task string, tools []string) {
 				Confidence:   0.5,
 				ExampleTasks: []string{task},
 			})
+			changed = true
 		}
 	}
 
-	// 持锁保存 patterns 到磁盘
-	if err := e.savePatternsLocked(); err != nil {
-		log.Printf("[SkillCreator] failed to save patterns: %v", err)
+	// 持锁保存 patterns 到磁盘。本次分析没有任何变化时不写盘：每轮会话
+	// 都无条件 MarshalIndent+WriteFile 是纯磁盘写放大。
+	if changed {
+		if err := e.savePatternsLocked(); err != nil {
+			log.Printf("[SkillCreator] failed to save patterns: %v", err)
+		}
 	}
 
 	// 拷贝一份 patterns 快照用于后续生成检查，避免长时间持锁做 IO
@@ -270,16 +292,32 @@ func (e *EnhancedAutoCreator) CheckAndGenerateSkills() {
 	e.checkAndGenerateSkillsFromSnapshot(snapshot)
 }
 
-// checkAndGenerateSkillsFromSnapshot 基于快照检查并生成技能（不持锁，可安全做 IO）
+// checkAndGenerateSkillsFromSnapshot 基于快照检查并生成技能。
+//
+// 并发安全：整段「查重 + 生成」在 genMu 内原子执行（见结构体 genMu 注释），
+// 快照由调用方提前拷贝，锁内不做长 IO。e.baseDir / e.minFrequency 在入口处
+// 持 e.mu 快照——运行期 SetBaseDir / SetMinFrequency 与生成路径并发时不再
+// 构成数据竞态（此前这两个字段全程锁外裸读）。
 func (e *EnhancedAutoCreator) checkAndGenerateSkillsFromSnapshot(patterns []Pattern) {
+	e.genMu.Lock()
+	defer e.genMu.Unlock()
+
+	e.mu.Lock()
+	baseDir := e.baseDir
+	minFrequency := e.minFrequency
+	e.mu.Unlock()
+
 	for _, pattern := range patterns {
 		// 提高置信度阈值也提高到 0.8，避免低质量的自动生成
-		if pattern.Frequency >= e.minFrequency && pattern.Confidence >= 0.8 {
+		if pattern.Frequency >= minFrequency && pattern.Confidence >= 0.8 {
 			// Check if skill already generated for this pattern
 			// (look in pending, approved, archived, rejected)
 			exists := false
-			for _, subdir := range []string{"pending", "approved", "archived", "rejected"} {
-				entries, _ := os.ReadDir(filepath.Join(e.baseDir, subdir))
+			for _, subdir := range autoSkillStateDirs {
+				entries, err := os.ReadDir(filepath.Join(baseDir, subdir))
+				if err != nil {
+					continue // 状态目录可能尚未创建；忽略错误但**不**当作"不存在"去重复生成——genMu 已保证进程内串行，跨进程由时间戳目录名兜底
+				}
 				for _, entry := range entries {
 					if strings.HasPrefix(entry.Name(), fmt.Sprintf("auto-%s-", pattern.Name)) && entry.IsDir() {
 						exists = true
@@ -293,36 +331,47 @@ func (e *EnhancedAutoCreator) checkAndGenerateSkillsFromSnapshot(patterns []Patt
 			if !exists {
 				log.Printf("[SkillCreator] Pattern '%s' meets criteria (freq=%d, conf=%.2f), generating skill...",
 					pattern.Name, pattern.Frequency, pattern.Confidence)
-				e.GenerateSkillFromPattern(pattern)
+				if err := e.GenerateSkillFromPattern(pattern); err != nil {
+					log.Printf("[SkillCreator] failed to generate skill for pattern '%s': %v",
+						pattern.Name, err)
+				}
 			}
 		}
 	}
 }
 
-// AnalyzeFullSession analyzes a complete session for skill generation
-func (e *EnhancedAutoCreator) AnalyzeFullSession(sessionData map[string]interface{}) {
-	// Extract task description
-	taskDesc, _ := sessionData["task"].(string)
-
-	// Extract tool sequence
-	var toolSequence []string
-	if tools, ok := sessionData["tool_sequence"].([]string); ok {
-		toolSequence = tools
-	}
-
-	// Analyze for patterns - this will also check and generate skills
-	e.AnalyzeToolSequence(taskDesc, toolSequence)
-}
-
 // GenerateSkillFromPattern generates a skill file from a detected pattern
 // Newly generated skills go to auto_skills/pending/ and won't be used by the Agent
 // until the user approves them (via CLI or Web UI).
+//
+// 错误处理：所有写盘步骤的错误现在逐级上抛（此前全部被吞、恒返回 nil），
+// 调用方（checkAndGenerateSkillsFromSnapshot）只打日志不中断其余 pattern。
+// skillCount 与 RegisterSkill 只在磁盘写入全部成功后执行，保证"内存已注册"
+// 蕴含"磁盘已落盘"，避免重启后技能凭空消失的幽灵状态。
 func (e *EnhancedAutoCreator) GenerateSkillFromPattern(pattern Pattern) error {
+	// baseDir / manager 持锁快照：与 SetBaseDir / SetManager 并发时不裸读。
+	e.mu.Lock()
+	baseDir := e.baseDir
+	mgr := e.manager
+	e.mu.Unlock()
+
 	skillID := fmt.Sprintf("auto-%s-%d", pattern.Name, time.Now().Unix())
 	skillName := fmt.Sprintf("Automated %s", pattern.Name)
 	// 四态管理：新生成的技能放入 pending 目录
-	skillDir := filepath.Join(e.baseDir, "pending", skillID)
-	os.MkdirAll(skillDir, 0755)
+	skillDir := filepath.Join(baseDir, "pending", skillID)
+	_, statErr := os.Stat(skillDir)
+	dirExisted := statErr == nil
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return fmt.Errorf("[skillgen] create skill dir %s: %w", skillDir, err)
+	}
+	// 写盘失败时清掉本次新建的半成品目录（目录已存在时不清理，避免误删
+	// 同秒碰撞的另一份生成产物——genMu 已挡住进程内的这种情况）。
+	fail := func(err error) error {
+		if !dirExisted {
+			os.RemoveAll(skillDir)
+		}
+		return err
+	}
 
 	// Generate skill metadata
 	skillMeta := map[string]interface{}{
@@ -337,45 +386,78 @@ func (e *EnhancedAutoCreator) GenerateSkillFromPattern(pattern Pattern) error {
 		"examples":      pattern.ExampleTasks,
 	}
 
-	metaJSON, _ := json.MarshalIndent(skillMeta, "", "  ")
-	os.WriteFile(filepath.Join(skillDir, "meta.json"), metaJSON, 0644)
+	metaJSON, err := json.MarshalIndent(skillMeta, "", "  ")
+	if err != nil {
+		return fail(fmt.Errorf("[skillgen] marshal meta for %s: %w", skillID, err))
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "meta.json"), metaJSON, 0644); err != nil {
+		return fail(fmt.Errorf("[skillgen] write meta.json for %s: %w", skillID, err))
+	}
 
 	// Generate SKILL.md - the main skill file using progressive disclosure
 	skillMD := e.generateSkillMarkdown(pattern, skillMeta)
-	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644)
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+		return fail(fmt.Errorf("[skillgen] write SKILL.md for %s: %w", skillID, err))
+	}
 
 	// 原子自增：GenerateSkillFromPattern 的调用链（checkAndGenerateSkillsFromSnapshot）
 	// 已经**出了 e.mu**，此前这里的 `e.skillCount++` 与 GetStats 的读取构成真实数据竞态。
+	// 且只在上面的磁盘写入全部成功后才计数（此前写盘失败也 +1）。
 	e.skillCount.Add(1)
 
 	// Register with skills manager so it shows up in /api/skills with pending status
 	// Note: pending status skills are NOT injected into Agent context until approved
-	if e.manager != nil {
-		e.manager.RegisterSkill(&Skill{
-			SkillMeta: SkillMeta{
-				Name:        skillName,
-				Description: pattern.Description,
-				Version:     "1.0.0",
-				Author:      "cortex-auto",
-				// 与写进 SKILL.md frontmatter 的 tags 保持一致：状态由 Status
-				// 字段（以及所在目录）表达，不再塞进 tags 里当第二份真相。
-				Tags:        []string{"auto-generated"},
-				Source:      SkillSourceAuto,
-				Status:      SkillStatusPending,
-				InstalledAt: time.Now(),
-			},
-			Tools:   uniqueToolNames(pattern.ToolSequence),
-			Content: skillMD,
-			Dir:     skillDir,
-		})
+	//
+	// 同名冲突保护：若已有非 auto 来源的同名技能（用户手写/内置/registry 安装），
+	// 自动生成不覆盖——与 loadAutoSkillsInto 的"非 auto 优先"口径保持一致。
+	// 此前 RegisterSkill 会把用户技能压进 shadowed 栈，直到下次 Reload 才恢复。
+	if mgr != nil {
+		register := true
+		if existing, err := mgr.Get(skillName); err == nil && existing != nil && existing.Source != SkillSourceAuto {
+			log.Printf("[SkillCreator] auto skill %q shadowed by existing %s skill of the same name; skipping registration",
+				skillName, existing.Source)
+			register = false
+		}
+		if register {
+			mgr.RegisterSkill(&Skill{
+				SkillMeta: SkillMeta{
+					Name:        skillName,
+					Description: pattern.Description,
+					Version:     "1.0.0",
+					Author:      "cortex-auto",
+					// 与写进 SKILL.md frontmatter 的 tags 保持一致：状态由 Status
+					// 字段（以及所在目录）表达，不再塞进 tags 里当第二份真相。
+					Tags:        []string{"auto-generated"},
+					Source:      SkillSourceAuto,
+					Status:      SkillStatusPending,
+					InstalledAt: time.Now(),
+				},
+				Tools:   uniqueToolNames(pattern.ToolSequence),
+				Content: skillMD,
+				Dir:     skillDir,
+			})
+		}
 	}
 
-	// Log skill generation
-	logContent := fmt.Sprintf("[%s] Generated pending skill '%s' from pattern seen %d times (dir: %s)\n",
-		time.Now().Format(time.RFC3339), pattern.Name, pattern.Frequency, skillDir)
-	os.WriteFile(filepath.Join(e.baseDir, "generation.log"), []byte(logContent), 0644)
+	// Log skill generation（追加写：此前 WriteFile 每次覆盖，"日志"只剩最后一条）
+	appendLine(fmt.Sprintf("[%s] Generated pending skill '%s' from pattern seen %d times (dir: %s)\n",
+		time.Now().Format(time.RFC3339), pattern.Name, pattern.Frequency, skillDir),
+		filepath.Join(baseDir, "generation.log"))
 
 	return nil
+}
+
+// appendLine 以追加模式写一行文本；失败只记日志不影响主流程。
+func appendLine(line, path string) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[SkillCreator] failed to open %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line); err != nil {
+		log.Printf("[SkillCreator] failed to append to %s: %v", path, err)
+	}
 }
 
 // generateSkillMarkdown 生成 SKILL.md：YAML frontmatter + 渐进披露正文。

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -570,6 +571,140 @@ func TestMergeFrontmatterEdgeCases(t *testing.T) {
 	}
 	if strings.Contains(got, "# old") {
 		t.Fatalf("old body must be replaced: %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 2026-11-28 审查修复：并发生成、错误上抛、同名冲突保护
+// ---------------------------------------------------------------------------
+
+// check-then-generate 必须原子：多会话并发触发同一 pattern 时只允许生成一份。
+// 回归点：磁盘查重与写盘之间无互斥，并发时双方都判定不存在、各自生成，
+// skillCount 双计、同秒还写进同一目录。
+func TestConcurrentCheckDoesNotDuplicateSkills(t *testing.T) {
+	dir := t.TempDir()
+	ac := NewEnhancedAutoCreator(dir)
+	ac.SetMinFrequency(3)
+
+	ac.mu.Lock()
+	ac.patterns = []Pattern{
+		{
+			Name: "Pattern-race", Tools: []string{"a", "b", "c"},
+			ToolSequence: []string{"a", "b", "c"},
+			Frequency:    5, Confidence: 0.9,
+		},
+	}
+	ac.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ac.CheckAndGenerateSkills()
+		}()
+	}
+	wg.Wait()
+
+	if got := len(ac.GetGeneratedSkills()); got != 1 {
+		t.Fatalf("concurrent generation produced %d skill dirs, want exactly 1: %v",
+			got, ac.GetGeneratedSkills())
+	}
+	if got := ac.skillCount.Load(); got != 1 {
+		t.Fatalf("skillCount = %d, want 1", got)
+	}
+}
+
+// 写盘失败必须上抛错误，且不得计数、不得注册内存表。
+// 回归点：此前所有 os.WriteFile 错误被吞、函数恒返回 nil，写盘失败仍
+// skillCount+1 并 RegisterSkill → "内存有、磁盘无"，重启后技能凭空消失。
+func TestGenerateSkillPropagatesWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	// 把 auto_skills 变成普通文件，让其下任何 MkdirAll 都失败。
+	if err := os.WriteFile(filepath.Join(dir, "auto_skills"), []byte("not a dir"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	ac := NewEnhancedAutoCreator(dir) // 构造器忽略 MkdirAll 错误，兼容这种环境
+
+	err := ac.GenerateSkillFromPattern(Pattern{
+		Name: "Pattern-err", Tools: []string{"a", "b", "c"},
+		ToolSequence: []string{"a", "b", "c"},
+		Frequency:    5, Confidence: 0.9,
+	})
+	if err == nil {
+		t.Fatal("GenerateSkillFromPattern must return an error when the disk write fails")
+	}
+	if got := ac.skillCount.Load(); got != 0 {
+		t.Fatalf("skillCount = %d after failed generation, want 0", got)
+	}
+}
+
+// 同名冲突保护：已存在非 auto 来源的同名技能时，自动生成不得覆盖它。
+// 回归点：此前 RegisterSkill 会把用户技能压进 shadowed 栈（生成侧覆盖），
+// 与 loadAutoSkillsInto 的"非 auto 优先"（加载侧保留用户技能）语义相反。
+func TestAutoSkillDoesNotShadowUserSkill(t *testing.T) {
+	m := newTestManager(t)
+	// RegisterSkill 不做名字校验（模拟从磁盘加载进来的同名用户技能；自动技能
+	// 名固定带空格，Manager.Add 的名字校验根本放不进来这种名字）。
+	m.RegisterSkill(&Skill{
+		SkillMeta: SkillMeta{Name: "Automated Pattern-c", Description: "user written", Source: SkillSourceLocal},
+		Content:   "# user skill body",
+	})
+
+	dir := t.TempDir()
+	ac := NewEnhancedAutoCreator(dir)
+	ac.SetManager(m)
+
+	if err := ac.GenerateSkillFromPattern(Pattern{
+		Name: "Pattern-c", Tools: []string{"a", "b", "c"},
+		ToolSequence: []string{"a", "b", "c"},
+		Frequency:    5, Confidence: 0.9,
+	}); err != nil {
+		t.Fatalf("GenerateSkillFromPattern: %v", err)
+	}
+
+	got, err := m.Get("Automated Pattern-c")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Source != SkillSourceLocal {
+		t.Fatalf("user skill was shadowed by the auto skill (source=%s)", got.Source)
+	}
+	if got.Description != "user written" {
+		t.Fatalf("user skill content replaced: %q", got.Description)
+	}
+
+	// 磁盘上的 pending 技能仍应存在（只是不注册进内存表盖掉用户技能）。
+	if n := len(ac.GetGeneratedSkills()); n != 1 {
+		t.Fatalf("pending skill dir missing: %v", ac.GetGeneratedSkills())
+	}
+}
+
+// generation.log 必须是追加写：连续两次生成后两条记录都要在。
+// 回归点：此前 WriteFile 每次覆盖，"日志"只剩最后一条。
+func TestGenerationLogAppends(t *testing.T) {
+	dir := t.TempDir()
+	ac := NewEnhancedAutoCreator(dir)
+
+	for _, name := range []string{"Pattern-l1", "Pattern-l2"} {
+		if err := ac.GenerateSkillFromPattern(Pattern{
+			Name: name, Tools: []string{"a", "b", "c"},
+			ToolSequence: []string{"a", "b", "c"},
+			Frequency:    5, Confidence: 0.9,
+		}); err != nil {
+			t.Fatalf("GenerateSkillFromPattern(%s): %v", name, err)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "auto_skills", "generation.log"))
+	if err != nil {
+		t.Fatalf("read generation.log: %v", err)
+	}
+	if strings.Count(string(data), "Generated pending skill") != 2 {
+		t.Fatalf("generation.log lost earlier entries:\n%s", data)
+	}
+	if !strings.Contains(string(data), "Pattern-l1") || !strings.Contains(string(data), "Pattern-l2") {
+		t.Fatalf("generation.log does not contain both entries:\n%s", data)
 	}
 }
 
